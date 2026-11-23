@@ -1,0 +1,22 @@
+# Build output
+/Build/
+/build/
+/out/
+CMakeUserPresets.json
+
+# IDE / editor
+.vs/
+.vscode/
+.idea/
+*.xcodeproj/
+*.xcworkspace/
+.cache/
+compile_commands.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime artefacts
+*.log
+*.ppm
