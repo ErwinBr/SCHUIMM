@@ -55,7 +55,7 @@ Tools). Each build was configured from an empty build directory.
 | No per-frame autorelease leak (`OBJC_DEBUG_MISSING_POOLS=YES`, 30 vs 600 frames) | ✅ count constant, none on the main thread | n/a | n/a |
 | X protocol error is logged and not fatal (deliberate `XDestroyWindow` of a bogus id) | n/a | ✅ | n/a |
 | `.github/scripts/run-tests.sh` | ✅ | ✅ including `xvfb-run` wrapper | ✅ under Git Bash |
-| GitHub Actions: build + unit tests | ✅ hosted `macos-15` runner (first run, before the libopengl-dev fix) | ☐ first run failed to configure (missing `libopengl-dev`); fixed, not yet re-run | ✅ hosted `windows-2022` runner |
+| GitHub Actions: build + unit tests | ✅ hosted `macos-15` runner (integration: reported as not run) | ✅ GCC 14 on `ubuntu-24.04`, unit + integration under Xvfb; ☐ Clang job switched from 18 to 19 after the second run, not yet re-run | ✅ hosted `windows-2022` runner (integration: reported as not run) |
 
 Notes:
 
@@ -68,6 +68,9 @@ Notes:
   (like Windows). On Linux, configuration failed because the Ubuntu image lacks `libopengl-dev`
   (without it CMake creates no `OpenGL::GLX` target); the package was added to the workflow and
   to the documented package list.
+* Second CI run: everything passed except the Clang 18 jobs. Ubuntu 24.04's default Clang 18
+  cannot use `std::expected` from libstdc++ 14 (it requires `__cpp_concepts >= 202002`), so the
+  job now uses Clang 19, which is also the version tested on Debian.
 * Physical keyboard/mouse checks (checklist 3–7, 10, 11) were not repeated; Milestone 1.5 did not
   change input handling.
 

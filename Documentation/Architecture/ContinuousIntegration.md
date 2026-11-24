@@ -12,7 +12,7 @@ configuration does not hide the others.
 |---|---|---|---|---|
 | `windows` | `windows-2022` | Debug, Release | MSVC (Visual Studio 2022), preset `windows-msvc` | none: VS 2022 and CMake are on the image |
 | `macos` | `macos-15` | Debug, Release | Apple Clang (Xcode), preset `macos-clang` | `brew install ninja` |
-| `linux` | `ubuntu-24.04` | Debug, Release × GCC 14 / Clang 18 | presets `linux-gcc` / `linux-clang`, compiler overridden to `gcc-14`/`g++-14` or `clang-18`/`clang++-18` | `apt-get install` of the packages in [Building.md](Building.md) (including `libopengl-dev`, which the Ubuntu image lacks), plus `xvfb`, `xauth`, `libgl1-mesa-dri` for the integration tests |
+| `linux` | `ubuntu-24.04` | Debug, Release × GCC 14 / Clang 19 | presets `linux-gcc` / `linux-clang`, compiler overridden to `gcc-14`/`g++-14` or `clang-19`/`clang++-19` (not Ubuntu's default Clang 18, whose concepts level does not unlock `std::expected` in libstdc++ 14) | `apt-get install` of the packages in [Building.md](Building.md) (including `libopengl-dev`, which the Ubuntu image lacks), plus `xvfb`, `xauth`, `libgl1-mesa-dri` for the integration tests |
 
 Each job:
 1. configures with the platform's configure preset;

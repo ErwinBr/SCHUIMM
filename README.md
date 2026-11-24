@@ -75,7 +75,7 @@ lifecycle and smoke tests, which need a display (on headless Linux use
 `xvfb-run -a ctest --preset linux-gcc-debug`).
 
 GitHub Actions builds Debug and Release on Windows (MSVC), macOS (Apple Clang) and Linux (GCC 14
-and Clang 18), runs the unit tests everywhere, and runs the integration tests on Linux (Xvfb +
+and Clang 19), runs the unit tests everywhere, and runs the integration tests on Linux (Xvfb +
 Mesa). The hosted Windows and macOS runners have no usable OpenGL driver; their jobs say so
 explicitly instead of running the integration tests. See [ContinuousIntegration.md](Documentation/Architecture/ContinuousIntegration.md).
 

@@ -132,7 +132,9 @@ jobs:
         config: [debug, release]
         compiler:
           - { name: GCC 14,   preset: linux-gcc,   cc: gcc-14,   cxx: g++-14,     package: g++-14 }
-          - { name: Clang 18, preset: linux-clang, cc: clang-18, cxx: clang++-18, package: clang-18 }
+          # Clang 19, not Ubuntu's default 18: libstdc++ 14 only provides std::expected when
+          # __cpp_concepts >= 202002, which Clang 18 does not report.
+          - { name: Clang 19, preset: linux-clang, cc: clang-19, cxx: clang++-19, package: clang-19 }
     steps:
       - uses: actions/checkout@v4
 
