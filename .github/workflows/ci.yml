@@ -6,6 +6,10 @@
 #   integration  needs a desktop session and a hardware-accelerated (or, on Linux, Mesa) OpenGL
 #                3.3 driver. Run on Linux (Xvfb + Mesa llvmpipe). Not run on Windows and macOS,
 #                whose hosted runners have no such driver; their job summaries say so explicitly.
+#   audio        needs an audio output device. Run on Linux against a PulseAudio null sink.
+#                Hosted Windows and macOS runners guarantee no output device: there the tests run
+#                as an informational probe whose outcome (device found or not) goes into the job
+#                summary; a failure there does not fail the job, and the summary says so.
 #
 # Adding a subsystem: give its tests a label in Tests/<Subsystem>/CMakeLists.txt. The jobs below
 # select tests by preset and label only, so no change is needed here.
@@ -66,6 +70,25 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Informational: hosted Windows runners are not guaranteed to have an audio output device.
+      # The result is reported in the summary either way; it does not decide the job's outcome.
+      - name: Audio tests (informational probe)
+        id: audio_probe
+        continue-on-error: true
+        run: .github/scripts/run-tests.sh windows-msvc-${{ matrix.config }} audio
+
+      - name: Audio tests summary
+        if: always()
+        run: |
+          {
+            echo "### \`audio\` tests on Windows: ${{ steps.audio_probe.outcome }} (informational)"
+            echo
+            echo "Hosted Windows runners are not guaranteed to provide an audio output device, so this"
+            echo "outcome does not fail the job. Audio playback is covered headlessly by the \`unit\`"
+            echo "tests (mixer, manual backend, miniaudio null backend) and by hand on real machines"
+            echo "(see Documentation/Architecture/ContinuousIntegration.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -115,6 +138,25 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Informational: hosted macOS runners are not guaranteed to have an audio output device.
+      # The result is reported in the summary either way; it does not decide the job's outcome.
+      - name: Audio tests (informational probe)
+        id: audio_probe
+        continue-on-error: true
+        run: .github/scripts/run-tests.sh macos-clang-${{ matrix.config }} audio
+
+      - name: Audio tests summary
+        if: always()
+        run: |
+          {
+            echo "### \`audio\` tests on macOS: ${{ steps.audio_probe.outcome }} (informational)"
+            echo
+            echo "Hosted macOS runners are not guaranteed to provide an audio output device, so this"
+            echo "outcome does not fail the job. Audio playback is covered headlessly by the \`unit\`"
+            echo "tests (mixer, manual backend, miniaudio null backend) and by hand on real machines"
+            echo "(see Documentation/Architecture/ContinuousIntegration.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -140,13 +182,15 @@ jobs:
 
       # Build: Ninja, the compiler, Xlib/XKB and GLVND GL/GLX headers (same as Building.md).
       # Integration tests: Xvfb and Mesa's software OpenGL driver (llvmpipe).
+      # Audio tests: a PulseAudio server (miniaudio loads libpulse at run time).
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ${{ matrix.compiler.package }} \
             libx11-dev libgl-dev libglx-dev libopengl-dev \
-            xvfb xauth libgl1-mesa-dri mesa-utils
+            xvfb xauth libgl1-mesa-dri mesa-utils \
+            pulseaudio pulseaudio-utils
 
       - name: Configure
         run: >
@@ -166,6 +210,18 @@ jobs:
         run: >
           .github/scripts/run-tests.sh ${{ matrix.compiler.preset }}-${{ matrix.config }} integration
           xvfb-run -a -s "-screen 0 1280x1024x24"
+
+      # A user PulseAudio daemon with a null sink: a real output device as far as the audio
+      # stack is concerned, without sound hardware.
+      - name: Start PulseAudio (null sink)
+        run: |
+          pulseaudio --start --exit-idle-time=-1 --daemonize=yes
+          pactl load-module module-null-sink sink_name=ci_null
+          pactl set-default-sink ci_null
+          pactl info
+
+      - name: Audio tests (PulseAudio null sink)
+        run: .github/scripts/run-tests.sh ${{ matrix.compiler.preset }}-${{ matrix.config }} audio
 
       - name: Upload test results
         if: always()

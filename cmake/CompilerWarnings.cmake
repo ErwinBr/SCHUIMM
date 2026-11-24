@@ -15,4 +15,9 @@ function(schuimm_configure_target target)
             target_compile_options(${target} PRIVATE -Werror)
         endif()
     endif()
+    if(APPLE)
+        # macOS 10.13 is the minimum: calling an API introduced later without an availability
+        # check is an error even when warnings are not treated as errors.
+        target_compile_options(${target} PRIVATE -Werror=unguarded-availability-new)
+    endif()
 endfunction()

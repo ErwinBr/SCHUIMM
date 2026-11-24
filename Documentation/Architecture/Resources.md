@@ -1,8 +1,9 @@
 # Resources and assets
 
 The resource layer (`Source/Resource`, target `schuimm_resource`) finds asset files, identifies
-resources, loads them into CPU memory and decodes images. It is deliberately small: a foundation
-for the texture, font and audio systems of Milestone 2, not an asset pipeline.
+resources, loads them into CPU memory and decodes them: images (PNG), sounds (WAV) and fonts
+(FreeType). It is deliberately small, not an asset pipeline. GPU and audio-device resources are
+made from its output by the graphics and audio layers.
 
 ## Four kinds of data, kept apart
 
@@ -10,26 +11,32 @@ for the texture, font and audio systems of Milestone 2, not an asset pipeline.
 |---|---|---|---|---|
 | 1 | Asset data on disk | file below the asset root, named by an `AssetPath` | the file system | `AssetLocator` (`schuimm_resource`) reads it via `schuimm_filesystem` |
 | 2 | CPU-side decoded data | `Image` (`Core/Image/Image.h`) | whoever holds the value | `decodeImage()` produces it (`schuimm_resource`) |
-| 3 | Runtime resource objects | `std::shared_ptr<const T>` from a `ResourceCache<T>` | the cache plus every holder | `schuimm_resource` |
-| 4 | GPU-side resources | `Texture` (`std::unique_ptr`), created by `Renderer2D` | the application, destroyed before the `GraphicsDevice` | `schuimm_graphics_*` |
+| 3 | Runtime resource objects | `std::shared_ptr<const T>` from a `ResourceCache<T>` (images, sound data, font faces) | the cache plus every holder | `schuimm_resource` |
+| 4 | GPU-side resources | `Texture` from `TextureCache` (`shared_ptr`) or `Renderer2D::createTexture` (`unique_ptr`); glyph atlases in `Font` | the cache / the application, destroyed before the `GraphicsDevice` | `schuimm_graphics_resources`, `schuimm_graphics_opengl` |
 
-Generic resource code never calls the graphics API: loading and decoding run without a window
-or OpenGL context (the unit tests do exactly that). Turning an `Image` into a `Texture` is a
-separate, explicit step in the graphics layer; the GPU texture cache belongs to Milestone 2.
+Generic resource code never calls the graphics or audio API: loading and decoding run without a
+window, OpenGL context or audio device (the unit tests do exactly that). Turning an `Image`
+into a `Texture`, a `FontFace` into glyph atlases, or `SoundData` into a playable `Sound` is a
+separate, explicit step in the graphics or audio layer.
 
 ```text
- disk ──AssetLocator::readBytes──► bytes ──decodeImage──► Image ──ResourceCache<Image>──► shared_ptr<const Image>
-                                                                         │ (Milestone 2, graphics layer)
-                                                                         ▼
-                                                    Renderer2D::createTexture ──► unique_ptr<Texture>
+ disk ─AssetLocator::readBytes─► bytes ─decodeImage─► Image ─ResourceCache<Image>─► shared_ptr<const Image>
+                                                                                          │ TextureCache
+                                                                                          ▼  (Renderer2D)
+                                                                               shared_ptr<const Texture>
+ disk ─► bytes ─decodeWav─► SoundData ─ResourceCache<SoundData>─► AudioDevice::createSound ─► shared_ptr<const Sound>
+ disk ─► bytes ─FontFace::load─► FontFace ─ResourceCache<FontFace>─► Font (glyph atlas pages, Renderer2D)
 ```
+
+The texture cache is described in [Graphics.md](Graphics.md#texture-cache), fonts in
+[Text.md](Text.md) and sounds in [Audio.md](Audio.md).
 
 ## Dependencies
 
 ```text
 schuimm_core (Common, Image, ...)  ◄── schuimm_filesystem (Path, FileSystem: POSIX | Win32)
                                           ▲
-                                   schuimm_resource ──► libpng ──► zlib   (private, ThirdParty/)
+                                   schuimm_resource ──► libpng ──► zlib, FreeType   (private, ThirdParty/)
 ```
 
 `schuimm_resource` does not depend on the platform windowing backend, the graphics interface or
@@ -78,7 +85,9 @@ auto locator = locateAssetRoot(defaultAssetRootCandidates(*fs::executablePath())
   command line or a project file).
 
 The composition root (`main`) creates the locator and passes it on. There is no global asset
-root. The EngineDemo has no image assets yet, so it creates no locator.
+root. The EngineDemo uses `--assets DIR` (absolute) or `locateAssetRoot(defaultAssetRootCandidates(...))`;
+its build copies `Applications/EngineDemo/Assets` next to the executable (into the bundle's
+`Resources` on macOS).
 
 ## Resource identification (`ResourceId<T>`)
 
@@ -119,8 +128,9 @@ images.unload(id);                                 // cache lets go; `image` sta
 * **One thread.** The cache is not thread-safe. There is no asynchronous loading yet.
 * **No global state.** Caches are ordinary objects created by the application.
 
-Adding a resource type (fonts, audio) means writing a CPU-side type, a loader, and a
-`ResourceCache<NewType>`. Nothing else changes.
+Adding a resource type means writing a CPU-side type, a loader, and a `ResourceCache<NewType>`.
+Nothing else changes. Milestone 2 added two this way: `ResourceCache<SoundData>` with `loadSound`
+and `ResourceCache<FontFace>` with `loadFontFace`.
 
 ## Image decoding (`Resource/Image`)
 
@@ -158,9 +168,8 @@ Adding a format means adding a signature to `detectImageFileFormat` and a decode
 | Ownership | value type: deep copy, cheap move, owns its `std::vector` of bytes |
 | Access | `size()`, `width()`, `height()`, `format()`, `rowStride()`, `pixels()`, `row(y)`, `pixel(x, y)` |
 
-`Renderer2D::createTexture` currently takes tightly packed RGBA8 bytes, which is exactly
-`image.pixels()`. Consumers should still honour `rowStride()` so padded layouts can be added
-without breaking them.
+`Renderer2D::createTexture(const Image&, ...)` honours `rowStride()` and converts the straight
+alpha to the premultiplied form the GPU textures use.
 
 ## Tests
 
@@ -173,7 +182,11 @@ without breaking them.
 * identifier type safety;
 * cache deduplication, failure retry, unload and ownership (with an instance-counting probe type);
 * image decoding of every PNG colour type, 16-bit and interlaced files, exact pixel and alpha
-  values, and invalid files.
+  values, and invalid files;
+* WAV decoding of every supported sample format, extensible headers, skipped chunks, and
+  unsupported or broken files (generated by `Tests/Assets/generate_test_sounds.py`);
+* font loading, glyph coverage for Western European letters, rasterisation, metrics, kerning,
+  missing glyphs and invalid data (with the demo's Noto Sans).
 
 The PNG files are generated by `Tests/Assets/generate_test_images.py` (see
 `Tests/Assets/README.md`). The file system layer has its own tests in

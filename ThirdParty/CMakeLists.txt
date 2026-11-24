@@ -10,6 +10,13 @@ function(schuimm_third_party_target target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /w)
         target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_DEPRECATE _CRT_NONSTDC_NO_DEPRECATE)
+    elseif(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        # Silence upstream warnings, but keep the macOS 10.13 availability check an error:
+        # -w would suppress it as well.
+        target_compile_options(${target} PRIVATE -Wno-everything)
+        if(APPLE)
+            target_compile_options(${target} PRIVATE -Werror=unguarded-availability-new)
+        endif()
     else()
         target_compile_options(${target} PRIVATE -w)
     endif()
@@ -66,3 +73,66 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(schuimm_png PUBLIC m)
 endif()
 schuimm_third_party_target(schuimm_png)
+
+# FreeType 2.15.0: TrueType driver, SFNT, anti-aliasing rasteriser, auto-hinter and PostScript
+# glyph names only (see freetype/config/schuimm_ftmodule.h). The upstream configuration headers
+# are left untouched; ours are selected with FT_CONFIG_MODULES_H / FT_CONFIG_OPTIONS_H, which
+# must also be visible to code that includes the FreeType headers (hence PUBLIC).
+add_library(schuimm_freetype STATIC
+    freetype/src/base/ftbase.c
+    freetype/src/base/ftbbox.c
+    freetype/src/base/ftbitmap.c
+    freetype/src/base/ftdebug.c
+    freetype/src/base/ftglyph.c
+    freetype/src/base/ftinit.c
+    freetype/src/base/ftmm.c
+    freetype/src/base/ftsystem.c
+    freetype/src/autofit/autofit.c
+    freetype/src/psnames/psnames.c
+    freetype/src/sfnt/sfnt.c
+    freetype/src/smooth/smooth.c
+    freetype/src/truetype/truetype.c)
+add_library(Schuimm::ThirdParty::FreeType ALIAS schuimm_freetype)
+target_include_directories(schuimm_freetype SYSTEM PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/freetype/config"
+    "${CMAKE_CURRENT_SOURCE_DIR}/freetype/include")
+target_compile_definitions(schuimm_freetype
+    PUBLIC
+        "FT_CONFIG_MODULES_H=<schuimm_ftmodule.h>"
+        "FT_CONFIG_OPTIONS_H=<schuimm_ftoption.h>"
+    PRIVATE
+        FT2_BUILD_LIBRARY)
+schuimm_third_party_target(schuimm_freetype)
+
+# miniaudio 0.11.26: only the low-level device API (playback through the platform's audio
+# backend). Decoding, encoding, the engine, node graph and resource manager are compiled out;
+# SCHUIMM decodes and mixes audio itself (Source/Audio).
+add_library(schuimm_miniaudio STATIC miniaudio/miniaudio.c)
+add_library(Schuimm::ThirdParty::Miniaudio ALIAS schuimm_miniaudio)
+target_include_directories(schuimm_miniaudio SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/miniaudio")
+target_compile_definitions(schuimm_miniaudio PUBLIC
+    MA_NO_DECODING
+    MA_NO_ENCODING
+    MA_NO_ENGINE
+    MA_NO_GENERATION
+    MA_NO_NODE_GRAPH
+    MA_NO_RESOURCE_MANAGER
+    MA_ENABLE_ONLY_SPECIFIC_BACKENDS
+    MA_ENABLE_WASAPI
+    MA_ENABLE_DSOUND
+    MA_ENABLE_COREAUDIO
+    MA_ENABLE_PULSEAUDIO
+    MA_ENABLE_ALSA
+    MA_ENABLE_NULL)
+if(APPLE)
+    # Link the frameworks directly instead of loading them at run time, so the compiler checks
+    # every CoreAudio call against the 10.13 deployment target.
+    target_compile_definitions(schuimm_miniaudio PUBLIC MA_NO_RUNTIME_LINKING)
+    target_link_libraries(schuimm_miniaudio PUBLIC
+        "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox")
+elseif(UNIX)
+    # PulseAudio and ALSA are loaded at run time (dlopen): no build dependency on them.
+    find_package(Threads REQUIRED)
+    target_link_libraries(schuimm_miniaudio PUBLIC Threads::Threads ${CMAKE_DL_LIBS} m)
+endif()
+schuimm_third_party_target(schuimm_miniaudio)

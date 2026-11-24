@@ -8,16 +8,26 @@ needs a person at the machine.
 Runs 30 frames, then checks, in order, and logs `PASS`/`FAIL` for each step:
 
 1. **opengl-context**: core profile, version ≥ 3.3.
-2. **resize**: `setSize(960×540)`, the size is reported back and a resize event arrives.
-3. **fullscreen-enter** and **fullscreen-leave**: state and event round-trip.
-4. **vsync**: frame rate with the swap interval at 0 versus 1. It passes if "off" is more than
-   20 % faster; if the driver or compositor forces sync, this is a warning, not a failure.
-5. Optional screenshot of the composited back buffer (PPM), then clean shutdown.
+2. **scene-assets**: the scene loaded its textures (9, through the texture cache), its five
+   render targets and two fonts (glyph atlas pages), with no missing glyphs. If an audio device
+   is open, a chime is played. Without one, the log says audio was not exercised; that is a
+   warning, not a failure. The pixel transition is switched on for the next steps.
+3. **resize**: `setSize(960×540)`, the size is reported back and a resize event arrives.
+4. **fullscreen-enter** and **fullscreen-leave**: state and event round-trip.
+5. **vsync**: frame rate with the swap interval at 0 versus 1 (the transition is switched off
+   again first). It passes if "off" is more than 20 % faster; if the driver or compositor forces
+   sync, this is a warning, not a failure.
+6. **scene-render**: the last frame drew more than 100 quads in at least one draw call and switched
+   render targets at least four times (world and minimap targets).
+7. Optional screenshot of the composited back buffer (PPM), then clean shutdown.
 
-Exit code 0 means all steps passed. Shader compilation, triangle, textured quad and alpha
-blending are checked by inspecting the screenshot: a red/green/blue gradient triangle on the
-left, an 8×8 warm checkerboard in the centre, glowing orbs blended over and beside it, and corner
-markers red (top-left), green (top-right), blue (bottom-left), white (bottom-right).
+Exit code 0 means all steps passed. The screenshot is inspected for the scene:
+* the meadow background and the cobblestone road (a repeating texture);
+* trees, a rock and flowers with transparent edges and soft shadows;
+* the player in front of the road;
+* the help panel (sized to its text), the minimap with the camera frame and the status panel;
+* the Western European sample line "Café crème, naïve Noël, Ñandú, Größe, garçon, €5", rendered
+  with correct accents and kerning.
 
 ## Manual checklist
 
@@ -25,19 +35,60 @@ Start `EngineDemo` normally and check:
 
 | # | Check | How |
 |---|---|---|
-| 1 | Window opens with the scene | as described above |
+| 1 | Window opens with the scene | as described above; log shows `Scene loaded` and `Audio device started` |
 | 2 | OpenGL version | log line `OpenGL version: …`, `Context: x.y core profile` |
-| 3 | Keyboard | press/hold/release keys: log shows `Key X Pressed` / `Key X Released` once each, never repeated while held; arrow keys move the triangle smoothly while held |
-| 4 | Modifiers left/right | LeftShift vs RightShift, LeftAlt vs RightAlt logged separately |
-| 5 | Layout independence | with AZERTY active, the physical "Q" key still logs `Key A` (the US position) |
-| 6 | Mouse | sprite follows the cursor, including in fullscreen and after resizing; left/right/middle buttons tint it; wheel scales it; log shows buttons and wheel |
-| 7 | Resize | drag the border: content stays letterboxed and keeps animating during the drag (Windows/macOS) |
-| 8 | Fullscreen | F11 / Alt+Enter (and Ctrl+Cmd+F on macOS) in and out; window position and size restored |
-| 9 | VSync | press V: title FPS jumps from the display rate to hundreds or thousands, and back |
-| 10 | Minimise | log shows `Suspended`, CPU drops to ~0 %; restore shows `Resumed` and no animation jump |
-| 11 | Focus | hold an arrow key and Alt-Tab/Cmd-Tab away: the key is logged `Released`; `Window lost focus` |
-| 12 | Close | window close button, Alt+F4 (Windows), ⌘Q (macOS): log ends with `Clean shutdown, exit code 0` |
-| 13 | HiDPI | on a scaled display the scene is sharp and the framebuffer size in the title is the pixel size |
+| 3 | Walking and camera | WASD/arrows move the player smoothly; the camera follows with easing, stops at the world edges, and the minimap frame follows; Shift runs |
+| 4 | Click to walk | clicking a point (also after zooming, resizing or in fullscreen) walks the player exactly there |
+| 5 | Layer order | walk above and below trees and houses: the player is hidden behind objects lower on screen and in front of higher ones; flowers sway (rotation around their base) |
+| 6 | Zoom | Q/E and the wheel zoom smoothly between 0.75× and 3×, 0 resets; UI and minimap stay fixed while the world and the shop signs scale |
+| 7 | Render targets | Tab: the world dissolves into big pixels and dims; Tab again returns; the UI stays sharp |
+| 8 | Text | accents in the sample line and the signs ("Bäckerei «Zoë»", "Café & Crêperie"); F1 hides/shows the help |
+| 9 | Audio | Space plays a chime (rapid presses overlap); footsteps while walking; N pauses/resumes the ambience; −/= change the volume shown in the status line |
+| 10 | Modifiers left/right | LeftShift vs RightShift etc. logged separately with `--verbose` |
+| 11 | Layout independence | with AZERTY active, the physical "Q" key still zooms out (the US position) |
+| 12 | Resize | drag the border: content stays letterboxed and keeps animating during the drag (Windows/macOS) |
+| 13 | Fullscreen | F11 / Alt+Enter (and Ctrl+Cmd+F on macOS) in and out; window position and size restored |
+| 14 | VSync | press V: FPS jumps from the display rate to hundreds or thousands, and back |
+| 15 | Minimise | log shows `Suspended`, CPU drops to ~0 %, the ambience stops; restore shows `Resumed`, the ambience continues, no animation jump |
+| 16 | Focus | hold a walking key and Alt-Tab/Cmd-Tab away: the player stops; `Window lost focus` |
+| 17 | Close | window close button, Alt+F4 (Windows), ⌘Q (macOS): log ends with `Audio device stopped`, `Clean shutdown, exit code 0` |
+| 18 | HiDPI | on a scaled display the scene is sharp (nearest scaling) and the framebuffer size in the title is the pixel size |
+
+## Verification record (Milestone 2)
+
+Same machines as below: macOS 26.6 on Apple M4 Max (Apple Clang 21); Debian 13 GNOME/Xwayland on
+Intel UHD 630 (GCC 14.2, Clang 19.1); Windows 11 on NVIDIA RTX 4050 Laptop GPU (MSVC 19.41).
+
+| Check | macOS | Debian 13 | Windows 11 |
+|---|---|---|---|
+| Debug + Release build, zero warnings (`-Werror` / `/WX`) | ✅ | ✅ GCC and Clang | ✅ |
+| `ctest -L unit`: CoreTests (62 cases), PlatformTests (2), FileSystemTests (13), ResourceTests (39), GraphicsTests (34), AudioTests (12) | ✅ Debug and Release | ✅ GCC and Clang, Debug and Release | ✅ Debug and Release |
+| `ctest -L integration`: LifecycleTests (4), RenderingTests (9 pixel-checked cases), EngineDemoSmoke | ✅ Debug and Release | ✅ under Xvfb/llvmpipe (all four builds) | ✅ Debug and Release (desktop session via `schtasks /it`) |
+| `ctest -L audio`: AudioDeviceSmoke on the real default device | ✅ CoreAudio, 44.1 kHz | ✅ PulseAudio on PipeWire, 48 kHz (all four builds) | ✅ WASAPI, 48 kHz |
+| `EngineDemo --self-test` (Release) | ✅ GL 4.1 Metal | ✅ GL 4.6 Mesa on the GNOME session | ✅ GL 3.3 NVIDIA |
+| Demo screenshot inspected | ✅ | ✅ | ✅ |
+| Pixel transition screenshot inspected | ✅ (with a temporary local build that starts with the transition on, then reverted) | ☐ | ☐ |
+| x86_64 build for 10.13 (`LC_VERSION_MIN_MACOSX 10.13`), unit tests and self-test under Rosetta | ✅ | n/a | n/a |
+| AddressSanitizer + UndefinedBehaviorSanitizer: unit tests, RenderingTests, 120 demo frames | ✅ no reports | not run | not run |
+| ThreadSanitizer: AudioTests (3 runs, incl. the null backend's audio thread) and AudioDeviceSmoke | ✅ no reports | not run | not run |
+| GitHub Actions | ☐ not run yet (needs a push) | ☐ | ☐ |
+
+Notes:
+
+* Not tested on real 10.13 or Windows 7 machines (none available). The x86_64 macOS build was
+  compiled with availability errors against 10.13 for every source, including the third-party
+  libraries, and run under Rosetta on macOS 26.
+* GCC's Release build (`-O3 -Wnull-dereference`) found a possible null dereference in the mixer's
+  command handling that the other compilers did not report. The code was restructured so a voice
+  command always has a valid voice.
+* FreeType's basic GPOS kerning gave Noto Sans no kerning at all (see
+  [Text.md](Text.md#fonts-fontface)); found by `FontFace_KerningPairs` and fixed by a marked local
+  patch.
+* Apple's OpenGL rejected draws while sampler units in the texture array had no texture bound
+  (driver message in `RenderingTests`); unused slots are now bound to the white texture.
+* Interactive play with keyboard and mouse (checklist 3–9 and 15–16) was not done: the machines
+  were driven remotely. Movement, camera, zoom, layering, transition, text and audio were verified
+  through the automated tests, the self-test and screenshots, but not by a person playing.
 
 ## Verification record (Milestone 1.5)
 
@@ -55,7 +106,7 @@ Tools). Each build was configured from an empty build directory.
 | No per-frame autorelease leak (`OBJC_DEBUG_MISSING_POOLS=YES`, 30 vs 600 frames) | ✅ count constant, none on the main thread | n/a | n/a |
 | X protocol error is logged and not fatal (deliberate `XDestroyWindow` of a bogus id) | n/a | ✅ | n/a |
 | `.github/scripts/run-tests.sh` | ✅ | ✅ including `xvfb-run` wrapper | ✅ under Git Bash |
-| GitHub Actions: build + unit tests | ✅ hosted `macos-15` runner (integration: reported as not run) | ✅ GCC 14 on `ubuntu-24.04`, unit + integration under Xvfb; ☐ Clang job switched from 18 to 19 after the second run, not yet re-run | ✅ hosted `windows-2022` runner (integration: reported as not run) |
+| GitHub Actions: build + unit tests | ✅ hosted `macos-15` runner (integration: reported as not run) | ✅ GCC 14 and Clang 19 on `ubuntu-24.04`, Debug and Release, unit + integration under Xvfb | ✅ hosted `windows-2022` runner (integration: reported as not run) |
 
 Notes:
 
@@ -71,6 +122,10 @@ Notes:
 * Second CI run: everything passed except the Clang 18 jobs. Ubuntu 24.04's default Clang 18
   cannot use `std::expected` from libstdc++ 14 (it requires `__cpp_concepts >= 202002`), so the
   job now uses Clang 19, which is also the version tested on Debian.
+* Third CI run: all Windows and Linux jobs passed, including Clang 19. The macOS jobs were never
+  started: GitHub reported that no hosted macOS arm64 runner could be acquired (a capacity
+  problem on GitHub's side). After re-running them (macOS Debug needed two attempts to get a
+  runner), all eight jobs of that run passed.
 * Physical keyboard/mouse checks (checklist 3–7, 10, 11) were not repeated; Milestone 1.5 did not
   change input handling.
 

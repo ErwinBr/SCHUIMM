@@ -6,6 +6,7 @@
 #include "Graphics/OpenGL/GLObjects.h"
 #include "Graphics/OpenGL/GLRenderer2D.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace schuimm {
@@ -34,8 +35,7 @@ public:
     {
         // GL objects can only be deleted while their context is current.
         surface_->makeCurrent();
-        sceneFramebuffer_.reset();
-        sceneTexture_.reset();
+        sceneTarget_.reset();
         renderer_.reset();
         logger_.info("Graphics", "OpenGL device destroyed");
     }
@@ -52,12 +52,14 @@ public:
         if (auto status = detectCapabilities(); !status) {
             return status;
         }
-        auto renderer = gl::GLRenderer2D::create(gl_, settings_.presentation.virtualResolution);
+        auto renderer = gl::GLRenderer2D::create(gl_, settings_.presentation.virtualResolution,
+                                                 {capabilities_.maxTextureSize, capabilities_.textureSlots});
         if (!renderer) {
             return std::unexpected(renderer.error());
         }
         renderer_ = std::move(*renderer);
-        logger_.info("Graphics", "Shaders compiled and linked");
+        logger_.info("Graphics", concat("Sprite renderer ready: ", capabilities_.textureSlots,
+                                        " texture slots per batch (driver reports ", capabilities_.maxTextureImageUnits, " units)"));
 
         if (auto status = createSceneTarget(); !status) {
             return status;
@@ -85,39 +87,27 @@ public:
     {
         SCHUIMM_ASSERT(!inFrame_, "beginFrame() called twice");
         inFrame_ = true;
-        const Extent2D virtualSize = settings_.presentation.virtualResolution;
-        gl_.BindFramebuffer(gl::FRAMEBUFFER, sceneFramebuffer_.id());
-        gl_.Viewport(0, 0, virtualSize.width, virtualSize.height);
-        gl_.Enable(gl::BLEND);
-        // Straight alpha for colour; alpha accumulates "over" so the target stays meaningful.
-        gl_.BlendFuncSeparate(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA, gl::ONE, gl::ONE_MINUS_SRC_ALPHA);
-        renderer_->setTargetSize(virtualSize);
+        renderer_->beginFrame(*sceneTarget_);
     }
 
     void endFrame() override
     {
         SCHUIMM_ASSERT(inFrame_, "endFrame() without beginFrame()");
         inFrame_ = false;
+        renderer_->endFrame();
 
         // Composite the virtual-resolution scene into the window, preserving aspect ratio.
         const Extent2D framebuffer = surface_->framebufferSize();
-        gl_.BindFramebuffer(gl::FRAMEBUFFER, 0);
-        gl_.Disable(gl::BLEND);
         if (!framebuffer.isEmpty()) {
-            gl_.Viewport(0, 0, framebuffer.width, framebuffer.height);
+            renderer_->beginWindowPass(framebuffer);
             const Color border = settings_.presentation.borderColor;
-            gl_.ClearColor(border.r, border.g, border.b, 1.0f);
-            gl_.Clear(gl::COLOR_BUFFER_BIT);
-
+            renderer_->clear({border.r, border.g, border.b, 1.0f});
             const PixelRect rect = computePresentationRect(
                 settings_.presentation.virtualResolution, framebuffer, settings_.presentation.integerScaling);
-            renderer_->setTargetSize(framebuffer);
-            // The scene texture was rendered with y pointing down in clip space, i.e. its top row
-            // is at t = 1. Flip v so the image appears upright.
-            renderer_->drawTextureId(sceneTexture_.id(),
+            renderer_->drawTexture(sceneTarget_->texture(),
                 RectF{static_cast<float>(rect.x), static_cast<float>(rect.y), static_cast<float>(rect.width),
-                      static_cast<float>(rect.height)},
-                RectF{0.0f, 1.0f, 1.0f, -1.0f}, Color::white());
+                      static_cast<float>(rect.height)});
+            renderer_->endWindowPass();
 
             if (captureRequested_) {
                 captureRequested_ = false;
@@ -140,6 +130,12 @@ public:
     }
 
     bool isVSyncEnabled() const override { return vsync_; }
+
+    GraphicsResourceCounts liveResources() const override
+    {
+        // The scene target is the device's own.
+        return {renderer_->liveTextureCount(), renderer_->liveRenderTargetCount() - (sceneTarget_ ? 1 : 0)};
+    }
 
     void requestFrameCapture() override { captureRequested_ = true; }
 
@@ -165,6 +161,9 @@ private:
         gl_.GetIntegerv(gl::CONTEXT_PROFILE_MASK, &profileMask);
         caps.coreProfile = (profileMask & gl::CONTEXT_CORE_PROFILE_BIT) != 0;
         gl_.GetIntegerv(gl::MAX_TEXTURE_SIZE, &caps.maxTextureSize);
+        gl_.GetIntegerv(gl::MAX_TEXTURE_IMAGE_UNITS, &caps.maxTextureImageUnits);
+        // OpenGL 3.3 guarantees 16; use fewer only if a driver reports fewer.
+        caps.textureSlots = std::clamp(caps.maxTextureImageUnits, 1, maxSpriteTextureSlots);
         caps.swapControl = surface_->supportsSwapControl();
         (void)gl_.GetError(); // CONTEXT_PROFILE_MASK may be rejected by non-conforming drivers.
 
@@ -192,32 +191,12 @@ private:
     Status createSceneTarget()
     {
         const Extent2D size = settings_.presentation.virtualResolution;
-        if (size.isEmpty() || size.width > capabilities_.maxTextureSize || size.height > capabilities_.maxTextureSize) {
-            return makeError(ErrorCode::InvalidArgument,
-                concat("invalid virtual resolution ", size.width, "x", size.height));
+        auto target = renderer_->createRenderTarget({size, {settings_.presentation.scalingFilter}});
+        if (!target) {
+            return makeError(target.error().code, concat("scene target: ", target.error().message));
         }
-        sceneTexture_ = gl::createTextureObject(gl_);
-        const gl::GLint filter = settings_.presentation.scalingFilter == TextureFilter::Nearest
-                                     ? static_cast<gl::GLint>(gl::NEAREST)
-                                     : static_cast<gl::GLint>(gl::LINEAR);
-        gl_.BindTexture(gl::TEXTURE_2D, sceneTexture_.id());
-        gl_.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, filter);
-        gl_.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, filter);
-        gl_.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, static_cast<gl::GLint>(gl::CLAMP_TO_EDGE));
-        gl_.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, static_cast<gl::GLint>(gl::CLAMP_TO_EDGE));
-        gl_.TexImage2D(gl::TEXTURE_2D, 0, static_cast<gl::GLint>(gl::RGBA8), size.width, size.height, 0, gl::RGBA,
-                       gl::UNSIGNED_BYTE, nullptr);
-        gl_.BindTexture(gl::TEXTURE_2D, 0);
-
-        sceneFramebuffer_ = gl::createFramebuffer(gl_);
-        gl_.BindFramebuffer(gl::FRAMEBUFFER, sceneFramebuffer_.id());
-        gl_.FramebufferTexture2D(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, sceneTexture_.id(), 0);
-        const gl::GLenum status = gl_.CheckFramebufferStatus(gl::FRAMEBUFFER);
-        gl_.BindFramebuffer(gl::FRAMEBUFFER, 0);
-        if (status != gl::FRAMEBUFFER_COMPLETE) {
-            return makeError(ErrorCode::GraphicsFailure, concat("scene framebuffer incomplete (0x", std::hex, status, ")"));
-        }
-        logger_.info("Graphics", concat("Scene framebuffer ", size.width, "x", size.height, " created"));
+        sceneTarget_.reset(static_cast<gl::GLRenderTarget*>(target->release()));
+        logger_.info("Graphics", concat("Scene render target ", size.width, "x", size.height, " created"));
         return {};
     }
 
@@ -262,8 +241,7 @@ private:
     gl::GLFunctions gl_;
     GraphicsCapabilities capabilities_;
     std::unique_ptr<gl::GLRenderer2D> renderer_;
-    gl::TextureHandle sceneTexture_;
-    gl::FramebufferHandle sceneFramebuffer_;
+    std::unique_ptr<gl::GLRenderTarget> sceneTarget_;
     bool vsync_ = false;
     bool inFrame_ = false;
     bool captureRequested_ = false;

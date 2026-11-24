@@ -20,7 +20,16 @@ struct GraphicsCapabilities {
     int minorVersion = 0;
     bool coreProfile = false;
     int maxTextureSize = 0;
+    int maxTextureImageUnits = 0; // fragment shader texture units reported by the driver
+    int textureSlots = 0;         // texture units the sprite batch uses (<= 16)
     bool swapControl = false;   // VSync can be toggled.
+};
+
+// Textures and render targets created through the renderer and not yet destroyed
+// (the device's internal ones are not included). Both must be 0 when the device is destroyed.
+struct GraphicsResourceCounts {
+    int textures = 0;
+    int renderTargets = 0;
 };
 
 struct GraphicsDeviceSettings {
@@ -52,6 +61,8 @@ public:
     [[nodiscard]] virtual bool isVSyncEnabled() const = 0;
 
     [[nodiscard]] virtual const PresentationSettings& presentation() const = 0;
+
+    [[nodiscard]] virtual GraphicsResourceCounts liveResources() const = 0;
 
     // Requests a read-back of the next frame as presented (after endFrame()). Used by automated
     // integration tests; costs a GPU stall, so do not use it every frame.

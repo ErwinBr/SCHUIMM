@@ -5,3 +5,9 @@ schuimm_add_test(LifecycleTests
     LIBRARIES Schuimm::Platform Schuimm::GraphicsOpenGL
     LABELS integration)
 set_tests_properties(LifecycleTests PROPERTIES TIMEOUT 120)
+
+schuimm_add_test(RenderingTests
+    SOURCES RenderingTests.cpp
+    LIBRARIES Schuimm::Platform Schuimm::GraphicsOpenGL
+    LABELS integration)
+set_tests_properties(RenderingTests PROPERTIES TIMEOUT 120)

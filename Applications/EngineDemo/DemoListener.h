@@ -2,7 +2,8 @@
 
 #include "Core/Application/Application.h"
 #include "DemoOptions.h"
-#include "Graphics/Interface/Texture.h"
+#include "DemoScene.h"
+#include "Resource/AssetLocator.h"
 
 #include <memory>
 #include <string>
@@ -10,11 +11,12 @@
 
 namespace demo {
 
-// The manual integration test scene: a coloured triangle, a textured quad and alpha-blended
-// sprites, plus keyboard/mouse interaction and an optional scripted self-test.
+// Application callbacks of the EngineDemo: window controls (fullscreen, VSync, size), the
+// Milestone 2 scene (DemoScene) and the optional scripted self-test.
 class DemoListener final : public schuimm::ApplicationListener {
 public:
-    explicit DemoListener(DemoOptions options);
+    // `assets` must outlive the listener.
+    DemoListener(DemoOptions options, const schuimm::AssetLocator& assets);
 
     schuimm::Status onInitialize(schuimm::Application& app) override;
     void onUpdate(schuimm::Application& app, double deltaSeconds) override;
@@ -31,7 +33,7 @@ public:
 private:
     enum class SelfTestStep { Start, Resize, FullscreenOn, FullscreenOff, VSyncOff, VSyncOn, Screenshot, Done };
 
-    void handleInput(schuimm::Application& app, double deltaSeconds);
+    void handleInput(schuimm::Application& app);
     void logInputEdges(schuimm::Application& app);
     void updateTitle(schuimm::Application& app);
     void toggleFullscreen(schuimm::Application& app);
@@ -42,14 +44,11 @@ private:
     void saveCapturedFrame(schuimm::Application& app);
 
     DemoOptions options_;
-    std::unique_ptr<schuimm::Texture> checkerboard_;
-    std::unique_ptr<schuimm::Texture> sprite_;
+    const schuimm::AssetLocator& assets_;
+    std::unique_ptr<DemoScene> scene_;
 
     double time_ = 0.0;
     double titleTimer_ = 0.0;
-    schuimm::Vec2 trianglePosition_{150.0f, 190.0f};
-    schuimm::Vec2 spritePosition_{320.0f, 180.0f};
-    float spriteScale_ = 1.0f;
     bool captureRequested_ = false;
     int exitCode_ = 0;
 

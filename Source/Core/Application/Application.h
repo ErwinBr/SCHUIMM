@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Audio/AudioDevice.h"
 #include "Core/Application/ApplicationListener.h"
 #include "Core/Common/Error.h"
 #include "Core/Input/InputState.h"
@@ -40,8 +41,10 @@ struct ApplicationSettings {
 //     dt = clock.tick()
 //     listener.onUpdate(dt)
 //     graphics.beginFrame(); listener.onRender(); graphics.endFrame(); graphics.present()
+//     audio.update()                 (if an audio device is present: release finished sounds)
 //
-// All services are injected and must outlive the Application.
+// All services are injected and must outlive the Application. The audio device is optional
+// (nullptr: no audio); while the application is suspended its output is paused.
 class Application {
 public:
     struct Services {
@@ -49,6 +52,7 @@ public:
         Platform& platform;
         Window& window;
         GraphicsDevice& graphics;
+        AudioDevice* audio = nullptr;
     };
 
     Application(Services services, ApplicationListener& listener, ApplicationSettings settings = {},
@@ -73,6 +77,8 @@ public:
     [[nodiscard]] Platform& platform() noexcept { return services_.platform; }
     [[nodiscard]] Window& window() noexcept { return services_.window; }
     [[nodiscard]] GraphicsDevice& graphics() noexcept { return services_.graphics; }
+    // nullptr when the application runs without audio.
+    [[nodiscard]] AudioDevice* audio() noexcept { return services_.audio; }
     [[nodiscard]] const InputState& input() const noexcept { return input_; }
     [[nodiscard]] const Clock& clock() const noexcept { return clock_; }
 

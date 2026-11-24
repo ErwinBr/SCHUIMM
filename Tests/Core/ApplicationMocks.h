@@ -4,6 +4,7 @@
 // lifecycle and main loop without a window system or GPU.
 
 #include "Core/Application/Application.h"
+#include "../Graphics/FakeRenderer.h"
 
 #include <functional>
 #include <vector>
@@ -77,23 +78,7 @@ private:
     int pumpIndex_ = 0;
 };
 
-class MockTexture final : public Texture {
-public:
-    Extent2D size() const override { return {1, 1}; }
-};
-
-class MockRenderer final : public Renderer2D {
-public:
-    int clears = 0;
-    Extent2D virtualResolution() const override { return {640, 360}; }
-    void clear(Color) override { ++clears; }
-    void drawTriangle(const std::array<ColoredVertex, 3>&) override {}
-    void drawTexture(const Texture&, const RectF&, const RectF&, Color) override {}
-    Result<std::unique_ptr<Texture>> createTexture(const TextureDescription&) override
-    {
-        return std::unique_ptr<Texture>(std::make_unique<MockTexture>());
-    }
-};
+using MockRenderer = test::FakeRenderer;
 
 class MockGraphicsDevice final : public GraphicsDevice {
 public:
@@ -117,6 +102,7 @@ public:
     }
     bool isVSyncEnabled() const override { return vsync; }
     const PresentationSettings& presentation() const override { return settings; }
+    GraphicsResourceCounts liveResources() const override { return {mockRenderer.liveTextures, 0}; }
     void requestFrameCapture() override {}
     std::optional<Image> takeCapturedFrame() override { return std::nullopt; }
 };

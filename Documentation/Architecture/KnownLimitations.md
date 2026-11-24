@@ -1,6 +1,6 @@
 # Known limitations
 
-Deliberate scope limits (as of Milestone 1.5) and known platform caveats.
+Deliberate scope limits (as of Milestone 2) and known platform caveats.
 
 ## Scope
 
@@ -8,16 +8,60 @@ Deliberate scope limits (as of Milestone 1.5) and known platform caveats.
 * No text input (characters, IME, dead keys): only physical key state. Keypad keys and some rare
   keys (Pause, PrintScreen, media keys) map to `Key::Unknown`.
 * No gamepads, touch, cursor shape or cursor-capture (relative mouse) APIs.
-* The renderer issues one draw call per primitive: no batching, no text rendering. There is no
-  GPU resource management yet: textures are created explicitly from pixel data
-  (`Renderer2D::createTexture`); a texture cache built on `ResourceCache<Image>` is Milestone 2
-  work. The demo's textures are still generated procedurally (it ships no image assets).
 * Fixed framebuffer format: RGBA8 with 24-bit depth and 8-bit stencil, no MSAA, no sRGB.
-* Single-threaded; the Logger is the only thread-safe component. `ResourceCache` is not
-  thread-safe and resource loading is synchronous (no asynchronous loading or streaming).
+* Single-threaded except for the audio mixer thread; the Logger is the only thread-safe
+  component. `ResourceCache`, `TextureCache`, `Font` and `AudioDevice` must be used from the main
+  thread, and resource loading is synchronous (no asynchronous loading or streaming).
+
+## Rendering
+
+* One blend mode (premultiplied "over"). No additive, multiply or masking modes, no custom
+  shaders or post-processing effects beyond drawing render targets as textures.
+* Blending and premultiplication happen on sRGB-encoded values, not in linear light.
+* Textures: RGBA8 only, no mipmaps, no compressed formats. Only dynamic textures can be updated
+  after creation.
+* Render targets have no depth or stencil buffer and no MSAA.
+* Sprite layer ordering applies between two flushes. Changing the view, switching render targets
+  or clearing flushes, so draws before and after such a call are never interleaved by layer.
+* Up to 16 textures per batch (fewer if the driver reports fewer units). The fragment shader
+  selects the texture with a branch chain; very old drivers may run that slower than a
+  single-texture shader. The batch size is fixed at 4096 quads per draw call.
+* A texture or render target must stay alive until the draws that use it are flushed (at the
+  latest the end of the frame). This is documented, not checked.
+* The camera has no rotation and no built-in shake or path behaviours; following is exponential
+  smoothing with an optional dead zone.
+
+## Text
+
+* No shaping, ligatures, bidirectional text, vertical text or automatic word wrapping. One code
+  point is one glyph; combining characters are not composed.
+* Kerning: legacy `kern` tables and simple GPOS pair adjustment only (FreeType's basic support,
+  locally patched to tolerate contextual lookups, see `ThirdParty/README.md`). Class-based
+  context-dependent kerning is not applied.
+* TrueType-outline fonts only (no CFF/PostScript outlines, colour or bitmap fonts, variable font
+  axes are not exposed).
+* A `Font` has one pixel size. Text scaled by camera zoom or by the window scale is resampled,
+  not re-rasterised. The atlas has a fixed number of pages (4 × 512² by default); glyphs that do
+  not fit are drawn as nothing. Glyphs are never evicted.
+
+## Audio
+
+* WAV (PCM 8/16/24/32-bit integer, 32-bit float; mono/stereo) is the only format. No Ogg Vorbis,
+  FLAC or MP3, and no streaming: sounds are fully decoded into memory.
+* Resampling to the device rate is linear interpolation (adequate for effects, not mastering
+  quality). There is no per-voice pitch, panning, effects or 3D positioning.
+* 32 simultaneous voices; `play()` returns an invalid instance when all are busy (no voice
+  stealing or priorities).
+* The output device is chosen once (the system default). Device changes (headphones plugged in)
+  are handled by the OS or miniaudio's default-device routing, not by the engine; a device that
+  disappears is not re-opened.
+* The command queue to the audio thread holds 1024 commands; if more are issued within one audio
+  period (about 10 ms) the extras are dropped with a warning.
 
 ## Resources and assets
 
+* The EngineDemo needs `--assets` to be an absolute path (the engine never resolves paths against
+  the working directory).
 * PNG is the only image format. Images are always decoded to RGBA8; there is no greyscale or
   compressed-texture format, and no mipmaps.
 * 16-bit PNGs without a `gAMA`/`sRGB` chunk are treated as linear and converted to sRGB (libpng's
@@ -49,6 +93,10 @@ Deliberate scope limits (as of Milestone 1.5) and known platform caveats.
   macOS: a VM with no hardware-accelerated pixel format), so integration tests (real window and
   context) are built but not run there. They are run by hand on machines with a GPU. The job
   summaries state this.
+* Real audio output is tested in CI only on Linux, against a PulseAudio null sink. On Windows
+  and macOS the `audio` test runs as an informational probe whose result (an output device or
+  none) is reported but does not decide the job. The mixer and the miniaudio code path are
+  covered everywhere by unit tests on the null backend.
 * Integration tests on Linux CI use Mesa's software renderer (llvmpipe) under Xvfb without a
   window manager, so fullscreen and swap control are not exercised there (the EngineDemo
   self-test covers them on real desktops).
@@ -69,7 +117,10 @@ Deliberate scope limits (as of Milestone 1.5) and known platform caveats.
 * NSOpenGL is deprecated (since 10.14) and OpenGL tops out at 4.1. It still works on current
   macOS, including Apple Silicon through Apple's Metal-based GL implementation. A Metal backend is
   the long-term path (see [Graphics.md](Graphics.md)).
-* macOS 10.13 runtime is untested; the code is compiled against 10.13 availability.
+* macOS 10.13 runtime is untested (no machine available). The x86_64 build declares 10.13 as
+  its minimum and every engine and third-party source is compiled with availability errors
+  against 10.13; the x86_64 build was run under Rosetta on a current macOS. arm64 binaries
+  require macOS 11 by definition.
 * A fully occluded window (e.g. a locked screen or a covered window) suspends the application.
   Integration tests that render frames, such as `EngineDemoSmoke`, therefore time out on a locked Mac.
   During the native fullscreen animation the window is briefly reported as occluded, so the

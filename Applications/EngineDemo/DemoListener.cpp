@@ -1,7 +1,7 @@
 #include "DemoListener.h"
 
 #include "Core/Common/StringBuilder.h"
-#include "DemoAssets.h"
+#include "Screenshot.h"
 #include "Graphics/Interface/Presentation.h"
 
 #include <algorithm>
@@ -19,33 +19,22 @@ constexpr double stepTimeoutSeconds = 6.0;
 constexpr double fpsMeasureSeconds = 1.5;
 } // namespace
 
-DemoListener::DemoListener(DemoOptions options)
+DemoListener::DemoListener(DemoOptions options, const AssetLocator& assets)
     : options_(std::move(options))
+    , assets_(assets)
 {
 }
 
 Status DemoListener::onInitialize(Application& app)
 {
-    Renderer2D& renderer = app.graphics().renderer();
-
-    const Image checker = makeCheckerboard(128, 8);
-    auto checkerboard = renderer.createTexture({checker.size(), checker.pixels(), TextureFilter::Nearest});
-    if (!checkerboard) {
-        return std::unexpected(checkerboard.error());
-    }
-    checkerboard_ = std::move(*checkerboard);
-
-    const Image orb = makeAlphaSprite(64);
-    auto sprite = renderer.createTexture({orb.size(), orb.pixels(), TextureFilter::Linear});
-    if (!sprite) {
-        return std::unexpected(sprite.error());
-    }
-    sprite_ = std::move(*sprite);
-
     const GraphicsCapabilities& caps = app.graphics().capabilities();
     app.logger().info(category, concat("Platform backend: ", app.platform().name(), ", graphics: ", caps.api, " ",
                                        caps.majorVersion, ".", caps.minorVersion, caps.coreProfile ? " core" : ""));
-    app.logger().info(category, "Textures created (checkerboard 128x128, alpha sprite 64x64)");
+    auto scene = DemoScene::create(app.graphics().renderer(), assets_, app.audio(), app.logger());
+    if (!scene) {
+        return std::unexpected(scene.error());
+    }
+    scene_ = std::move(*scene);
     if (options_.selfTest) {
         app.logger().info(category, "Self-test enabled");
     }
@@ -60,8 +49,9 @@ void DemoListener::onUpdate(Application& app, double deltaSeconds)
         saveCapturedFrame(app);
     }
 
-    handleInput(app, deltaSeconds);
+    handleInput(app);
     logInputEdges(app);
+    scene_->update(app, deltaSeconds);
 
     titleTimer_ += deltaSeconds;
     if (titleTimer_ >= 0.5) {
@@ -84,7 +74,7 @@ void DemoListener::onUpdate(Application& app, double deltaSeconds)
     }
 }
 
-void DemoListener::handleInput(Application& app, double deltaSeconds)
+void DemoListener::handleInput(Application& app)
 {
     const InputState& input = app.input();
 
@@ -102,23 +92,6 @@ void DemoListener::handleInput(Application& app, double deltaSeconds)
     if (input.wasPressed(Key::R) && !app.window().isFullscreen()) {
         app.window().setSize(defaultWindowSize);
     }
-
-    // Held keys move the triangle (tests continuous "held" state).
-    const float speed = 200.0f * static_cast<float>(deltaSeconds);
-    if (input.isDown(Key::Left)) trianglePosition_.x -= speed;
-    if (input.isDown(Key::Right)) trianglePosition_.x += speed;
-    if (input.isDown(Key::Up)) trianglePosition_.y -= speed;
-    if (input.isDown(Key::Down)) trianglePosition_.y += speed;
-
-    // The sprite follows the mouse, mapped from window coordinates into the virtual resolution.
-    if (input.hasMousePosition()) {
-        const PresentationSettings& presentation = app.graphics().presentation();
-        spritePosition_ = windowToVirtual(input.mousePosition(), app.window().size(), app.window().framebufferSize(),
-                                          presentation.virtualResolution, presentation.integerScaling);
-    }
-    if (input.wheelDelta().y != 0.0f) {
-        spriteScale_ = std::clamp(spriteScale_ * std::pow(1.1f, input.wheelDelta().y), 0.25f, 4.0f);
-    }
 }
 
 void DemoListener::logInputEdges(Application& app)
@@ -128,7 +101,7 @@ void DemoListener::logInputEdges(Application& app)
         const auto key = static_cast<Key>(i);
         const ButtonState state = input.state(key);
         if (state == ButtonState::Pressed || state == ButtonState::Released) {
-            app.logger().info("Input", concat("Key ", toString(key), " ", toString(state)));
+            app.logger().debug("Input", concat("Key ", toString(key), " ", toString(state)));
         }
     }
     for (std::size_t i = 0; i < mouseButtonCount; ++i) {
@@ -136,58 +109,15 @@ void DemoListener::logInputEdges(Application& app)
         const ButtonState state = input.state(button);
         if (state == ButtonState::Pressed || state == ButtonState::Released) {
             const Vec2 p = input.mousePosition();
-            app.logger().info("Input", concat("Mouse ", toString(button), " ", toString(state), " at (",
+            app.logger().debug("Input", concat("Mouse ", toString(button), " ", toString(state), " at (",
                                               formatFixed(static_cast<double>(p.x), 0), ", ", formatFixed(static_cast<double>(p.y), 0), ")"));
         }
-    }
-    if (input.wheelDelta().x != 0.0f || input.wheelDelta().y != 0.0f) {
-        app.logger().info("Input", concat("Mouse wheel (", formatFixed(static_cast<double>(input.wheelDelta().x), 2), ", ",
-                                          formatFixed(static_cast<double>(input.wheelDelta().y), 2), "), sprite scale ",
-                                          formatFixed(static_cast<double>(spriteScale_), 2)));
     }
 }
 
 void DemoListener::onRender(Application& app, Renderer2D& renderer)
 {
-    (void)app;
-    const Extent2D size = renderer.virtualResolution();
-    const float width = static_cast<float>(size.width);
-    const float height = static_cast<float>(size.height);
-
-    renderer.clear({0.10f, 0.12f, 0.18f, 1.0f});
-
-    // 1. Coloured triangle.
-    const Vec2 t = trianglePosition_;
-    renderer.drawTriangle({{
-        {{t.x, t.y - 90.0f}, {1.0f, 0.15f, 0.15f, 1.0f}},
-        {{t.x + 95.0f, t.y + 75.0f}, {0.15f, 1.0f, 0.2f, 1.0f}},
-        {{t.x - 95.0f, t.y + 75.0f}, {0.2f, 0.35f, 1.0f, 1.0f}},
-    }});
-
-    // 2. Textured quad (opaque checkerboard), centred.
-    const RectF quad{width * 0.5f - 90.0f, height * 0.5f - 90.0f, 180.0f, 180.0f};
-    renderer.drawTexture(*checkerboard_, quad);
-
-    // 3. Alpha-blended sprites: one oscillating across the quad, one following the mouse.
-    const float sweep = static_cast<float>(std::sin(time_ * 1.5));
-    renderer.drawTexture(*sprite_, {quad.x + quad.width * 0.5f - 48.0f + sweep * 150.0f, quad.y + 40.0f, 96.0f, 96.0f},
-                         {0.0f, 0.0f, 1.0f, 1.0f}, {1.0f, 0.8f, 0.4f, 0.85f});
-
-    Color tint = Color::white();
-    if (app.input().isDown(MouseButton::Left)) tint = {1.0f, 0.4f, 0.4f, 1.0f};
-    if (app.input().isDown(MouseButton::Right)) tint = {0.4f, 1.0f, 0.4f, 1.0f};
-    if (app.input().isDown(MouseButton::Middle)) tint = {0.6f, 0.6f, 1.0f, 1.0f};
-    const float spriteSize = 64.0f * spriteScale_;
-    renderer.drawTexture(*sprite_, {spritePosition_.x - spriteSize * 0.5f, spritePosition_.y - spriteSize * 0.5f, spriteSize, spriteSize},
-                         {0.0f, 0.0f, 1.0f, 1.0f}, tint);
-
-    // Corner markers to verify orientation and the letterbox mapping: red top-left, green
-    // top-right, blue bottom-left, white bottom-right.
-    const float m = 12.0f;
-    renderer.drawTriangle({{{{0, 0}, {1, 0, 0, 1}}, {{m * 2, 0}, {1, 0, 0, 1}}, {{0, m * 2}, {1, 0, 0, 1}}}});
-    renderer.drawTriangle({{{{width, 0}, {0, 1, 0, 1}}, {{width, m * 2}, {0, 1, 0, 1}}, {{width - m * 2, 0}, {0, 1, 0, 1}}}});
-    renderer.drawTriangle({{{{0, height}, {0, 0, 1, 1}}, {{0, height - m * 2}, {0, 0, 1, 1}}, {{m * 2, height}, {0, 0, 1, 1}}}});
-    renderer.drawTriangle({{{{width, height}, {1, 1, 1, 1}}, {{width - m * 2, height}, {1, 1, 1, 1}}, {{width, height - m * 2}, {1, 1, 1, 1}}}});
+    scene_->render(app, renderer);
 }
 
 void DemoListener::updateTitle(Application& app)
@@ -244,9 +174,8 @@ void DemoListener::onResume(Application& app)
 
 void DemoListener::onShutdown(Application& app)
 {
-    // GPU resources must be released while the graphics device is still alive.
-    sprite_.reset();
-    checkerboard_.reset();
+    // GPU resources (and the scene's sounds) must be released while the devices are alive.
+    scene_.reset();
     if (options_.selfTest) {
         if (failures_.empty()) {
             app.logger().info(category, "SELF-TEST PASSED");
@@ -300,6 +229,7 @@ void DemoListener::beginStep(Application& app, SelfTestStep step)
         app.window().setFullscreen(false);
         break;
     case SelfTestStep::VSyncOff: {
+        scene_->toggleTransition(); // back to the clear view for the rest of the test
         const bool applied = app.graphics().setVSync(false);
         app.logger().info("SelfTest", concat("VSync off", applied ? "" : " (unsupported)"));
         break;
@@ -309,12 +239,18 @@ void DemoListener::beginStep(Application& app, SelfTestStep step)
         app.logger().info("SelfTest", concat("VSync on", applied ? "" : " (unsupported)"));
         break;
     }
-    case SelfTestStep::Screenshot:
+    case SelfTestStep::Screenshot: {
+        const RenderStatistics stats = app.graphics().renderer().lastFrameStatistics();
+        // World and minimap are drawn into render targets: at least four target switches.
+        recordResult(app, "scene-render", stats.quads > 100 && stats.drawCalls > 0 && stats.renderTargetSwitches >= 4,
+                     concat(stats.quads, " quads, ", stats.drawCalls, " draw calls, ", stats.renderTargetSwitches,
+                            " render target switches"));
         if (!options_.screenshotPath.empty()) {
             app.graphics().requestFrameCapture();
             captureRequested_ = true;
         }
         break;
+    }
     case SelfTestStep::Start:
     case SelfTestStep::Done:
         break;
@@ -359,6 +295,19 @@ void DemoListener::runSelfTest(Application& app)
             const bool versionOk = caps.majorVersion > 3 || (caps.majorVersion == 3 && caps.minorVersion >= 3);
             recordResult(app, "opengl-context", versionOk && caps.coreProfile,
                          concat(caps.version, caps.coreProfile ? " (core)" : " (not core)"));
+            const DemoScene::Status scene = scene_->status();
+            recordResult(app, "scene-assets",
+                         scene.textures >= 9 && scene.renderTargets == 5 && scene.glyphAtlasPages >= 2 && scene.missingGlyphs == 0,
+                         concat(scene.textures, " textures, ", scene.renderTargets, " render targets, ", scene.glyphAtlasPages,
+                                " glyph pages, ", scene.missingGlyphs, " missing glyphs"));
+            if (scene.audioAvailable) {
+                app.logger().info("SelfTest", concat("Audio: ", scene.audioDescription, "; playing a chime"));
+                scene_->playChime();
+            } else {
+                // No output device (e.g. a headless machine): reported, not a failure.
+                app.logger().warning("SelfTest", "Audio unavailable (no output device); audio not exercised");
+            }
+            scene_->toggleTransition(); // exercise the render-target chain while the window changes
             beginStep(app, SelfTestStep::Resize);
         }
         break;

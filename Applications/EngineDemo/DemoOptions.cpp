@@ -15,13 +15,16 @@ const char* usageText()
            "  --screenshot FILE    Save the last frame as a binary PPM image (with --frames or --self-test)\n"
            "  --vsync on|off       Initial vertical synchronisation (default on)\n"
            "  --fullscreen         Start in fullscreen\n"
-           "  --self-test          Scripted check of resize, fullscreen and VSync; exit code reports the result\n"
+           "  --self-test          Scripted check of the scene, resize, fullscreen and VSync; exit code reports the result\n"
+           "  --assets DIR         Asset root (absolute path; default: Assets next to the executable)\n"
+           "  --no-audio           Run without opening an audio device\n"
            "  --log FILE           Also write the log to FILE\n"
            "  --verbose            Debug-level logging\n"
            "  --help               Show this text\n"
            "\n"
-           "Controls: Esc quit | F11 or Alt+Enter fullscreen | V toggle VSync | R reset window size\n"
-           "          Arrow keys move the triangle | mouse moves the sprite | buttons tint it | wheel scales it\n";
+           "Controls: WASD or arrows walk (Shift runs) | click: walk there | Q/E or wheel zoom | 0 reset zoom\n"
+           "          Space chime | N pause ambience | - and = volume | Tab pixel transition | F1 help\n"
+           "          Esc quit | F11 or Alt+Enter fullscreen | V toggle VSync | R reset window size\n";
 }
 
 schuimm::Result<DemoOptions> parseOptions(int argc, char** argv)
@@ -68,6 +71,14 @@ schuimm::Result<DemoOptions> parseOptions(int argc, char** argv)
                 return makeError(ErrorCode::InvalidArgument, "--vsync expects 'on' or 'off'");
             }
             options.vsync = *value == "on";
+        } else if (argument == "--assets") {
+            auto value = nextValue(argument);
+            if (!value) {
+                return std::unexpected(value.error());
+            }
+            options.assetRoot = std::string(*value);
+        } else if (argument == "--no-audio") {
+            options.audio = false;
         } else if (argument == "--fullscreen") {
             options.fullscreen = true;
         } else if (argument == "--self-test") {

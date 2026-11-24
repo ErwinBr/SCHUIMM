@@ -165,12 +165,18 @@ void Application::updateSuspension()
     if (shouldSuspend && state_ == LifecycleState::Running) {
         state_ = LifecycleState::Suspended;
         services_.logger.info("Application", "Suspended");
+        if (services_.audio != nullptr) {
+            services_.audio->pauseAll();
+        }
         listener_.onSuspend(*this);
     } else if (!shouldSuspend && state_ == LifecycleState::Suspended) {
         state_ = LifecycleState::Running;
         // The time spent suspended must not show up as one huge frame delta.
         clock_.resetDelta();
         services_.logger.info("Application", "Resumed");
+        if (services_.audio != nullptr) {
+            services_.audio->resumeAll();
+        }
         listener_.onResume(*this);
     }
 }
@@ -191,6 +197,9 @@ void Application::updateAndRender()
         listener_.onRender(*this, graphics.renderer());
         graphics.endFrame();
         graphics.present();
+    }
+    if (services_.audio != nullptr) {
+        services_.audio->update();
     }
     ++frameIndex_;
 }

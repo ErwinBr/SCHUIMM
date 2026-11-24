@@ -1,7 +1,9 @@
 add_library(schuimm_core STATIC
+    Audio/SoundData.cpp
     Common/Assert.cpp
     Common/Error.cpp
     Common/StringBuilder.cpp
+    Text/Utf8.cpp
     Image/Image.cpp
     Input/InputState.cpp
     Input/InputTypes.cpp

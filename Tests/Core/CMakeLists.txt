@@ -7,6 +7,8 @@ schuimm_add_test(CoreTests
         InputStateTests.cpp
         LoggerTests.cpp
         PresentationTests.cpp
+        Transform2DTests.cpp
+        Utf8Tests.cpp
     LIBRARIES Schuimm::Application
     LABELS unit)
 target_compile_definitions(CoreTests PRIVATE SCHUIMM_TEST_OUTPUT_DIR="${CMAKE_CURRENT_BINARY_DIR}")

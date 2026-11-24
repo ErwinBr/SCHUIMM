@@ -3,14 +3,25 @@
 ## Composition (EngineDemo/main.cpp)
 
 ```text
-Logger  →  Platform (createNativePlatform)  →  Window  →  OpenGLSurface
-        →  GraphicsDevice (takes the surface)  →  ApplicationListener (game)  →  Application
-run()
-teardown in reverse order: Application, listener, GraphicsDevice(+surface), Window, Platform
+Logger  →  AssetLocator (explicit root, or next to the executable)
+        →  Platform (createNativePlatform)  →  Window  →  OpenGLSurface
+        →  GraphicsDevice (takes the surface)  →  AudioDevice (optional)
+        →  ApplicationListener (game)  →  Application
+run():  onInitialize loads the scene (caches, textures, fonts, render targets, sounds)
+        onShutdown releases them while the devices are still alive
+teardown in reverse order: Application, listener, AudioDevice, GraphicsDevice(+surface), Window, Platform
 ```
 
 Each creation step returns a `Result`; failures are logged with their reason and the program
-exits with code 1.
+exits with code 1. Audio is the exception: if no output device can be opened, the demo logs a
+warning and runs without sound.
+
+Order constraints:
+* Every texture, render target, font and texture cache must be destroyed before the
+  `GraphicsDevice`. The renderer counts them and verifies this.
+* The `AudioDevice` must be destroyed before the platform. Its destructor stops the audio thread
+  first. Sounds hold no reference to the device and may be released before or after it.
+* The `AssetLocator` must outlive every resource cache that uses it.
 
 ## States
 
@@ -53,8 +64,12 @@ if (running) {
         graphics.endFrame();
         graphics.present();       // swap; blocks for vblank when VSync is on
     }
+    if (audio) audio->update();   // release sounds of finished playbacks
 }
 ```
+
+While suspended, the audio output is paused as well (`AudioDevice::pauseAll()`) and resumed
+with the application.
 
 On macOS each iteration runs inside an autorelease pool that `pollEvents()`/`waitEvents()`
 drains and renews (see [Platform.md](Platform.md#macos-cocoa--nsopenglcontext-sourceplatformmacos)),
@@ -81,7 +96,8 @@ live-resize callback from inside that loop (Windows on `WM_SIZE` and a timer, ma
 update and render step. The callback is only honoured while `pollEvents()` is executing and never
 re-entrantly, which the unit tests verify. X11 has no such loop.
 
-## OpenGL and threads
+## Threads
 
-Everything runs on the main thread. The context is made current when created and before the
-device is destroyed; no other thread touches it.
+Everything runs on the main thread, except the audio backend's real-time thread, which only
+mixes (see [Audio.md](Audio.md#threading-model)). The OpenGL context is made current when created
+and before the device is destroyed; no other thread touches it.

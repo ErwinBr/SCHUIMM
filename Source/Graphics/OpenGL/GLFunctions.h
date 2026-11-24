@@ -66,7 +66,9 @@ inline constexpr GLenum TEXTURE_MIN_FILTER = 0x2801;
 inline constexpr GLenum TEXTURE_WRAP_S = 0x2802;
 inline constexpr GLenum TEXTURE_WRAP_T = 0x2803;
 inline constexpr GLenum RGBA8 = 0x8058;
+inline constexpr GLenum REPEAT = 0x2901;
 inline constexpr GLenum CLAMP_TO_EDGE = 0x812F;
+inline constexpr GLenum MIRRORED_REPEAT = 0x8370;
 inline constexpr GLenum MAJOR_VERSION = 0x821B;
 inline constexpr GLenum MINOR_VERSION = 0x821C;
 inline constexpr GLenum NUM_EXTENSIONS = 0x821D;
@@ -74,6 +76,7 @@ inline constexpr GLenum CONTEXT_FLAGS = 0x821E;
 inline constexpr GLenum TEXTURE0 = 0x84C0;
 inline constexpr GLenum ARRAY_BUFFER = 0x8892;
 inline constexpr GLenum ELEMENT_ARRAY_BUFFER = 0x8893;
+inline constexpr GLenum MAX_TEXTURE_IMAGE_UNITS = 0x8872;
 inline constexpr GLenum STREAM_DRAW = 0x88E0;
 inline constexpr GLenum STATIC_DRAW = 0x88E4;
 inline constexpr GLenum DYNAMIC_DRAW = 0x88E8;
@@ -142,9 +145,12 @@ inline constexpr GLint CONTEXT_CORE_PROFILE_BIT = 0x00000001;
     X(void, ReadPixels, (GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels)) \
     X(void, ShaderSource, (GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length)) \
     X(void, TexImage2D, (GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void* pixels)) \
+    X(void, TexSubImage2D, (GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels)) \
     X(void, TexParameteri, (GLenum target, GLenum pname, GLint param))                              \
     X(void, Uniform1i, (GLint location, GLint v0))                                                  \
+    X(void, Uniform1iv, (GLint location, GLsizei count, const GLint* value))                        \
     X(void, Uniform2f, (GLint location, GLfloat v0, GLfloat v1))                                    \
+    X(void, Uniform4f, (GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3))            \
     X(void, UseProgram, (GLuint program))                                                           \
     X(void, VertexAttribPointer, (GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void* pointer)) \
     X(void, Viewport, (GLint x, GLint y, GLsizei width, GLsizei height))

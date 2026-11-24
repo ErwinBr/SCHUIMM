@@ -1,8 +1,9 @@
-// EngineDemo: composition root and manual integration test for the native foundation.
+// EngineDemo: composition root and interactive demonstration of the engine.
 //
 // This is the only place where concrete backends are chosen and wired together; everything
-// else talks to interfaces (Platform, Window, GraphicsDevice, Renderer2D).
+// else talks to interfaces (Platform, Window, GraphicsDevice, Renderer2D, AudioDevice).
 
+#include "Audio/Miniaudio/MiniaudioAudioDevice.h"
 #include "Core/Application/Application.h"
 #include "Core/Common/StringBuilder.h"
 #include "Core/Logging/Logger.h"
@@ -10,7 +11,9 @@
 #include "DemoListener.h"
 #include "DemoOptions.h"
 #include "Graphics/OpenGL/OpenGLGraphicsDevice.h"
+#include "Platform/FileSystem/FileSystem.h"
 #include "Platform/NativePlatform.h"
+#include "Resource/AssetLocator.h"
 
 #include <cstdio>
 
@@ -48,6 +51,24 @@ int main(int argc, char** argv)
     }
     logger.info("Demo", "SCHUIMM EngineDemo starting");
 
+    // Assets: an explicit root, or the packaged location next to the executable (inside the
+    // bundle on macOS). Never the current working directory.
+    auto assets = [&]() -> Result<AssetLocator> {
+        if (!options->assetRoot.empty()) {
+            return AssetLocator::create(options->assetRoot);
+        }
+        auto executable = fs::executablePath();
+        if (!executable) {
+            return std::unexpected(executable.error());
+        }
+        return locateAssetRoot(defaultAssetRootCandidates(*executable));
+    }();
+    if (!assets) {
+        logger.error("Demo", concat("Assets not found: ", describe(assets.error())));
+        return 1;
+    }
+    logger.info("Demo", concat("Asset root: ", assets->root()));
+
     auto platform = createNativePlatform(logger);
     if (!platform) {
         logger.error("Demo", concat("Platform initialisation failed: ", describe(platform.error())));
@@ -81,10 +102,20 @@ int main(int argc, char** argv)
         return 1;
     }
 
+    // Audio is optional: without an output device the demo runs silently.
+    std::unique_ptr<AudioDevice> audio;
+    if (options->audio) {
+        if (auto device = createMiniaudioAudioDevice(AudioDeviceSettings{}, logger)) {
+            audio = std::move(*device);
+        } else {
+            logger.warning("Demo", concat("Audio unavailable, continuing without sound: ", describe(device.error())));
+        }
+    }
+
     int exitCode = 0;
     {
-        demo::DemoListener listener(*options);
-        Application application({logger, **platform, **window, **graphics}, listener);
+        demo::DemoListener listener(*options, *assets);
+        Application application({logger, **platform, **window, **graphics, audio.get()}, listener);
         if (auto status = application.run(); !status) {
             logger.error("Demo", concat("Application failed: ", describe(status.error())));
             exitCode = 1;
@@ -93,7 +124,9 @@ int main(int argc, char** argv)
         }
     }
 
-    // Explicit, deterministic teardown in reverse order of creation.
+    // Explicit, deterministic teardown in reverse order of creation. The scene released its
+    // textures, fonts, render targets and sounds in onShutdown(), while the devices were alive.
+    audio.reset();
     graphics->reset();
     window->reset();
     platform->reset();

@@ -3,5 +3,7 @@
 
 # Shell scripts run under bash on every CI runner, including Windows: always LF.
 *.sh text eol=lf
-# Test assets are compared byte for byte.
+# Assets are binary (test assets are compared byte for byte).
 *.png binary
+*.wav binary
+*.ttf binary
