@@ -1,5 +1,6 @@
 #include "Audio/AudioDevice.h"
 
+#include "Core/Common/Assert.h"
 #include "Core/Common/StringBuilder.h"
 
 #include <algorithm>
@@ -98,15 +99,6 @@ Result<std::shared_ptr<const Sound>> AudioDevice::createSound(const SoundData& d
     return std::make_shared<const Sound>(sampleRate_, std::move(stereo));
 }
 
-void AudioDevice::post(const Mixer::Command& command)
-{
-    if (!mixer_->post(command)) {
-        // Only possible with more than Mixer::commandCapacity commands between two audio
-        // callbacks (about 10 ms).
-        logger_.warning(category, "Audio command queue full; command dropped");
-    }
-}
-
 AudioDevice::VoiceSlot* AudioDevice::slotFor(SoundInstance instance)
 {
     if (!instance.isValid() || instance.voice >= slots_.size()) {
@@ -138,32 +130,31 @@ SoundInstance AudioDevice::play(std::shared_ptr<const Sound> sound, PlaybackSett
     }
     const auto voice = static_cast<std::uint32_t>(free - slots_.begin());
     VoiceSlot& slot = *free;
-    slot.sound = std::move(sound);
-    slot.generation = nextGeneration_++;
-    if (nextGeneration_ == 0) {
-        nextGeneration_ = 1; // 0 means "nothing played yet"
+    // The mixer starts a playback when the voice's generation changes, so the new one must
+    // differ from the voice's previous one (only relevant when the counter wraps) and from 0,
+    // which means "nothing played yet".
+    std::uint32_t generation = nextGeneration_;
+    while (generation == 0 || generation == slot.generation) {
+        ++generation;
     }
+    nextGeneration_ = generation + 1;
+    SCHUIMM_ASSERT(mixer_->endedGeneration(static_cast<int>(voice)) == slot.generation,
+                   "a voice is reused only after the mixer has finished with it");
+
+    slot.sound = std::move(sound);
+    slot.generation = generation;
     slot.state = settings.startPaused ? PlaybackState::Paused : PlaybackState::Playing;
     slot.volume = sanitiseVolume(settings.volume);
     slot.inUse = true;
-
-    Mixer::Command command;
-    command.type = Mixer::CommandType::Play;
-    command.voice = static_cast<std::uint8_t>(voice);
-    command.generation = slot.generation;
-    command.sound = slot.sound.get();
-    command.volume = slot.volume;
-    command.loop = settings.loop;
-    command.paused = settings.startPaused;
-    post(command);
-    return {voice, slot.generation};
+    mixer_->start(static_cast<int>(voice), generation, slot.sound.get(), slot.volume, settings.loop, settings.startPaused);
+    return {voice, generation};
 }
 
 void AudioDevice::stop(SoundInstance instance)
 {
     if (VoiceSlot* slot = slotFor(instance)) {
         slot->state = PlaybackState::Stopped; // the sound is released once the mixer confirms
-        post({Mixer::CommandType::Stop, static_cast<std::uint8_t>(instance.voice), false, false, instance.generation, 0.0f, nullptr});
+        mixer_->setControl(static_cast<int>(instance.voice), Mixer::Control::Stopped);
     }
 }
 
@@ -171,7 +162,7 @@ void AudioDevice::pause(SoundInstance instance)
 {
     if (VoiceSlot* slot = slotFor(instance); slot != nullptr && slot->state == PlaybackState::Playing) {
         slot->state = PlaybackState::Paused;
-        post({Mixer::CommandType::Pause, static_cast<std::uint8_t>(instance.voice), false, false, instance.generation, 0.0f, nullptr});
+        mixer_->setControl(static_cast<int>(instance.voice), Mixer::Control::Paused);
     }
 }
 
@@ -179,7 +170,7 @@ void AudioDevice::resume(SoundInstance instance)
 {
     if (VoiceSlot* slot = slotFor(instance); slot != nullptr && slot->state == PlaybackState::Paused) {
         slot->state = PlaybackState::Playing;
-        post({Mixer::CommandType::Resume, static_cast<std::uint8_t>(instance.voice), false, false, instance.generation, 0.0f, nullptr});
+        mixer_->setControl(static_cast<int>(instance.voice), Mixer::Control::Playing);
     }
 }
 
@@ -187,8 +178,7 @@ void AudioDevice::setVolume(SoundInstance instance, float volume)
 {
     if (VoiceSlot* slot = slotFor(instance)) {
         slot->volume = sanitiseVolume(volume);
-        post({Mixer::CommandType::SetVolume, static_cast<std::uint8_t>(instance.voice), false, false, instance.generation,
-              slot->volume, nullptr});
+        mixer_->setVolume(static_cast<int>(instance.voice), slot->volume);
     }
 }
 
@@ -211,11 +201,7 @@ float AudioDevice::volume(SoundInstance instance) const
 void AudioDevice::setMasterVolume(float volume)
 {
     masterVolume_ = sanitiseVolume(volume);
-    Mixer::Command command;
-    command.type = Mixer::CommandType::SetMasterVolume;
-    command.voice = Mixer::voiceCount;
-    command.volume = masterVolume_;
-    post(command);
+    mixer_->setMasterVolume(masterVolume_);
 }
 
 void AudioDevice::stopAll()
@@ -227,24 +213,14 @@ void AudioDevice::stopAll()
 
 void AudioDevice::pauseAll()
 {
-    if (!pausedAll_) {
-        pausedAll_ = true;
-        Mixer::Command command;
-        command.type = Mixer::CommandType::PauseAll;
-        command.voice = Mixer::voiceCount;
-        post(command);
-    }
+    pausedAll_ = true;
+    mixer_->setAllPaused(true);
 }
 
 void AudioDevice::resumeAll()
 {
-    if (pausedAll_) {
-        pausedAll_ = false;
-        Mixer::Command command;
-        command.type = Mixer::CommandType::ResumeAll;
-        command.voice = Mixer::voiceCount;
-        post(command);
-    }
+    pausedAll_ = false;
+    mixer_->setAllPaused(false);
 }
 
 void AudioDevice::update()

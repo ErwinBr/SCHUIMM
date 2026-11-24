@@ -78,3 +78,41 @@ SCHUIMM_TEST(NullBackend_PlaysSoundsToCompletionOnTheAudioThread)
         return sound.use_count() == 1;
     }, 5.0));
 }
+
+SCHUIMM_TEST(NullBackend_ControlStormWhileTheAudioThreadRuns)
+{
+    // Main-thread playback control as fast as possible while the real audio thread mixes:
+    // exercises the publish/reuse protocol across threads (run under ThreadSanitizer too).
+    Logger logger(LogLevel::Error);
+    auto device = createNullDevice(logger);
+    REQUIRE(device != nullptr);
+    const int rate = device->sampleRate();
+    auto blip = device->createSound(SoundData::create(1, rate, std::vector<float>(64, 0.01f)).value()).value();
+    auto loop = device->createSound(SoundData::create(1, rate, std::vector<float>(256, 0.01f)).value()).value();
+
+    int played = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
+    for (std::uint32_t i = 0; std::chrono::steady_clock::now() < deadline; ++i) {
+        const bool looping = (i % 3) == 0;
+        const SoundInstance instance = device->play(looping ? loop : blip, {0.5f, looping});
+        if (instance.isValid()) {
+            ++played;
+            device->setVolume(instance, static_cast<float>(i % 10) / 10.0f);
+            if ((i % 2) == 0) {
+                device->pause(instance);
+                device->resume(instance);
+            }
+            if (looping || (i % 5) == 0) {
+                device->stop(instance);
+            }
+        }
+        device->setMasterVolume((i % 2) == 0 ? 0.5f : 1.0f);
+        device->update();
+    }
+    CHECK(played > 100);
+    // Every playback ends (stopped or finished) and every sound is released.
+    CHECK(waitFor([&] {
+        device->update();
+        return device->activeVoiceCount() == 0 && blip.use_count() == 1 && loop.use_count() == 1;
+    }, 5.0));
+}

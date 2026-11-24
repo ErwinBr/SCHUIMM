@@ -59,7 +59,8 @@ struct SoundInstance {
 // Threading: every member function must be called from one thread (the main thread). Mixing
 // runs on the backend's audio thread, which only executes Mixer::mix(); see Mixer for how the
 // two communicate without locks. Nothing here blocks on the audio thread, so playback control
-// never stalls the main loop.
+// never stalls the main loop, and no control call can be lost: each one sets state that the
+// next audio period applies. state() and volume() report that state.
 //
 // Ownership: sounds are shared (std::shared_ptr<const Sound>). A playing voice keeps its sound
 // alive; it is released by update() on the main thread once the audio thread has finished with
@@ -120,7 +121,6 @@ private:
     static void render(void* user, float* out, std::uint32_t frames);
     VoiceSlot* slotFor(SoundInstance instance);
     [[nodiscard]] const VoiceSlot* slotFor(SoundInstance instance) const;
-    void post(const Mixer::Command& command);
 
     std::unique_ptr<AudioBackend> backend_;
     Logger& logger_;

@@ -55,8 +55,12 @@ Deliberate scope limits (as of Milestone 2) and known platform caveats.
 * The output device is chosen once (the system default). Device changes (headphones plugged in)
   are handled by the OS or miniaudio's default-device routing, not by the engine; a device that
   disappears is not re-opened.
-* The command queue to the audio thread holds 1024 commands; if more are issued within one audio
-  period (about 10 ms) the extras are dropped with a warning.
+* Playback control is state, applied once per audio period (about 10 ms): a pause and resume
+  within the same period cancel out, and only the last volume set in a period is ramped to.
+  Nothing is lost, but changes faster than one period are not individually audible.
+* WAV files must be strictly consistent (see [Audio.md](Audio.md#formats)): a trailing partial
+  frame, an unknown extensible sub-format or inconsistent valid bits make the whole file fail
+  instead of being repaired.
 
 ## Resources and assets
 

@@ -5,6 +5,7 @@ schuimm_add_test(GraphicsTests
         CameraTests.cpp
         SpriteBatcherTests.cpp
         TextTests.cpp
+        TextureValidationTests.cpp
         TextureCacheTests.cpp
     LIBRARIES Schuimm::GraphicsResources
     LABELS unit)

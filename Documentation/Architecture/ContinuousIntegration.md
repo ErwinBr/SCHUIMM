@@ -18,12 +18,15 @@ Each job:
 1. configures with the platform's configure preset;
 2. builds with `<preset>-<config>`, which compiles the engine, EngineDemo and all tests with
    warnings as errors;
-3. runs the unit tests, then the integration tests (Linux) or a summary step stating why they
-   cannot run on that runner (Windows, macOS);
-4. runs the audio tests: on Linux against a PulseAudio null sink, on Windows and macOS as an
+3. runs the unit tests;
+4. on Linux, starts a PulseAudio null sink, then runs the integration tests, so the EngineDemo
+   smoke test runs with audio too; on Windows and macOS a summary step states why the
+   integration tests cannot run on that runner;
+5. runs the audio tests: on Linux against the PulseAudio null sink, on Windows and macOS as an
    informational probe (see below).
 
-The only actions used are GitHub's own `actions/checkout` and `actions/upload-artifact`.
+The only actions used are GitHub's own `actions/checkout` and `actions/upload-artifact`, both at
+v7 (Node.js 24).
 
 ## Tests
 
@@ -47,7 +50,9 @@ null sink, which the audio stack treats as a real output device, so `AudioDevice
 through miniaudio's PulseAudio backend and must pass. Hosted Windows and macOS runners do not
 guarantee any output device. There the audio tests run with `continue-on-error`, and a following
 step writes their outcome (passed: a device was found; failed: none) into the job summary,
-stating that it does not affect the job. The mixer, the playback logic and the real miniaudio
+stating that it does not affect the job. On the first Milestone 2 run (November 2026) the
+`macos-15` runners had a virtual output device ("Apple Virtual Sound Device", 48 kHz) and the
+probe passed; the `windows-2022` runners had none (WASAPI could not open a device). The mixer, the playback logic and the real miniaudio
 device code (on its null backend) are part of the `unit` tests and therefore must pass on every
 job.
 

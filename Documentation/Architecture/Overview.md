@@ -147,8 +147,8 @@ every OpenGL call happen there, and the main thread also owns the GL context (ma
 at creation and again before teardown).
 
 The exception is audio. The audio backend runs its own real-time thread, which only executes
-the mixer. It communicates with the main thread through a lock-free command queue and atomics,
-never through locks (see [Audio.md](Audio.md#threading-model)). `Logger` is thread-safe.
+the mixer. It communicates with the main thread through fixed per-voice atomic state (no queue
+that could overflow), never through locks (see [Audio.md](Audio.md#threading-model)). `Logger` is thread-safe.
 
 ## Portability constraints worth knowing
 

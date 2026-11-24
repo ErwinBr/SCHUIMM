@@ -40,6 +40,15 @@ the physical window size.
   stride. Only `PixelFormat::RGBA8` exists. Errors (`InvalidArgument`) are reported for an
   empty size, a size above `GraphicsCapabilities::maxTextureSize`, a row stride smaller than a
   row, too little data, or a static texture without data.
+* **Validation.** Renderer backends check caller-supplied layouts with the shared,
+  overflow-safe `validatePixelLayout(size, byteCount, rowStride)` and
+  `validateRegion(size, region)` (`Graphics/Interface/Texture.h`) before reading any pixels.
+  The required byte count `stride * (height - 1) + width * 4` is computed with `checkedMul` /
+  `checkedAdd` (`Core/Common/CheckedMath.h`), so a huge stride is reported as `InvalidArgument`
+  ("row stride too large") instead of wrapping and passing a too-small buffer. Regions are
+  checked with subtraction only (`width <= size.width - x`), so `INT_MAX` sizes cannot overflow.
+  After validation, `stride * y` for every row is known to stay inside the data. The test
+  `FakeRenderer` uses the same validators.
 * **Sampling per texture.** `TextureSettings{filter, wrapU, wrapV}`: `Nearest` (pixel art) or
   `Linear` (smooth scaling); `ClampToEdge`, `Repeat` or `MirroredRepeat`. There is no global
   filtering mode. Textures have no mipmaps.

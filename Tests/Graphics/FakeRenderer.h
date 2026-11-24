@@ -93,6 +93,11 @@ public:
         if (description.size.isEmpty() || description.size.width > maxTextureSize || description.size.height > maxTextureSize) {
             return makeError(ErrorCode::InvalidArgument, "invalid texture size");
         }
+        if (!description.pixels.empty()) {
+            if (auto status = validatePixelLayout(description.size, description.pixels.size(), description.rowStride); !status) {
+                return std::unexpected(status.error());
+            }
+        }
         ++texturesCreated;
         return std::unique_ptr<Texture>(std::make_unique<FakeTexture>(description, liveTextures));
     }
@@ -105,9 +110,11 @@ public:
             return makeError(ErrorCode::InvalidState, "only dynamic textures can be updated");
         }
         const Extent2D size = fake.size();
-        if (region.x < 0 || region.y < 0 || region.width <= 0 || region.height <= 0 || region.x + region.width > size.width ||
-            region.y + region.height > size.height) {
-            return makeError(ErrorCode::InvalidArgument, "region outside texture");
+        if (auto status = validateRegion(size, region); !status) {
+            return status;
+        }
+        if (auto status = validatePixelLayout({region.width, region.height}, pixels.size(), rowStride); !status) {
+            return status;
         }
         const std::size_t rowBytes = static_cast<std::size_t>(region.width) * 4;
         const std::size_t stride = rowStride == 0 ? rowBytes : rowStride;

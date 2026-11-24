@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Core/Common/Error.h"
 #include "Core/Common/Geometry.h"
 #include "Core/Image/Image.h"
 
@@ -67,6 +68,16 @@ struct TextureRegion {
     int height = 0;
     friend constexpr bool operator==(const TextureRegion&, const TextureRegion&) noexcept = default;
 };
+
+// Validation shared by every Renderer2D backend. Both are overflow-safe for any input.
+//
+// validatePixelLayout: `byteCount` bytes of RGBA8 rows for a `size` image, `rowStride` bytes
+// apart (0 means tightly packed), must cover stride * (height - 1) + width * 4 bytes. Once it
+// succeeds, stride * y + width * 4 for every row y < height fits in std::size_t and in the data.
+// validateRegion: `region` must be non-empty and lie inside a texture of `size`.
+// Both return InvalidArgument on failure.
+[[nodiscard]] Status validatePixelLayout(Extent2D size, std::size_t byteCount, std::size_t rowStride);
+[[nodiscard]] Status validateRegion(Extent2D size, TextureRegion region);
 
 // A GPU texture. Created by a Renderer2D, owned through std::unique_ptr or std::shared_ptr
 // (RAII) and destroyed before the GraphicsDevice that created it. The backend object (e.g. an

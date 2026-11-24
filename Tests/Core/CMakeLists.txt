@@ -1,6 +1,7 @@
 schuimm_add_test(CoreTests
     SOURCES
         ApplicationTests.cpp
+        CheckedMathTests.cpp
         ClockTests.cpp
         CommonTests.cpp
         ImageTests.cpp

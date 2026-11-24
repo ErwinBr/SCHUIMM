@@ -11,8 +11,10 @@
 #include "TestFramework.h"
 
 #include <array>
+#include <climits>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <memory>
 
 using namespace schuimm;
@@ -384,6 +386,53 @@ SCHUIMM_TEST(Rendering_DynamicTextureUpdate)
     checkPixel(frame, 0, 0, {0, 0, 255});
     checkPixel(frame, 1, 0, {255, 255, 255});
     checkPixel(frame, 1, 1, {0, 0, 255});
+}
+
+// Caller-supplied strides and regions that overflow size_t or int arithmetic are rejected
+// before any pixel data is read, and the renderer keeps working afterwards.
+SCHUIMM_TEST(Rendering_OverflowingStrideAndRegionAreRejected)
+{
+    Context ctx;
+    REQUIRE(ctx.create());
+    const std::uint8_t red[16] = {255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255};
+
+    TextureDescription description;
+    description.size = {2, 2};
+    description.pixels = red;
+    for (const std::size_t stride : {std::numeric_limits<std::size_t>::max(), std::numeric_limits<std::size_t>::max() / 2 + 1}) {
+        description.rowStride = stride;
+        auto texture = ctx.renderer().createTexture(description);
+        REQUIRE(!texture.has_value());
+        CHECK(texture.error().code == ErrorCode::InvalidArgument);
+    }
+    CHECK_EQ(ctx.device->liveResources().textures, 0);
+
+    auto dynamic = makeTexture(ctx.renderer(), {2, 2}, {}, {}, TextureUsage::Dynamic);
+    REQUIRE(dynamic != nullptr);
+    const auto hugeStride =
+        ctx.renderer().updateTexture(*dynamic, {0, 0, 1, 2}, red, std::numeric_limits<std::size_t>::max());
+    REQUIRE(!hugeStride.has_value());
+    CHECK(hugeStride.error().code == ErrorCode::InvalidArgument);
+    for (const TextureRegion region : {TextureRegion{1, 0, INT_MAX, 1}, TextureRegion{0, 1, 1, INT_MAX},
+                                       TextureRegion{INT_MAX, INT_MAX, INT_MAX, INT_MAX}}) {
+        const auto status = ctx.renderer().updateTexture(*dynamic, region, red);
+        REQUIRE(!status.has_value());
+        CHECK(status.error().code == ErrorCode::InvalidArgument);
+    }
+    // A valid update and a draw still work.
+    REQUIRE(ctx.renderer().updateTexture(*dynamic, {1, 1, 1, 1}, red).has_value());
+    auto green = solid(ctx.renderer(), 0, 255, 0);
+    REQUIRE(green != nullptr);
+
+    const Image frame = ctx.renderFrame([&](Renderer2D& r) {
+        r.clear({0, 0, 1, 1});
+        r.drawTexture(*dynamic, {0, 0, 2, 2});
+        r.drawTexture(*green, {4, 0, 1, 1});
+    });
+    REQUIRE(!frame.isEmpty());
+    checkPixel(frame, 0, 0, {0, 0, 255});
+    checkPixel(frame, 1, 1, {255, 0, 0});
+    checkPixel(frame, 4, 0, {0, 255, 0});
 }
 
 SCHUIMM_TEST(Rendering_ResourceCountsReturnToZero)

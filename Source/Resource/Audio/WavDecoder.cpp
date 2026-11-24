@@ -2,6 +2,7 @@
 
 #include "Core/Common/StringBuilder.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -14,6 +15,12 @@ namespace {
 constexpr std::uint16_t formatPcm = 0x0001;
 constexpr std::uint16_t formatFloat = 0x0003;
 constexpr std::uint16_t formatExtensible = 0xFFFE;
+
+// WAVE_FORMAT_EXTENSIBLE sub-format GUIDs {0000000X-0000-0010-8000-00AA00389B71}, as stored in
+// the file (little-endian fields): X is the format tag, followed by these 14 bytes.
+constexpr std::uint8_t subFormatTail[14] = {0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80,
+                                            0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71};
+constexpr std::uint16_t minimumExtensionSize = 22; // cbSize of WAVE_FORMAT_EXTENSIBLE
 
 // Reads little-endian values from a byte range with bounds checking.
 class Reader {
@@ -49,6 +56,13 @@ public:
         return text;
     }
     void skip(std::size_t bytes) { offset_ += std::min(bytes, remaining()); }
+    std::span<const std::byte> bytes(std::size_t count)
+    {
+        const std::size_t available = std::min(count, remaining());
+        const auto result = data_.subspan(offset_, available);
+        offset_ += available;
+        return result;
+    }
 
 private:
     std::optional<std::uint32_t> read(std::size_t bytes)
@@ -72,9 +86,30 @@ struct Format {
     std::uint16_t encoding = 0; // formatPcm or formatFloat after resolving EXTENSIBLE
     int channels = 0;
     int sampleRate = 0;
-    int bitsPerSample = 0;
+    int bitsPerSample = 0; // container size
     int blockAlign = 0;
 };
+
+std::string hexBytes(std::span<const std::byte> bytes)
+{
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string text;
+    for (const std::byte b : bytes) {
+        const auto value = std::to_integer<unsigned>(b);
+        text += digits[value >> 4];
+        text += digits[value & 0xF];
+    }
+    return text;
+}
+
+int bitCount(std::uint32_t value)
+{
+    int count = 0;
+    for (; value != 0; value &= value - 1) {
+        ++count;
+    }
+    return count;
+}
 
 float sampleAt(const std::byte* p, const Format& format)
 {
@@ -132,6 +167,9 @@ Result<SoundData> decodeWav(std::span<const std::byte> data, std::string_view so
             return fail(concat("truncated '", id, "' chunk"));
         }
         if (id == "fmt ") {
+            if (format) {
+                return fail("duplicate format chunk");
+            }
             if (size < 16) {
                 return fail("format chunk too small");
             }
@@ -146,10 +184,35 @@ Result<SoundData> decodeWav(std::span<const std::byte> data, std::string_view so
                 if (size < 40) {
                     return fail("extensible format chunk too small");
                 }
-                (void)reader.u16(); // cbSize
-                (void)reader.u16(); // valid bits per sample
-                (void)reader.u32(); // channel mask
-                f.encoding = *reader.u16(); // first two bytes of the sub-format GUID
+                const std::uint16_t extensionSize = *reader.u16();
+                const int validBits = *reader.u16();
+                const std::uint32_t channelMask = *reader.u32();
+                const std::span<const std::byte> guid = reader.bytes(16);
+                if (extensionSize < minimumExtensionSize) {
+                    return fail(concat("extensible format extension too small (", extensionSize, " bytes)"));
+                }
+                // The sub-format must be one of the two known GUIDs, compared in full.
+                const auto tag = static_cast<std::uint16_t>(std::to_integer<unsigned>(guid[0]) |
+                                                            (std::to_integer<unsigned>(guid[1]) << 8));
+                const bool knownGuid = (tag == formatPcm || tag == formatFloat) &&
+                                       std::memcmp(guid.data() + 2, subFormatTail, sizeof(subFormatTail)) == 0;
+                if (!knownGuid) {
+                    return fail(concat("unsupported sub-format {", hexBytes(guid), "} (only PCM and IEEE float)"));
+                }
+                f.encoding = tag;
+                // Valid bits are stored left-aligned in the container (the padding bits are
+                // the low ones), so decoding at the container size gives the right values.
+                const bool validBitsOk = tag == formatFloat ? validBits == 32
+                                                            : (validBits >= 1 && validBits <= f.bitsPerSample);
+                if (!validBitsOk) {
+                    return fail(concat("inconsistent valid bits per sample (", validBits, " in a ", f.bitsPerSample,
+                                       "-bit container)"));
+                }
+                // Fewer assigned speakers than channels is allowed; more is not.
+                if (bitCount(channelMask) > f.channels) {
+                    return fail(concat("channel mask 0x", std::hex, channelMask, std::dec, " assigns more speakers than the ",
+                                       f.channels, " channels"));
+                }
             }
             format = f;
         } else if (id == "data") {
@@ -187,7 +250,15 @@ Result<SoundData> decodeWav(std::span<const std::byte> data, std::string_view so
         return fail(concat("unsupported sample rate ", f.sampleRate, " Hz"));
     }
 
-    const std::size_t frames = sampleBytes.size() / static_cast<std::size_t>(f.blockAlign);
+    const auto blockAlign = static_cast<std::size_t>(f.blockAlign);
+    if (sampleBytes.size() % blockAlign != 0) {
+        return fail(concat("data chunk is not a whole number of frames (", sampleBytes.size(), " bytes, ", blockAlign,
+                           " per frame)"));
+    }
+    const std::size_t frames = sampleBytes.size() / blockAlign;
+    if (frames == 0) {
+        return fail("no audio frames");
+    }
     std::vector<float> samples(frames * static_cast<std::size_t>(f.channels));
     for (std::size_t i = 0; i < samples.size(); ++i) {
         samples[i] = sampleAt(sampleBytes.data() + i * static_cast<std::size_t>(bytesPerSample), f);

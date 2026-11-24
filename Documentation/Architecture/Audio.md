@@ -44,12 +44,24 @@ for another API; the mixer and the API above it stay.
 `decodeWav` supports RIFF/WAVE files with:
 * uncompressed PCM: 8-bit unsigned, or 16-, 24- or 32-bit signed integer;
 * 32-bit IEEE float;
-* `WAVE_FORMAT_EXTENSIBLE` when its sub-format is PCM or float;
+* `WAVE_FORMAT_EXTENSIBLE` when its sub-format GUID is exactly `KSDATAFORMAT_SUBTYPE_PCM` or
+  `KSDATAFORMAT_SUBTYPE_IEEE_FLOAT` (all 16 bytes are compared);
 * mono or stereo at 1–384 kHz.
 
-Unknown chunks are skipped. Compressed codecs (ADPCM, µ-law, MP3-in-WAV, ...), more than two
-channels and truncated or inconsistent files fail with `InvalidData`. The message names the
-file and the reason.
+The decoder is strict about what it accepts. Each of these fails with `InvalidData`, and the
+message names the file and the reason:
+* compressed codecs (ADPCM, µ-law, MP3-in-WAV, ...) and unknown sub-format GUIDs;
+* more than two channels, or a block alignment that does not match channels × sample size;
+* in `WAVE_FORMAT_EXTENSIBLE`:
+  * an extension shorter than 22 bytes;
+  * valid bits per sample outside 1..container size (float: exactly 32);
+  * a channel mask that assigns more speakers than there are channels (fewer is allowed);
+* a data chunk that is not a whole number of frames, or holds no frames;
+* a second `fmt ` chunk before the data, and truncated chunks.
+
+Fewer valid bits than the container (20 bits in 24, 24 in 32) are supported. The format stores
+them left-aligned with the padding bits low, so decoding at the container size gives the
+correct values. Unknown chunks are skipped.
 
 No other formats (Ogg Vorbis, FLAC, MP3) yet; see [KnownLimitations.md](KnownLimitations.md).
 A decoder would be added next to `WavDecoder` and produce `SoundData`.
@@ -90,15 +102,32 @@ Two threads touch audio:
 * **Audio thread** (miniaudio's): calls `Mixer::mix()` once per period (about 10 ms requested)
   and nothing else.
 
-They communicate without locks:
+They communicate without locks, through fixed state that cannot overflow:
 
-* **Main → audio:** commands (play, stop, pause, resume, volume, master volume, pause all) go
-  through a fixed-capacity (1024) single-producer/single-consumer ring buffer of atomics
-  (`SpscQueue`). `mix()` applies all queued commands at the start of each period. The queue never
-  allocates. If it is full, the command is dropped and a warning logged; that takes more than
-  1024 commands within one audio period.
+* **Main → audio:** per voice, atomics for the playback's generation, sound, loop flag, desired
+  state (playing, paused or stopped) and volume; plus the master volume and "all paused".
+  Controls are *state*, not events: `mix()` reads the latest values once per period, and a newer
+  value simply supersedes an older one. No control call can be dropped, so `state()` and
+  `volume()` always report what the next period applies.
 * **Audio → main:** per voice, an atomic "ended generation" is written when a playback finishes or
   has been stopped.
+
+A new playback is published by writing its sound, loop flag, volume and state, and then its
+generation (release). `mix()` reads the generation (acquire) and starts a playback whenever it
+differs from the one it last started on that voice. Play requests are therefore never lost or
+merged:
+* Every `play()` takes a different free voice. Several plays in one frame use several voices
+  and all start in the same period.
+* A voice is free again only after its ended generation equals its last generation. `mix()`
+  writes that only after it has started and finished that playback, so a published playback can
+  never be overwritten before the audio thread has seen it.
+* A new generation always differs from the voice's previous one, also when the 32-bit counter
+  wraps (checked by an assertion).
+* A play followed by a stop before the next period is registered and ended at once, so its voice
+  is freed by `update()` and nothing of it is heard.
+
+The only refusal is reported: when all 32 voices are busy, `play()` returns an invalid
+instance.
 
 `mix()` therefore never blocks, allocates, frees memory or performs I/O. Voices refer to their
 sound through a raw pointer. The owning `std::shared_ptr` stays in the main thread's voice

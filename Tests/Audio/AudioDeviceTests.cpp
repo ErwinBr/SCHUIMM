@@ -5,6 +5,7 @@
 #include "Core/Logging/Logger.h"
 #include "TestFramework.h"
 
+#include <cmath>
 #include <vector>
 
 using namespace schuimm;
@@ -236,6 +237,168 @@ SCHUIMM_TEST(AudioDevice_VoicePoolExhaustionAndReuse)
     // A new playback on a reused voice gets a new generation: the old handle stays stale.
     CHECK(f.device->state(instances[reused.voice]) == PlaybackState::Stopped);
     CHECK(f.device->state(reused) == PlaybackState::Playing);
+}
+
+// --- Control state is never lost (no command queue that could fill up) ------------------------
+
+SCHUIMM_TEST(AudioDevice_ManyControlCallsBetweenMixesKeepTheLastValue)
+{
+    Fixture f;
+    auto sound = f.constant(0.5f, 100);
+    const SoundInstance instance = f.device->play(sound, {1.0f, true});
+    (void)f.backend->render(2);
+    // Far more calls than any queue would hold, all within one audio period.
+    for (int i = 0; i < 10000; ++i) {
+        f.device->setVolume(instance, (i % 2) == 0 ? 0.2f : 0.4f);
+        f.device->pause(instance);
+        f.device->resume(instance);
+        f.device->setMasterVolume((i % 2) == 0 ? 0.1f : 0.9f);
+    }
+    f.device->setVolume(instance, 0.25f);
+    f.device->setMasterVolume(1.0f);
+    CHECK(f.device->state(instance) == PlaybackState::Playing);
+    CHECK_EQ(f.device->volume(instance), 0.25f);
+    (void)f.backend->render(4); // volume ramps to the new value over this buffer
+    CHECK_NEAR(f.backend->firstSample(4), 0.5 * 0.25, 1e-6);
+
+    for (int i = 0; i < 10000; ++i) {
+        f.device->pause(instance);
+        f.device->resume(instance);
+    }
+    f.device->stop(instance); // the last call wins
+    CHECK_EQ(f.backend->firstSample(4), 0.0f);
+    f.device->update();
+    CHECK_EQ(f.device->activeVoiceCount(), 0);
+    CHECK_EQ(sound.use_count(), 1);
+}
+
+SCHUIMM_TEST(AudioDevice_PlayThenStopBeforeAnyMixFreesTheVoice)
+{
+    Fixture f;
+    auto sound = f.constant(0.5f, 100);
+    const SoundInstance instance = f.device->play(sound, {1.0f, true});
+    f.device->stop(instance);
+    CHECK(f.device->state(instance) == PlaybackState::Stopped);
+    CHECK_EQ(f.backend->firstSample(4), 0.0f); // never heard
+    f.device->update();
+    CHECK_EQ(f.device->activeVoiceCount(), 0);
+    CHECK_EQ(sound.use_count(), 1);
+}
+
+SCHUIMM_TEST(AudioDevice_RepeatedPlayAndStopOfAllVoicesNeverLeaks)
+{
+    Fixture f;
+    auto sound = f.constant(0.01f, 1000);
+    for (int round = 0; round < 1000; ++round) {
+        std::vector<SoundInstance> instances;
+        for (int i = 0; i < Mixer::voiceCount; ++i) {
+            instances.push_back(f.device->play(sound, {1.0f, true}));
+            REQUIRE(instances.back().isValid());
+        }
+        for (const SoundInstance& instance : instances) {
+            f.device->stop(instance);
+        }
+        (void)f.backend->render(1);
+        f.device->update();
+        REQUIRE(f.device->activeVoiceCount() == 0);
+    }
+    CHECK_EQ(sound.use_count(), 1);
+}
+
+// --- Every play request is preserved ---------------------------------------------------------
+
+SCHUIMM_TEST(AudioDevice_AllPlaysWithinOneFrameAreHeard)
+{
+    for (const int count : {2, 8, Mixer::voiceCount}) {
+        Fixture f;
+        std::vector<std::shared_ptr<const Sound>> sounds;
+        std::vector<SoundInstance> instances;
+        double expected = 0.0;
+        for (int i = 0; i < count; ++i) {
+            const float level = static_cast<float>(i + 1) / 1024.0f; // distinct and exact in float
+            sounds.push_back(f.constant(level, 100));
+            instances.push_back(f.device->play(sounds.back()));
+            REQUIRE(instances.back().isValid());
+            expected += static_cast<double>(level);
+        }
+        CHECK_NEAR(f.backend->firstSample(4), expected, 1e-6);
+        for (const SoundInstance& instance : instances) {
+            CHECK(f.device->state(instance) == PlaybackState::Playing);
+        }
+        CHECK_EQ(f.device->activeVoiceCount(), count);
+    }
+}
+
+SCHUIMM_TEST(AudioDevice_SameSoundPlayedManyTimesInOneFrame)
+{
+    Fixture f;
+    auto sound = f.constant(1.0f / 64.0f, 100);
+    std::vector<SoundInstance> instances;
+    for (int i = 0; i < Mixer::voiceCount; ++i) {
+        instances.push_back(f.device->play(sound));
+        REQUIRE(instances.back().isValid());
+        for (std::size_t j = 0; j + 1 < instances.size(); ++j) {
+            CHECK(!(instances[j] == instances.back()));
+        }
+    }
+    CHECK_NEAR(f.backend->firstSample(4), Mixer::voiceCount / 64.0, 1e-6);
+}
+
+SCHUIMM_TEST(AudioDevice_PlayStopPlayInOneFrame)
+{
+    Fixture f;
+    auto first = f.constant(0.25f, 100);
+    auto second = f.constant(0.5f, 100);
+    const SoundInstance a = f.device->play(first);
+    f.device->stop(a);
+    const SoundInstance b = f.device->play(second);
+    REQUIRE(b.isValid());
+    CHECK(!(a == b));
+    CHECK_EQ(f.backend->firstSample(4), 0.5f); // only the second is heard
+    CHECK(f.device->state(a) == PlaybackState::Stopped);
+    CHECK(f.device->state(b) == PlaybackState::Playing);
+}
+
+SCHUIMM_TEST(AudioDevice_EveryPlayIsHeardExactlyOnceAcrossVoiceReuse)
+{
+    Fixture f;
+    constexpr float level = 1.0f / 1024.0f;
+    auto blip = f.constant(level, 1); // one frame: heard in exactly one mix
+    long long requested = 0;
+    long long heard = 0;
+    for (int round = 0; requested < 10000; ++round) {
+        const int count = (round % Mixer::voiceCount) + 1;
+        for (int i = 0; i < count; ++i) {
+            REQUIRE(f.device->play(blip).isValid());
+            ++requested;
+        }
+        const auto out = f.backend->render(2);
+        heard += std::llround(out[0] / level);
+        CHECK_EQ(out[2], 0.0f); // and only once
+        f.device->update();
+        REQUIRE(f.device->activeVoiceCount() == 0);
+    }
+    CHECK_EQ(heard, requested);
+}
+
+SCHUIMM_TEST(Mixer_IgnoresARepublishedGeneration)
+{
+    // Why AudioDevice never reuses a voice's previous generation: the mixer only starts a
+    // playback when the generation changes.
+    Mixer mixer;
+    const Sound sound(1000, {0.5f, 0.5f, 0.5f, 0.5f}); // two frames
+    std::vector<float> out(2);
+    mixer.start(0, 7, &sound, 1.0f, false, false);
+    mixer.mix(out.data(), 1);
+    CHECK_EQ(out[0], 0.5f);
+    mixer.mix(out.data(), 1);
+    CHECK_EQ(mixer.endedGeneration(0), 7u);
+    mixer.start(0, 7, &sound, 1.0f, false, false);
+    mixer.mix(out.data(), 1);
+    CHECK_EQ(out[0], 0.0f);
+    mixer.start(0, 8, &sound, 1.0f, false, false);
+    mixer.mix(out.data(), 1);
+    CHECK_EQ(out[0], 0.5f);
 }
 
 SCHUIMM_TEST(AudioDevice_RejectsForeignSoundsAndNull)

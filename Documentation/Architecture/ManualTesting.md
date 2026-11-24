@@ -54,6 +54,31 @@ Start `EngineDemo` normally and check:
 | 17 | Close | window close button, Alt+F4 (Windows), ⌘Q (macOS): log ends with `Audio device stopped`, `Clean shutdown, exit code 0` |
 | 18 | HiDPI | on a scaled display the scene is sharp (nearest scaling) and the framebuffer size in the title is the pixel size |
 
+## Verification record (Milestone 2.5)
+
+Robustness pass: audio control state instead of a command queue, strict WAV decoding, and
+overflow-safe texture validation. Same machines as Milestone 2.
+
+| Check | macOS | Debian 13 | Windows 11 |
+|---|---|---|---|
+| Debug + Release build, zero warnings | ✅ | ✅ GCC and Clang | ✅ |
+| `ctest -L unit`: CoreTests (65 cases), PlatformTests (2), FileSystemTests (13), ResourceTests (43), GraphicsTests (39), AudioTests (21) | ✅ Debug and Release | ✅ GCC and Clang, Debug and Release | ✅ Debug and Release |
+| `ctest -L integration` (RenderingTests now includes the overflow cases) | ✅ Debug and Release | ✅ under Xvfb (all four builds) | ✅ Debug and Release (`schtasks /it`) |
+| `ctest -L audio` on the real default device | ✅ CoreAudio | ✅ PulseAudio on PipeWire (all four builds) | ✅ WASAPI |
+| `EngineDemo --self-test` (Release) | ✅ | not run (no change to the platform or demo code) | ✅ |
+| AddressSanitizer + UndefinedBehaviorSanitizer (`-fno-sanitize-recover`): all ten test executables | ✅ no reports | not run | not run |
+| ThreadSanitizer: AudioTests, including the new cross-thread control storm on the null backend, and AudioDeviceSmoke | ✅ no reports | not run | not run |
+| GitHub Actions | ☐ needs a push | ☐ | ☐ |
+
+Notes:
+
+* `AudioDevice_ManyControlCallsBetweenMixesKeepTheLastValue` issues 40,000 control calls in one
+  audio period; with the former 1024-entry command queue most of them would have been dropped.
+* `AudioDevice_EveryPlayIsHeardExactlyOnceAcrossVoiceReuse` plays 10,000 one-frame sounds across
+  reused voices and counts each one in the output exactly once.
+* Interactive play was done by the user on macOS after Milestone 2 (all controls worked); it was
+  not repeated for 2.5, whose audio changes are covered by the tests above.
+
 ## Verification record (Milestone 2)
 
 Same machines as below: macOS 26.6 on Apple M4 Max (Apple Clang 21); Debian 13 GNOME/Xwayland on

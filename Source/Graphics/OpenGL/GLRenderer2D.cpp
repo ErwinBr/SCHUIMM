@@ -415,23 +415,17 @@ Status GLRenderer2D::validateDescription(const TextureDescription& description) 
     if (description.format != PixelFormat::RGBA8) {
         return makeError(ErrorCode::Unsupported, concat("unsupported texture format ", toString(description.format)));
     }
-    const std::size_t rowBytes = static_cast<std::size_t>(size.width) * 4;
-    const std::size_t stride = description.rowStride == 0 ? rowBytes : description.rowStride;
-    if (stride < rowBytes) {
-        return makeError(ErrorCode::InvalidArgument, concat("texture row stride ", stride, " is smaller than a row (", rowBytes, " bytes)"));
-    }
     if (description.pixels.empty()) {
         if (description.usage == TextureUsage::Static) {
             return makeError(ErrorCode::InvalidArgument, "a static texture needs pixel data");
         }
+        // Without data only the stride is checked: it still may not be smaller than a row.
+        if (description.rowStride != 0 && description.rowStride < static_cast<std::size_t>(size.width) * 4) {
+            return validatePixelLayout(size, 0, description.rowStride);
+        }
         return {};
     }
-    const std::size_t expected = stride * static_cast<std::size_t>(size.height - 1) + rowBytes;
-    if (description.pixels.size() < expected) {
-        return makeError(ErrorCode::InvalidArgument, concat("texture ", describeSize(size), " expects at least ", expected,
-                                                            " bytes of RGBA8 data, got ", description.pixels.size()));
-    }
-    return {};
+    return validatePixelLayout(size, description.pixels.size(), description.rowStride);
 }
 
 std::span<const std::uint8_t> GLRenderer2D::preparePixels(Extent2D size, std::span<const std::uint8_t> pixels,
@@ -445,6 +439,8 @@ std::span<const std::uint8_t> GLRenderer2D::preparePixels(Extent2D size, std::sp
     // Repack tightly and premultiply. The scratch buffer is reused between uploads.
     uploadScratch_.resize(rowBytes * static_cast<std::size_t>(size.height));
     for (int y = 0; y < size.height; ++y) {
+        // validatePixelLayout has bounded stride * (height - 1) + rowBytes by pixels.size(), so
+        // stride * y cannot wrap and every row read stays inside `pixels`.
         const std::uint8_t* in = pixels.data() + stride * static_cast<std::size_t>(y);
         std::uint8_t* out = uploadScratch_.data() + rowBytes * static_cast<std::size_t>(y);
         if (alphaMode == AlphaMode::Premultiplied) {
@@ -520,17 +516,11 @@ Status GLRenderer2D::updateTexture(Texture& texture, TextureRegion region, std::
         return makeError(ErrorCode::InvalidState, "only dynamic textures can be updated");
     }
     const Extent2D size = glTexture.size();
-    if (region.width <= 0 || region.height <= 0 || region.x < 0 || region.y < 0 || region.x + region.width > size.width ||
-        region.y + region.height > size.height) {
-        return makeError(ErrorCode::InvalidArgument,
-                         concat("update region ", region.x, ",", region.y, " ", region.width, "x", region.height,
-                                " is outside the ", describeSize(size), " texture"));
+    if (auto status = validateRegion(size, region); !status) {
+        return status;
     }
-    const std::size_t rowBytes = static_cast<std::size_t>(region.width) * 4;
-    const std::size_t stride = rowStride == 0 ? rowBytes : rowStride;
-    if (stride < rowBytes || pixels.size() < stride * static_cast<std::size_t>(region.height - 1) + rowBytes) {
-        return makeError(ErrorCode::InvalidArgument, concat("texture update expects ", region.height, " rows of ",
-                                                            rowBytes, " bytes, got ", pixels.size(), " bytes"));
+    if (auto status = validatePixelLayout({region.width, region.height}, pixels.size(), rowStride); !status) {
+        return status;
     }
 
     // Draws already submitted must see the old contents.

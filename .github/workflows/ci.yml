@@ -43,7 +43,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Visual Studio 2022 (MSVC, Windows SDK) and CMake are preinstalled on the runner image.
       - name: Configure
@@ -91,7 +91,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-windows-${{ matrix.config }}
           path: Build/test-results/
@@ -105,7 +105,7 @@ jobs:
       matrix:
         config: [debug, release]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Xcode (Apple Clang) and CMake are preinstalled; the preset uses the Ninja generator.
       - name: Install build tools
@@ -159,7 +159,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-macos-${{ matrix.config }}
           path: Build/test-results/
@@ -178,7 +178,7 @@ jobs:
           # __cpp_concepts >= 202002, which Clang 18 does not report.
           - { name: Clang 19, preset: linux-clang, cc: clang-19, cxx: clang++-19, package: clang-19 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Build: Ninja, the compiler, Xlib/XKB and GLVND GL/GLX headers (same as Building.md).
       # Integration tests: Xvfb and Mesa's software OpenGL driver (llvmpipe).
@@ -204,15 +204,9 @@ jobs:
       - name: Unit tests
         run: .github/scripts/run-tests.sh ${{ matrix.compiler.preset }}-${{ matrix.config }} unit
 
-      - name: Integration tests (Xvfb, Mesa llvmpipe)
-        env:
-          LIBGL_ALWAYS_SOFTWARE: "1"
-        run: >
-          .github/scripts/run-tests.sh ${{ matrix.compiler.preset }}-${{ matrix.config }} integration
-          xvfb-run -a -s "-screen 0 1280x1024x24"
-
       # A user PulseAudio daemon with a null sink: a real output device as far as the audio
-      # stack is concerned, without sound hardware.
+      # stack is concerned, without sound hardware. Started before the integration tests so that the
+      # EngineDemo smoke test also runs with audio instead of falling back to silence.
       - name: Start PulseAudio (null sink)
         run: |
           pulseaudio --start --exit-idle-time=-1 --daemonize=yes
@@ -220,12 +214,19 @@ jobs:
           pactl set-default-sink ci_null
           pactl info
 
+      - name: Integration tests (Xvfb, Mesa llvmpipe)
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: >
+          .github/scripts/run-tests.sh ${{ matrix.compiler.preset }}-${{ matrix.config }} integration
+          xvfb-run -a -s "-screen 0 1280x1024x24"
+
       - name: Audio tests (PulseAudio null sink)
         run: .github/scripts/run-tests.sh ${{ matrix.compiler.preset }}-${{ matrix.config }} audio
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-results-linux-${{ matrix.compiler.preset }}-${{ matrix.config }}
           path: Build/test-results/
