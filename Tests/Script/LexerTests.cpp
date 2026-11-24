@@ -94,9 +94,11 @@ SCHUIMM_TEST(Lexer_StringsAndEscapes)
     CHECK_EQ(l.tokens[5].stringValue, std::string("h\xC3\xA9llo"));
     CHECK(lex("\"abc").hasError("Unterminated"));
     CHECK(lex("\"abc\ndef\"").hasError("Unterminated"));
-    CHECK(lex(R"("\q")").hasError("Unknown escape"));
-    CHECK(lex(R"("\xZZ")").hasError("two hexadecimal"));
-    CHECK(lex(R"("\xFF")").hasError("ASCII"));
+    // No raw string literals inside CHECK(): MSVC re-scans the stringized macro argument and
+    // rejects escapes such as \q in it (C4129, C2153).
+    CHECK(lex("\"\\q\"").hasError("Unknown escape"));
+    CHECK(lex("\"\\xZZ\"").hasError("two hexadecimal"));
+    CHECK(lex("\"\\xFF\"").hasError("ASCII"));
     CHECK(lex("\"\xFF\"").hasError("Invalid UTF-8"));
 }
 
