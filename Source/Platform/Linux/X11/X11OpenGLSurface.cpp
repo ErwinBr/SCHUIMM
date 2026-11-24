@@ -33,7 +33,8 @@ bool hasExtension(const char* extensions, std::string_view name)
 }
 
 // Xlib reports protocol errors through a process-wide callback. This variable is only written
-// while a ScopedErrorTrap is active on the (single) thread that talks to the X server.
+// while a ScopedErrorTrap is active on the (single) thread that talks to the X server. The trap
+// temporarily replaces the platform's logging handler (see X11Platform.cpp) and restores it.
 thread_local int trappedErrorCode = 0;
 
 int trapError(Display* display, XErrorEvent* event)
@@ -114,9 +115,16 @@ Result<std::unique_ptr<OpenGLSurface>> X11OpenGLSurface::create(X11Platform& pla
                                 description.minorVersion, " core (X error ", errorCode, ")"));
     }
 
-    if (!glXMakeCurrent(display, window.handle(), context)) {
+    bool madeCurrent = false;
+    {
+        // A context/drawable mismatch is reported as an asynchronous BadMatch.
+        ScopedErrorTrap trap(display);
+        madeCurrent = glXMakeCurrent(display, window.handle(), context) == True;
+        errorCode = trap.errorCode();
+    }
+    if (!madeCurrent || errorCode != 0) {
         glXDestroyContext(display, context);
-        return makeError(ErrorCode::GraphicsFailure, "glXMakeCurrent failed");
+        return makeError(ErrorCode::GraphicsFailure, concat("glXMakeCurrent failed (X error ", errorCode, ")"));
     }
 
     auto surface = std::make_unique<X11OpenGLSurface>(platform, window, context);

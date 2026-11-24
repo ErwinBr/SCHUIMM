@@ -3,18 +3,29 @@ target_include_directories(schuimm_test_framework PUBLIC "${CMAKE_CURRENT_SOURCE
 target_compile_features(schuimm_test_framework PUBLIC cxx_std_23)
 schuimm_configure_target(schuimm_test_framework)
 
-# schuimm_add_test(<name> SOURCES ... LIBRARIES ... [LABELS ...])
+# schuimm_add_test(<name> SOURCES ... LIBRARIES ... LABELS unit|integration)
+#
+# Every test must say which category it belongs to, so CI can run each category explicitly:
+#   unit         headless, no display or GPU needed; runs everywhere, including CI.
+#   integration  needs a desktop session and an OpenGL 3.3 driver (Xvfb + Mesa on Linux CI).
 function(schuimm_add_test name)
     cmake_parse_arguments(ARG "" "" "SOURCES;LIBRARIES;LABELS" ${ARGN})
+    if(NOT ARG_LABELS)
+        message(FATAL_ERROR "schuimm_add_test(${name}): LABELS unit|integration is required")
+    endif()
+    foreach(label IN LISTS ARG_LABELS)
+        if(NOT label MATCHES "^(unit|integration)$")
+            message(FATAL_ERROR "schuimm_add_test(${name}): unknown label '${label}' (use unit or integration)")
+        endif()
+    endforeach()
     add_executable(${name} ${ARG_SOURCES})
     target_link_libraries(${name} PRIVATE schuimm_test_framework ${ARG_LIBRARIES})
     schuimm_configure_target(${name})
     add_test(NAME ${name} COMMAND ${name})
-    set_tests_properties(${name} PROPERTIES SKIP_RETURN_CODE 77)
-    if(ARG_LABELS)
-        set_tests_properties(${name} PROPERTIES LABELS "${ARG_LABELS}")
-    endif()
+    set_tests_properties(${name} PROPERTIES LABELS "${ARG_LABELS}")
 endfunction()
 
 add_subdirectory(Core)
 add_subdirectory(Platform)
+add_subdirectory(Resource)
+add_subdirectory(Integration)

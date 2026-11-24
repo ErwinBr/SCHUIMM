@@ -56,6 +56,10 @@ if (running) {
 }
 ```
 
+On macOS each iteration runs inside an autorelease pool that `pollEvents()`/`waitEvents()`
+drains and renews (see [Platform.md](Platform.md#macos-cocoa--nsopenglcontext-sourceplatformmacos)),
+because the engine drives the event loop itself instead of `[NSApp run]`.
+
 This follows the loop structure requested for the milestone. Platform event processing and
 `input.update()` are split by an explicit dispatch step, and presenting is part of the graphics
 device because the device owns the context.

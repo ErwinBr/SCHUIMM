@@ -4,22 +4,32 @@ Native foundation of a cross-platform 2D adventure game engine, written in C++23
 top of the operating systems' own APIs: **Win32 + WGL** on Windows, **Cocoa + NSOpenGLContext**
 on macOS and **X11 + GLX (with XKB)** on Linux. No SDL, GLFW, SFML or other frameworks are used.
 
-This milestone delivers the application foundation only: windowing, input, timing, logging, an
-OpenGL 3.3 core rendering foundation and the main loop. Scripting, the adventure systems and the
-editor are later milestones.
+Milestone 1 delivered the application foundation: windowing, input, timing, logging, an OpenGL
+3.3 core rendering foundation and the main loop. Milestone 1.5 added:
+* lifecycle fixes;
+* cross-platform CI on GitHub Actions;
+* a file system layer;
+* the start of a resource system: asset root and paths, typed resource identifiers, an explicit
+  resource cache, and CPU-side PNG decoding.
+
+Graphics and audio (Milestone 2), scripting, the adventure systems and the editor come later.
 
 ## Repository layout
 
 ```text
 CMakeLists.txt, CMakePresets.json   Build definition and presets per platform
 cmake/                              Warning flags, platform backend selection
-Source/Core/                        Platform-independent: Common, Logging, Timing, Input, Application
+.github/                            CI workflow (Windows, macOS, Linux) and its test-runner script
+Source/Core/                        Platform-independent: Common, Image, Logging, Timing, Input, Application
 Source/Platform/Interface/          Platform, Window, OpenGLSurface, WindowEvent (engine-facing)
 Source/Platform/{Windows,macOS,Linux/X11}/   Native backends (exactly one is compiled)
+Source/Platform/FileSystem/         UTF-8 paths and file operations (POSIX or Win32)
+Source/Resource/                    Asset paths and root, resource IDs and cache, PNG decoding
 Source/Graphics/Interface/          GraphicsDevice, Renderer2D, Texture, presentation math
 Source/Graphics/OpenGL/             OpenGL 3.3 core backend with an in-house function loader
+ThirdParty/                         Vendored libpng and zlib (sources, licences)
 Applications/EngineDemo/            Demo and manual integration test (composition root)
-Tests/                              Self-contained test harness, unit tests, smoke test
+Tests/                              Self-contained test harness, unit and integration tests, test assets
 Documentation/Architecture/         Architecture and process documentation
 ```
 
@@ -39,7 +49,9 @@ sudo apt install build-essential cmake ninja-build libx11-dev libgl-dev libglx-d
 
 `libx11-dev` provides Xlib *and* the XKB client API (`X11/XKBlib.h`); `libgl-dev`/`libglx-dev`
 provide the GLVND `libGL`/`libGLX` and GLX headers. Optional, for headless testing:
-`sudo apt install xvfb mesa-utils`. No third-party libraries are required on any platform.
+`sudo apt install xvfb mesa-utils`. No other libraries need to be installed on any platform: the
+only third-party code, libpng and zlib for PNG decoding, is vendored in `ThirdParty/` and built
+with the project (see [ThirdParty/README.md](ThirdParty/README.md)).
 
 ## Building and testing
 
@@ -57,8 +69,13 @@ finds MSVC without a Developer Command Prompt. The CMake bundled with VS 2022 Bu
 Binaries end up in `Build/<preset>/bin/<Config>/`. On macOS the demo is an application bundle,
 `EngineDemo.app`.
 
-`ctest -L unit` runs only the unit tests; `ctest -L integration` runs the windowed smoke test,
-which needs a display (on headless Linux use `xvfb-run -a ctest --preset linux-gcc-debug`).
+`ctest -L unit` runs only the headless unit tests. `ctest -L integration` runs the windowed
+lifecycle and smoke tests, which need a display (on headless Linux use
+`xvfb-run -a ctest --preset linux-gcc-debug`).
+
+GitHub Actions builds Debug and Release on Windows (MSVC), macOS (Apple Clang) and Linux (GCC 14
+and Clang 18), and runs the unit tests everywhere and the integration tests on Linux (Xvfb) and
+macOS. See [ContinuousIntegration.md](Documentation/Architecture/ContinuousIntegration.md).
 
 ## Running the demo
 
@@ -80,16 +97,20 @@ Options: `--self-test` (scripted resize, fullscreen and VSync check with pass/fa
 
 ## Verification status
 
-Verified by building and running on real machines (see
+Verified by building and running on real machines (Milestone 1.5; see
 [ManualTesting.md](Documentation/Architecture/ManualTesting.md) for exactly what was and was not checked):
 
 | | macOS 26.6 (Apple M4 Max) | Debian 13 GNOME/Xwayland (Intel UHD 630) | Windows 11 (RTX 4050) |
 |---|---|---|---|
-| Build Debug + Release, no warnings | ✅ | ✅ GCC 14 + Clang 19 | ✅ MSVC 19.41 |
-| Unit tests (51) + smoke test | ✅ | ✅ | ✅ |
+| Build Debug + Release, no warnings | ✅ Apple Clang 21 | ✅ GCC 14 + Clang 19 | ✅ MSVC 19.41 |
+| Unit tests (95 cases in 4 executables) | ✅ | ✅ | ✅ |
+| Integration tests (lifecycle + smoke) | ✅ | ✅ (also under Xvfb) | ✅ |
 | Self-test: context, resize, fullscreen, VSync | ✅ GL 4.1 core | ✅ GL 4.6 core | ✅ GL 3.3 core |
 | Rendering screenshot inspected | ✅ | ✅ | ✅ |
 | Physical keyboard/mouse input | ◐ partly (manual run) | ☐ manual | ☐ manual |
+
+The GitHub Actions workflow has not run on GitHub's runners yet: its commands were run by hand
+on the machines above.
 
 Windows 7 and macOS 10.13 are the *targeted* minimums (API usage and compiler settings), but no
 such system was available, so runtime support there is unverified.
@@ -97,10 +118,12 @@ such system was available, so runtime support there is unverified.
 ## Documentation
 
 * [Architecture overview](Documentation/Architecture/Overview.md): structure, dependencies, ownership, error handling
-* [Platform layer](Documentation/Architecture/Platform.md): windows, events and OpenGL contexts per OS; adding Wayland
+* [Platform layer](Documentation/Architecture/Platform.md): windows, events and OpenGL contexts per OS; file system; adding Wayland
+* [Resources and assets](Documentation/Architecture/Resources.md): asset root and paths, resource IDs, ownership, image decoding
 * [Graphics](Documentation/Architecture/Graphics.md): the OpenGL foundation; replacing the renderer
 * [Application lifecycle and main loop](Documentation/Architecture/Lifecycle.md)
 * [Input handling](Documentation/Architecture/Input.md)
 * [Build instructions](Documentation/Architecture/Building.md)
+* [Continuous integration](Documentation/Architecture/ContinuousIntegration.md)
 * [Manual integration testing](Documentation/Architecture/ManualTesting.md)
 * [Known limitations](Documentation/Architecture/KnownLimitations.md)

@@ -223,18 +223,22 @@ private:
 
     Image readBackBuffer(Extent2D size)
     {
-        Image image;
-        image.size = size;
-        const std::size_t rowBytes = static_cast<std::size_t>(size.width) * 4;
-        image.pixels.resize(rowBytes * static_cast<std::size_t>(size.height));
+        auto created = Image::create(size, PixelFormat::RGBA8);
+        if (!created) {
+            logger_.warning("Graphics", concat("Frame capture skipped: ", created.error().message));
+            return {};
+        }
+        Image image = std::move(*created);
+        // Image::create produces a tightly packed RGBA8 image, matching PACK_ALIGNMENT 1.
+        const std::size_t rowBytes = image.rowStride();
         gl_.ReadBuffer(gl::BACK);
         gl_.PixelStorei(gl::PACK_ALIGNMENT, 1);
-        gl_.ReadPixels(0, 0, size.width, size.height, gl::RGBA, gl::UNSIGNED_BYTE, image.pixels.data());
+        gl_.ReadPixels(0, 0, size.width, size.height, gl::RGBA, gl::UNSIGNED_BYTE, image.pixels().data());
         // OpenGL returns rows bottom-up; Image stores them top-down.
         std::vector<std::uint8_t> row(rowBytes);
         for (int top = 0, bottom = size.height - 1; top < bottom; ++top, --bottom) {
-            std::uint8_t* a = image.pixels.data() + static_cast<std::size_t>(top) * rowBytes;
-            std::uint8_t* b = image.pixels.data() + static_cast<std::size_t>(bottom) * rowBytes;
+            std::uint8_t* a = image.row(top).data();
+            std::uint8_t* b = image.row(bottom).data();
             std::memcpy(row.data(), a, rowBytes);
             std::memcpy(a, b, rowBytes);
             std::memcpy(b, row.data(), rowBytes);

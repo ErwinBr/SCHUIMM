@@ -13,6 +13,10 @@ enum class ErrorCode {
     InvalidState,
     Unsupported,
     IoFailure,
+    NotFound,         // A file, directory or asset does not exist.
+    PermissionDenied, // The operating system refused access.
+    AlreadyExists,    // A file system entry of another kind is in the way.
+    InvalidData,      // Content could not be parsed or decoded (e.g. a corrupt image).
     PlatformFailure,
     GraphicsFailure,
     ShaderCompilation,

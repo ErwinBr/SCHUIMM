@@ -6,6 +6,7 @@
 
 #include "Core/Logging/Logger.h"
 #include "Platform/Interface/Platform.h"
+#include "Platform/macOS/CocoaFramePool.h"
 
 #include <vector>
 
@@ -41,6 +42,8 @@ private:
     SchuimmApplicationDelegate* applicationDelegate_ = nil;
     id keyUpMonitor_ = nil;
     std::vector<CocoaWindow*> windows_; // Non-owning; windows unregister themselves.
+    // Declared last: created after AppKit is set up, drained first on destruction.
+    FramePool framePool_;
 };
 
 } // namespace schuimm::cocoa

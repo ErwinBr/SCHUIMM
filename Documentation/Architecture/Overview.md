@@ -12,15 +12,19 @@ editor) build on the interfaces described here, never on native APIs.
 | Directory | Library target | Contents |
 |---|---|---|
 | `Source/Core/Common` | `schuimm_core` | `Error`/`Result`/`Status`, assertions, geometry, string helpers |
+| `Source/Core/Image` | `schuimm_core` | `Image`, `PixelFormat`: CPU-side pixel data, no graphics API |
 | `Source/Core/Logging` | `schuimm_core` | `Logger`, `LogSink`, `ConsoleSink`, `FileSink` |
 | `Source/Core/Timing` | `schuimm_core` | `Clock`, `FrameStatistics` |
 | `Source/Core/Input` | `schuimm_core` | `Key`, `MouseButton`, `ButtonState`, `InputState` |
 | `Source/Platform/Interface` | `schuimm_platform_interface` (headers) | `Platform`, `Window`, `WindowEvent`, `OpenGLSurface` |
-| `Source/Graphics/Interface` | `schuimm_graphics_interface` (headers) | `GraphicsDevice`, `Renderer2D`, `Texture`, `Image`, presentation math |
+| `Source/Platform/FileSystem` | `schuimm_filesystem` | UTF-8 path manipulation and file operations (POSIX or Win32) |
+| `Source/Resource` | `schuimm_resource` | `AssetPath`, `AssetLocator`, `ResourceId`, `ResourceCache`, PNG decoding ([Resources.md](Resources.md)) |
+| `Source/Graphics/Interface` | `schuimm_graphics_interface` (headers) | `GraphicsDevice`, `Renderer2D`, `Texture`, presentation math |
 | `Source/Core/Application` | `schuimm_application` | `Application`, `ApplicationListener`, lifecycle |
 | `Source/Platform/<OS>` | `schuimm_platform` | exactly one native backend, chosen at configure time |
 | `Source/Graphics/OpenGL` | `schuimm_graphics_opengl` | OpenGL 3.3 core `GraphicsDevice` + `Renderer2D` |
 | `Applications/EngineDemo` | `EngineDemo` | composition root, demo scene, self-test |
+| `ThirdParty` | `schuimm_png`, `schuimm_zlib` | vendored libpng and zlib, used only by the resource layer ([README](../../ThirdParty/README.md)) |
 
 Two folders were added to the structure requested for the milestone:
 
@@ -34,16 +38,19 @@ on the platform and graphics *interfaces*, which in turn depend on `schuimm_core
 ## Dependency graph
 
 ```text
-                 schuimm_core (Common, Logging, Timing, Input)
-                  ▲                      ▲
-   schuimm_platform_interface    schuimm_graphics_interface
-        ▲          ▲                ▲            ▲
-        │     schuimm_application ──┘            │
+                 schuimm_core (Common, Image, Logging, Timing, Input)
+                  ▲                      ▲                         ▲
+   schuimm_platform_interface    schuimm_graphics_interface    schuimm_filesystem (POSIX | Win32)
+        ▲          ▲                ▲            ▲                 ▲
+        │     schuimm_application ──┘            │            schuimm_resource ──► libpng ──► zlib
         │                                        │
  schuimm_platform (Win32 | Cocoa | X11)   schuimm_graphics_opengl ──► platform_interface (OpenGLSurface)
         ▲                                        ▲
         └──────────────── EngineDemo ────────────┘
 ```
+
+The resource layer depends neither on windowing nor on graphics, and the graphics layer does not
+depend on the resource layer. They meet only in the `Image` type in Core.
 
 Rules enforced by this layout:
 
@@ -51,6 +58,8 @@ Rules enforced by this layout:
   Objective-C appears only in `.mm` files and backend-internal headers.
 * OpenGL is only called in `Source/Graphics/OpenGL`. The OpenGL backend reaches the window system
   exclusively through the abstract `OpenGLSurface`.
+* POSIX and Win32 file APIs are only called in `Source/Platform/FileSystem/{Posix,Windows}`, and
+  `png.h` is only included by `Source/Resource/Image/PngDecoder.cpp`.
 * `Application` and all game code see interfaces only. The single place that names concrete
   backends is the composition root (`Applications/EngineDemo/main.cpp`).
 
@@ -59,8 +68,9 @@ Rules enforced by this layout:
 * **Dependency injection, no singletons.** `Logger`, `Platform`, `Window` and `GraphicsDevice`
   are created in `main` and passed by reference. The `Clock` takes its time source as a function,
   which makes it deterministic in tests. The only process-wide state lives where the OS forces it
-  (AppKit's `NSApp`, Win32 window class registration, the Xlib error handler during GLX context
-  creation) and is confined to the backend.
+  (AppKit's `NSApp` and the per-frame autorelease pool, Win32 window class registration, the Xlib
+  error handlers) and is confined to the backend. There is no global asset root or resource
+  manager: `AssetLocator` and `ResourceCache` are created by the application and passed on.
 * **Interfaces only where a second implementation exists or is planned.** `Platform`, `Window`,
   `OpenGLSurface`, `GraphicsDevice`, `Renderer2D`, `Texture` and `LogSink` each have native and
   mock/alternative implementations. Everything else is a concrete class.
@@ -82,6 +92,9 @@ Programming errors (violated invariants) use `SCHUIMM_ASSERT` (Debug builds) or 
 ## Resource ownership
 
 * Every owner is a `std::unique_ptr` or an RAII value; there are no owning raw pointers.
+  The one shared ownership is deliberate: CPU-side resources in a `ResourceCache` are
+  `std::shared_ptr<const T>`, so unloading never invalidates a user (see
+  [Resources.md](Resources.md#loading-ownership-and-lifetime-resourcecachet)).
 * OpenGL object names are wrapped in move-only `gl::Handle<Traits>` objects (buffers, vertex arrays,
   textures, framebuffers, shaders, programs).
 * Objective-C objects are held by ARC-managed strong references inside the backend classes.
@@ -109,7 +122,12 @@ and again before teardown). `Logger` is thread-safe so that future worker thread
 
 * **macOS 10.13 deployment target:** libc++ on 10.13 lacks `std::format`, `std::print` and
   `std::filesystem` (10.15). The code uses `concat()`/`formatFixed()` (streams/`snprintf`) and
-  `<fstream>`. Clang enforces this with `-Werror=unguarded-availability-new`.
+  its own file system layer (`Source/Platform/FileSystem`, POSIX and Win32 underneath; see
+  [Platform.md](Platform.md#file-system-sourceplatformfilesystem-target-schuimm_filesystem)).
+  `std::filesystem` is not used anywhere. Clang enforces this with
+  `-Werror=unguarded-availability-new`.
+* **Paths** are UTF-8 strings with `/` separators throughout the engine. They are converted to
+  UTF-16 and `\` only inside the Win32 file system implementation.
 * **Windows 7 target:** `_WIN32_WINNT=0x0601`. Newer APIs (`SetProcessDpiAwarenessContext`,
   `GetDpiForWindow`, `SetProcessDpiAwareness`) are resolved at run time with fallbacks.
 * **Units:** window sizes and mouse positions are *logical* units (points on macOS, 96-DPI units

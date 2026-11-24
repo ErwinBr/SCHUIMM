@@ -157,6 +157,9 @@ Result<std::unique_ptr<Window>> CocoaPlatform::createWindow(const WindowDescript
 
 void CocoaPlatform::pollEvents()
 {
+    // Everything autoreleased since the previous call (i.e. during the last update and render)
+    // is released here; see CocoaFramePool.h.
+    framePool_.cycle();
     @autoreleasepool {
         for (;;) {
             NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
@@ -173,6 +176,7 @@ void CocoaPlatform::pollEvents()
 
 void CocoaPlatform::waitEvents(double timeoutSeconds)
 {
+    framePool_.cycle();
     @autoreleasepool {
         NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
                                             untilDate:[NSDate dateWithTimeIntervalSinceNow:std::max(0.0, timeoutSeconds)]

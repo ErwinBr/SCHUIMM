@@ -3,6 +3,7 @@ schuimm_add_test(CoreTests
         ApplicationTests.cpp
         ClockTests.cpp
         CommonTests.cpp
+        ImageTests.cpp
         InputStateTests.cpp
         LoggerTests.cpp
         PresentationTests.cpp

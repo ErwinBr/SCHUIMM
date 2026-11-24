@@ -78,6 +78,14 @@ so hybrid laptops use the discrete GPU.
 activation policy, a minimal menu bar (Hide, Quit ⌘Q, Minimize ⌘M, Enter Full Screen ⌃⌘F),
 `finishLaunching`, and activation. The engine drives the event loop itself with
 `nextEventMatchingMask:untilDate:distantPast` + `sendEvent:` instead of `[NSApp run]`.
+Because `[NSApp run]` is not used, nothing would drain the objects that AppKit and Apple's
+OpenGL implementation autorelease while a frame is updated and rendered: about a dozen per frame
+(window titles, Metal command objects created by GL calls), which leaked before Milestone 1.5.
+The platform therefore owns a per-frame autorelease pool (`CocoaFramePool`, the only file
+compiled without ARC, because it needs `NSAutoreleasePool`). `pollEvents()` and `waitEvents()`
+drain the previous frame's pool and open a new one, so each iteration of the main loop runs
+inside one pool. With `OBJC_DEBUG_MISSING_POOLS=YES` the main thread reports no objects
+autoreleased without a pool.
 `applicationShouldTerminate:` returns `NSTerminateCancel` and turns ⌘Q, the Quit menu item or
 logout into close requests, so shutdown always runs through the engine and releases GL
 resources deterministically. A local event monitor forwards key-up events while ⌘ is held,
@@ -136,12 +144,41 @@ unavailable.
 **OpenGL context.** `glXCreateContextAttribsARB` (requires `GLX_ARB_create_context_profile`)
 with 3.3 core attributes. Because failures are reported as asynchronous X protocol errors, which
 by default terminate the process, creation runs inside a scoped error trap
-(`XSetErrorHandler` + `XSync`). VSync uses `GLX_EXT_swap_control`, falling back to
-`GLX_MESA_swap_control`.
+(`XSetErrorHandler` + `XSync`). `glXMakeCurrent` during creation runs inside the same trap.
+VSync uses `GLX_EXT_swap_control`, falling back to `GLX_MESA_swap_control`.
+
+**X protocol errors.** Xlib's default error handler prints the error and calls `exit()`, which
+skips every destructor: the OpenGL context is not released and the log is not flushed. While an
+`X11Platform` exists it installs a handler that logs the error (error text, request code,
+resource id) at error level and lets the program continue. The previous handler is restored
+when the platform is destroyed, and the scoped trap above temporarily replaces the logging
+handler. The handler's logger pointer is process-wide state, as Xlib requires, confined to the
+backend. Losing the connection to the X server (an I/O error) still terminates the process,
+because Xlib does not allow continuing after it.
 
 **Header hygiene.** Xlib defines macros such as `Status`, `Bool` and `None`.
 `X11Headers.h` is the only place they are included, always after engine headers, and it
 `#undef`s `Status`, which would otherwise collide with `schuimm::Status`.
+
+## File system (`Source/Platform/FileSystem`, target `schuimm_filesystem`)
+
+The engine does not use `std::filesystem`: libc++ only provides it from macOS 10.15, and the
+deployment target is 10.13. A small layer of its own provides what the engine needs, separate
+from the windowing backend, so tools and headless tests can link it without a display:
+
+| File | Contents |
+|---|---|
+| `Path.h/.cpp` | Pure UTF-8 string functions, no I/O: `normalise`, `join`, `parent`, `fileName`, `extension`, `isAbsolute`, `rootOf`, `makeAbsolute(path, base)`. Results use `/` on every platform. A `PathStyle` (`Posix` / `Windows`, default: host) selects the root syntax (`/` versus `C:/` and `//server/share/`), so the Windows rules are unit-tested on every OS. |
+| `FileSystem.h` | Operations: `fileInfo`, `listDirectory` (sorted, without `.`/`..`), `readFile` (with a size limit), `writeFile`, `createDirectory`, `createDirectories`, `remove`, `executablePath`, `executableDirectory`. |
+| `Posix/PosixFileSystem.cpp` | macOS and Linux: `stat`, `opendir`/`readdir`, `open`/`read`/`write`, `mkdir`, `rmdir`/`unlink`. Executable path from `_NSGetExecutablePath` + `realpath` (macOS) or `/proc/self/exe` (Linux). |
+| `Windows/Win32FileSystem.cpp` | Wide-character Win32 APIs (`GetFileAttributesExW`, `FindFirstFileExW`, `CreateFileW`, `CreateDirectoryW`, `GetModuleFileNameW`, …). UTF-8 is converted to UTF-16 (invalid UTF-8 is an `InvalidArgument` error, not replaced), `/` to `\`, and absolute paths longer than 247 characters get the `\?\` prefix. |
+
+Every operation returns `Result`/`Status`. The same situation gives the same `ErrorCode` on every
+platform (`NotFound`, `PermissionDenied`, `AlreadyExists`, `InvalidArgument`, otherwise
+`IoFailure`), and the message names the operation, the path and the OS's own reason. Relative
+paths are passed to the OS unchanged and therefore resolve against the current directory. Engine
+code avoids that by building absolute paths with `path::makeAbsolute` from an explicit base
+(see [Resources.md](Resources.md)).
 
 ## Adding a Wayland backend
 

@@ -1,0 +1,162 @@
+# Continuous integration: builds SCHUIMM (engine, EngineDemo, tests) on Windows, macOS and Linux
+# with the CMake presets from CMakePresets.json and runs the CTest suites by label.
+#
+# Test categories (see Tests/CMakeLists.txt):
+#   unit         headless; must pass on every job.
+#   integration  needs a desktop session and an OpenGL 3.3 driver. Run on Linux (Xvfb + Mesa
+#                llvmpipe) and macOS. Not run on Windows, and the job summary says so explicitly.
+#
+# Adding a subsystem: give its tests a label in Tests/<Subsystem>/CMakeLists.txt. The jobs below
+# select tests by preset and label only, so no change is needed here.
+#
+# Caching: none. All third-party code is vendored in ThirdParty/, so there is nothing to
+# download, and a full build takes about a minute; a compiler cache would not pay for itself yet.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows / MSVC / ${{ matrix.config }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [debug, release]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Visual Studio 2022 (MSVC, Windows SDK) and CMake are preinstalled on the runner image.
+      - name: Configure
+        run: cmake --preset windows-msvc
+
+      - name: Build
+        run: cmake --build --preset windows-msvc-${{ matrix.config }}
+
+      - name: Unit tests
+        run: .github/scripts/run-tests.sh windows-msvc-${{ matrix.config }} unit
+
+      - name: Integration tests (not run on this runner)
+        run: |
+          {
+            echo "### \`integration\` tests: NOT RUN on Windows"
+            echo
+            echo "Hosted Windows runners have no GPU driver; opengl32.dll only provides Microsoft's"
+            echo "OpenGL 1.1 GDI renderer, so no OpenGL 3.3 core context can be created. These tests"
+            echo "were built but not executed here; run them on a Windows machine with a GPU"
+            echo "(see Documentation/Architecture/ContinuousIntegration.md):"
+            echo
+            echo '```text'
+            ctest --preset windows-msvc-${{ matrix.config }} -L integration -N
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-windows-${{ matrix.config }}
+          path: Build/test-results/
+          if-no-files-found: ignore
+
+  macos:
+    name: macOS / Apple Clang / ${{ matrix.config }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Xcode (Apple Clang) and CMake are preinstalled; the preset uses the Ninja generator.
+      - name: Install build tools
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install ninja
+
+      - name: Configure
+        run: cmake --preset macos-clang
+
+      - name: Build
+        run: cmake --build --preset macos-clang-${{ matrix.config }}
+
+      - name: Unit tests
+        run: .github/scripts/run-tests.sh macos-clang-${{ matrix.config }} unit
+
+      # The runner has a logged-in GUI session and Apple's OpenGL-on-Metal implementation.
+      - name: Integration tests
+        run: .github/scripts/run-tests.sh macos-clang-${{ matrix.config }} integration
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-macos-${{ matrix.config }}
+          path: Build/test-results/
+          if-no-files-found: ignore
+
+  linux:
+    name: Linux / ${{ matrix.compiler.name }} / ${{ matrix.config }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [debug, release]
+        compiler:
+          - { name: GCC 14,   preset: linux-gcc,   cc: gcc-14,   cxx: g++-14,     package: g++-14 }
+          - { name: Clang 18, preset: linux-clang, cc: clang-18, cxx: clang++-18, package: clang-18 }
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build: Ninja, the compiler, Xlib/XKB and GLVND GL/GLX headers (same as Building.md).
+      # Integration tests: Xvfb and Mesa's software OpenGL driver (llvmpipe).
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            cmake ninja-build ${{ matrix.compiler.package }} \
+            libx11-dev libgl-dev libglx-dev \
+            xvfb xauth libgl1-mesa-dri mesa-utils
+
+      - name: Configure
+        run: >
+          cmake --preset ${{ matrix.compiler.preset }}
+          -DCMAKE_C_COMPILER=${{ matrix.compiler.cc }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.compiler.cxx }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.compiler.preset }}-${{ matrix.config }}
+
+      - name: Unit tests
+        run: .github/scripts/run-tests.sh ${{ matrix.compiler.preset }}-${{ matrix.config }} unit
+
+      - name: Integration tests (Xvfb, Mesa llvmpipe)
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: >
+          .github/scripts/run-tests.sh ${{ matrix.compiler.preset }}-${{ matrix.config }} integration
+          xvfb-run -a -s "-screen 0 1280x1024x24"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-linux-${{ matrix.compiler.preset }}-${{ matrix.config }}
+          path: Build/test-results/
+          if-no-files-found: ignore

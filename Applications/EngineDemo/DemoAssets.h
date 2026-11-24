@@ -1,12 +1,13 @@
 #pragma once
 
-#include "Graphics/Interface/Image.h"
+#include "Core/Image/Image.h"
 
 #include <string>
 
 namespace demo {
 
-// Procedurally generated images, so the demo needs no image decoder (a later milestone).
+// Procedurally generated images (the demo ships no image assets; PNG decoding lives in the
+// resource layer, see Source/Resource).
 [[nodiscard]] schuimm::Image makeCheckerboard(int size, int cells);
 [[nodiscard]] schuimm::Image makeAlphaSprite(int size);
 

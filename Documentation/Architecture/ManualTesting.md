@@ -39,7 +39,37 @@ Start `EngineDemo` normally and check:
 | 12 | Close | window close button, Alt+F4 (Windows), ⌘Q (macOS): log ends with `Clean shutdown, exit code 0` |
 | 13 | HiDPI | on a scaled display the scene is sharp and the framebuffer size in the title is the pixel size |
 
-## Verification record (this milestone)
+## Verification record (Milestone 1.5)
+
+Machines: macOS 26.6 on Apple M4 Max (Apple Clang 21); Debian 13 GNOME/Xwayland on Intel UHD 630
+(GCC 14.2, Clang 19.1); Windows 11 on NVIDIA RTX 4050 Laptop GPU (MSVC 19.41, VS 2022 Build
+Tools). Each build was configured from an empty build directory.
+
+| Check | macOS | Debian 13 | Windows 11 |
+|---|---|---|---|
+| Debug + Release build, zero warnings (`-Werror` / `/WX`) | ✅ | ✅ GCC and Clang | ✅ |
+| `ctest -L unit`: CoreTests (54 cases), PlatformTests (2), FileSystemTests (13), ResourceTests (26) | ✅ | ✅ GCC and Clang, Debug and Release | ✅ Debug and Release |
+| `ctest -L integration`: LifecycleTests (4 cases), EngineDemoSmoke | ✅ Debug and Release | ✅ under Xvfb (all four builds) and on the GNOME session | ✅ Debug and Release (desktop session via `schtasks /it`) |
+| `EngineDemo --self-test` (Release) | ✅ GL 4.1 Metal | ✅ GL 4.6 Mesa | ✅ GL 3.3 NVIDIA |
+| Clean shutdown, exit code 0 | ✅ also from fullscreen | ✅ | ✅ |
+| No per-frame autorelease leak (`OBJC_DEBUG_MISSING_POOLS=YES`, 30 vs 600 frames) | ✅ count constant, none on the main thread | n/a | n/a |
+| X protocol error is logged and not fatal (deliberate `XDestroyWindow` of a bogus id) | n/a | ✅ | n/a |
+| `.github/scripts/run-tests.sh` | ✅ | ✅ including `xvfb-run` wrapper | ✅ under Git Bash |
+| GitHub Actions workflow | ☐ not yet run: the branch has not been pushed | ☐ | ☐ |
+
+Notes:
+
+* `LifecycleTests` also re-creates the OpenGL surface on the same window, which re-applies the
+  pixel format on Windows. That works with the NVIDIA driver, so the suspected WGL problem was not
+  reproduced and that code was left unchanged (see
+  [KnownLimitations.md](KnownLimitations.md)).
+* The workflow YAML was parsed and every command in it was run by hand on the three machines,
+  but GitHub's hosted runners themselves have not run it yet. In particular, whether the
+  `macos-15` runner can create an OpenGL context for the integration step is unverified.
+* Physical keyboard/mouse checks (checklist 3–7, 10, 11) were not repeated; Milestone 1.5 did not
+  change input handling.
+
+## Verification record (Milestone 1)
 
 Machines: macOS 26.6 on Apple M4 Max; Debian 13 (GNOME on Wayland, X11 backend via Xwayland) on
 Intel UHD 630; Windows 11 on NVIDIA RTX 4050 Laptop GPU (125 % scaling).

@@ -45,7 +45,8 @@ or newer.
 2. The application draws through `Renderer2D`.
 3. `endFrame()` binds the default framebuffer, clears it to the border colour and draws the scene
    texture into the letterboxed rectangle (v flipped, blending off). If a capture was requested, the
-   back buffer is read with `glReadPixels` and flipped into a top-down `Image`. GL errors are
+   back buffer is read with `glReadPixels` and flipped into a top-down `Image` (the CPU-side
+   RGBA8 type from `Core/Image`, shared with the resource layer). GL errors are
    logged (at most 10 times).
 4. `present()` swaps buffers through the surface.
 

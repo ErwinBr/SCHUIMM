@@ -6,6 +6,27 @@ add_library(Schuimm::PlatformInterface ALIAS schuimm_platform_interface)
 target_link_libraries(schuimm_platform_interface INTERFACE Schuimm::Core)
 
 # ---------------------------------------------------------------------------------------------
+# File system: path manipulation (pure, Path.cpp) and operations (POSIX or Win32). Independent of
+# the windowing backend, so tools and headless tests can use it without a display.
+# ---------------------------------------------------------------------------------------------
+add_library(schuimm_filesystem STATIC
+    FileSystem/FileSystemCommon.cpp
+    FileSystem/Path.cpp)
+add_library(Schuimm::FileSystem ALIAS schuimm_filesystem)
+target_link_libraries(schuimm_filesystem PUBLIC Schuimm::Core)
+schuimm_configure_target(schuimm_filesystem)
+if(SCHUIMM_PLATFORM STREQUAL "Windows")
+    target_sources(schuimm_filesystem PRIVATE FileSystem/Windows/Win32FileSystem.cpp)
+    target_compile_definitions(schuimm_filesystem PRIVATE
+        _WIN32_WINNT=0x0601 WINVER=0x0601 WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+else()
+    target_sources(schuimm_filesystem PRIVATE FileSystem/Posix/PosixFileSystem.cpp)
+    if(APPLE)
+        target_compile_options(schuimm_filesystem PRIVATE -Werror=unguarded-availability-new)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------------------------
 # Native backend: exactly one is compiled, chosen by cmake/PlatformSelection.cmake.
 # ---------------------------------------------------------------------------------------------
 add_library(schuimm_platform STATIC)
@@ -26,6 +47,7 @@ if(SCHUIMM_PLATFORM STREQUAL "Windows")
 
 elseif(SCHUIMM_PLATFORM STREQUAL "macOS")
     target_sources(schuimm_platform PRIVATE
+        macOS/CocoaFramePool.mm
         macOS/CocoaKeyMap.cpp
         macOS/CocoaOpenGLSurface.mm
         macOS/CocoaPlatform.mm
@@ -35,6 +57,8 @@ elseif(SCHUIMM_PLATFORM STREQUAL "macOS")
     target_compile_options(schuimm_platform PRIVATE
         $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
         -Werror=unguarded-availability-new)
+    # The per-frame autorelease pool needs manual reference counting (NSAutoreleasePool).
+    set_source_files_properties(macOS/CocoaFramePool.mm PROPERTIES COMPILE_OPTIONS "-fno-objc-arc")
     target_link_libraries(schuimm_platform PRIVATE "-framework Cocoa" "-framework OpenGL")
 
 elseif(SCHUIMM_PLATFORM STREQUAL "Linux")

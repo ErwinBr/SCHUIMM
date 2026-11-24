@@ -29,14 +29,14 @@ Status DemoListener::onInitialize(Application& app)
     Renderer2D& renderer = app.graphics().renderer();
 
     const Image checker = makeCheckerboard(128, 8);
-    auto checkerboard = renderer.createTexture({checker.size, checker.pixels, TextureFilter::Nearest});
+    auto checkerboard = renderer.createTexture({checker.size(), checker.pixels(), TextureFilter::Nearest});
     if (!checkerboard) {
         return std::unexpected(checkerboard.error());
     }
     checkerboard_ = std::move(*checkerboard);
 
     const Image orb = makeAlphaSprite(64);
-    auto sprite = renderer.createTexture({orb.size, orb.pixels, TextureFilter::Linear});
+    auto sprite = renderer.createTexture({orb.size(), orb.pixels(), TextureFilter::Linear});
     if (!sprite) {
         return std::unexpected(sprite.error());
     }
@@ -268,8 +268,8 @@ void DemoListener::saveCapturedFrame(Application& app)
     }
     captureRequested_ = false;
     if (writePpm(options_.screenshotPath, *frame)) {
-        app.logger().info(category, concat("Screenshot written to ", options_.screenshotPath, " (", frame->size.width,
-                                           "x", frame->size.height, ")"));
+        app.logger().info(category, concat("Screenshot written to ", options_.screenshotPath, " (", frame->width(),
+                                           "x", frame->height(), ")"));
     } else {
         app.logger().error(category, concat("Could not write screenshot to ", options_.screenshotPath));
         exitCode_ = 1;

@@ -10,6 +10,10 @@ const char* toString(ErrorCode code) noexcept
     case ErrorCode::InvalidState: return "InvalidState";
     case ErrorCode::Unsupported: return "Unsupported";
     case ErrorCode::IoFailure: return "IoFailure";
+    case ErrorCode::NotFound: return "NotFound";
+    case ErrorCode::PermissionDenied: return "PermissionDenied";
+    case ErrorCode::AlreadyExists: return "AlreadyExists";
+    case ErrorCode::InvalidData: return "InvalidData";
     case ErrorCode::PlatformFailure: return "PlatformFailure";
     case ErrorCode::GraphicsFailure: return "GraphicsFailure";
     case ErrorCode::ShaderCompilation: return "ShaderCompilation";

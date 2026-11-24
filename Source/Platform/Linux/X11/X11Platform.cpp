@@ -12,12 +12,39 @@
 
 namespace schuimm::x11 {
 
+namespace {
+
+// Xlib reports protocol errors (BadWindow, BadMatch, ...) asynchronously through one
+// process-wide callback. Its default implementation prints the error and calls exit(), which
+// skips every destructor, so a single bad request would kill the process without releasing the
+// OpenGL context or flushing the log. While an X11Platform exists, errors are logged instead.
+// The pointer is only accessed on the thread that talks to the X server (the main thread).
+Logger* errorLogger = nullptr;
+
+int logProtocolError(Display* display, XErrorEvent* event)
+{
+    char text[256] = {};
+    XGetErrorText(display, event->error_code, text, sizeof(text));
+    if (errorLogger != nullptr) {
+        errorLogger->error("Platform", concat("X protocol error: ", text, " (error ", static_cast<int>(event->error_code),
+                                              ", request ", static_cast<int>(event->request_code), ".",
+                                              static_cast<int>(event->minor_code), ", resource 0x", std::hex,
+                                              event->resourceid, ")"));
+    }
+    return 0;
+}
+
+} // namespace
+
 X11Platform::X11Platform(Logger& logger, Display* display, GLXFBConfig framebufferConfig, XVisualInfo* visual)
     : logger_(logger)
     , display_(display)
     , framebufferConfig_(framebufferConfig)
     , visual_(visual)
 {
+    errorLogger = &logger_;
+    previousErrorHandler_ = XSetErrorHandler(logProtocolError);
+
     atoms_.wmProtocols = XInternAtom(display_, "WM_PROTOCOLS", False);
     atoms_.wmDeleteWindow = XInternAtom(display_, "WM_DELETE_WINDOW", False);
     atoms_.wmState = XInternAtom(display_, "WM_STATE", False);
@@ -45,7 +72,10 @@ X11Platform::X11Platform(Logger& logger, Display* display, GLXFBConfig framebuff
 X11Platform::~X11Platform()
 {
     XFree(visual_);
+    // XCloseDisplay flushes outstanding requests; errors they cause still reach the logger.
     XCloseDisplay(display_);
+    XSetErrorHandler(previousErrorHandler_);
+    errorLogger = nullptr;
 }
 
 void X11Platform::buildKeyMap()

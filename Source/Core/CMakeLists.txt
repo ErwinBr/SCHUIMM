@@ -2,6 +2,7 @@ add_library(schuimm_core STATIC
     Common/Assert.cpp
     Common/Error.cpp
     Common/StringBuilder.cpp
+    Image/Image.cpp
     Input/InputState.cpp
     Input/InputTypes.cpp
     Logging/Logger.cpp

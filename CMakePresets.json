@@ -31,6 +31,7 @@
       "inherits": "base",
       "generator": "Ninja Multi-Config",
       "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
         "CMAKE_CXX_COMPILER": "g++",
         "SCHUIMM_LINUX_BACKEND": "X11"
       },
@@ -40,7 +41,7 @@
       "name": "linux-clang",
       "displayName": "Linux / Clang (Ninja Multi-Config, X11)",
       "inherits": "linux-gcc",
-      "cacheVariables": { "CMAKE_CXX_COMPILER": "clang++" }
+      "cacheVariables": { "CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++" }
     }
   ],
   "buildPresets": [

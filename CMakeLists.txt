@@ -8,7 +8,7 @@ endif()
 project(Schuimm
     VERSION 0.1.0
     DESCRIPTION "Native foundation of a cross-platform 2D adventure game engine"
-    LANGUAGES CXX)
+    LANGUAGES C CXX)
 
 if(APPLE)
     enable_language(OBJCXX)
@@ -36,6 +36,7 @@ if(SCHUIMM_BUILD_TESTS)
     enable_testing()
 endif()
 
+add_subdirectory(ThirdParty)
 add_subdirectory(Source)
 
 if(SCHUIMM_BUILD_DEMO)

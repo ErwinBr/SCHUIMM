@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Core/Common/Geometry.h"
-#include "Graphics/Interface/Image.h"
+#include "Core/Image/Image.h"
 #include "Graphics/Interface/Presentation.h"
 #include "Graphics/Interface/Renderer2D.h"
 

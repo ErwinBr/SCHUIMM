@@ -56,6 +56,7 @@ private:
 
     Logger& logger_;
     Display* display_ = nullptr;
+    XErrorHandler previousErrorHandler_ = nullptr;
     GLXFBConfig framebufferConfig_ = nullptr;
     XVisualInfo* visual_ = nullptr;
     Atoms atoms_;
