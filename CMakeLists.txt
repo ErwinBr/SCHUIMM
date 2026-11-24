@@ -27,6 +27,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 option(SCHUIMM_BUILD_TESTS "Build the automated tests" ON)
 option(SCHUIMM_BUILD_DEMO "Build the EngineDemo application" ON)
+option(SCHUIMM_BUILD_TOOLS "Build the script tools (schuimmc compiler, schuimm-run runner)" ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerWarnings)
@@ -38,6 +39,14 @@ endif()
 
 add_subdirectory(ThirdParty)
 add_subdirectory(Source)
+
+if(SCHUIMM_BUILD_TOOLS OR SCHUIMM_BUILD_DEMO)
+    # The demo compiles its scripts with schuimmc at build time.
+    add_subdirectory(Applications/ScriptCompiler)
+endif()
+if(SCHUIMM_BUILD_TOOLS)
+    add_subdirectory(Applications/ScriptRunner)
+endif()
 
 if(SCHUIMM_BUILD_DEMO)
     add_subdirectory(Applications/EngineDemo)

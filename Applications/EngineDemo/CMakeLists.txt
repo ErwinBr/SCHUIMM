@@ -6,6 +6,7 @@ add_executable(EngineDemo
     main.cpp)
 target_link_libraries(EngineDemo PRIVATE
     Schuimm::Application
+    Schuimm::ScriptRuntime
     Schuimm::AudioMiniaudio
     Schuimm::GraphicsOpenGL
     Schuimm::GraphicsResources
@@ -30,10 +31,20 @@ endif()
 # Deploy the assets where the executable looks for them (defaultAssetRootCandidates): next to
 # the executable, or in the bundle's Resources on macOS. Replaced on every build, so removed
 # or renamed assets do not linger.
+#
+# Scripts are compiled here with schuimmc into Assets/Scripts/*.schb: the demo itself loads only
+# validated bytecode and contains no compiler. LINK_DEPENDS re-runs this step when a script
+# changes (Ninja and Makefile generators; with Visual Studio rebuild EngineDemo after editing).
+set(demo_scripts "${CMAKE_CURRENT_SOURCE_DIR}/Scripts/demo.sch")
+add_dependencies(EngineDemo schuimmc)
+set_property(TARGET EngineDemo APPEND PROPERTY LINK_DEPENDS ${demo_scripts})
 add_custom_command(TARGET EngineDemo POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E rm -rf "${demo_asset_destination}"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/Assets" "${demo_asset_destination}"
-    COMMENT "Copying EngineDemo assets"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${demo_asset_destination}/Scripts"
+    COMMAND "$<TARGET_FILE:schuimmc>" "${CMAKE_CURRENT_SOURCE_DIR}/Scripts/demo.sch" --name Scripts/demo.sch
+            -o "${demo_asset_destination}/Scripts/demo.schb" --verify
+    COMMENT "Copying EngineDemo assets and compiling its scripts"
     VERBATIM)
 
 if(WIN32)

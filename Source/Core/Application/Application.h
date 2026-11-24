@@ -14,6 +14,10 @@
 
 namespace schuimm {
 
+namespace script {
+class ScriptHost;
+}
+
 enum class LifecycleState {
     Created,   // Constructed, run() not called yet.
     Running,   // Updating and rendering every frame.
@@ -40,11 +44,14 @@ struct ApplicationSettings {
 //     input.update()                 (pressed/held/released for this frame)
 //     dt = clock.tick()
 //     listener.onUpdate(dt)
+//     scripts.update(dt)             (if a script host is present: resume due coroutines)
 //     graphics.beginFrame(); listener.onRender(); graphics.endFrame(); graphics.present()
 //     audio.update()                 (if an audio device is present: release finished sounds)
 //
 // All services are injected and must outlive the Application. The audio device is optional
-// (nullptr: no audio); while the application is suspended its output is paused.
+// (nullptr: no audio); while the application is suspended its output is paused. The script host
+// is optional too (nullptr: no scripting); it is updated with the same clamped frame delta as
+// the listener, so script waits use game time and do not advance while suspended.
 class Application {
 public:
     struct Services {
@@ -53,6 +60,7 @@ public:
         Window& window;
         GraphicsDevice& graphics;
         AudioDevice* audio = nullptr;
+        script::ScriptHost* scripts = nullptr;
     };
 
     Application(Services services, ApplicationListener& listener, ApplicationSettings settings = {},
@@ -79,6 +87,8 @@ public:
     [[nodiscard]] GraphicsDevice& graphics() noexcept { return services_.graphics; }
     // nullptr when the application runs without audio.
     [[nodiscard]] AudioDevice* audio() noexcept { return services_.audio; }
+    // nullptr when the application runs without scripting.
+    [[nodiscard]] script::ScriptHost* scripts() noexcept { return services_.scripts; }
     [[nodiscard]] const InputState& input() const noexcept { return input_; }
     [[nodiscard]] const Clock& clock() const noexcept { return clock_; }
 

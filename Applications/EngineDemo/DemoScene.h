@@ -11,6 +11,7 @@
 #include "Resource/ResourceCache.h"
 
 #include <array>
+#include <deque>
 #include <memory>
 #include <string>
 #include <vector>
@@ -47,9 +48,13 @@ public:
     void update(schuimm::Application& app, double deltaSeconds);
     void render(schuimm::Application& app, schuimm::Renderer2D& renderer);
 
-    // Scripted actions (keys or the self-test).
+    // Scripted actions (keys, the self-test or script natives).
     void playChime();
     void toggleTransition();
+
+    // Appends a line to the on-screen script console (print() output of the scripts).
+    void addScriptOutput(std::string line);
+    void setScriptStatus(std::string status) { scriptStatus_ = std::move(status); }
 
     [[nodiscard]] Status status() const;
 
@@ -72,6 +77,7 @@ private:
     void drawWorld(schuimm::Renderer2D& renderer);
     void drawMinimap(schuimm::Renderer2D& renderer);
     void drawUi(schuimm::Application& app, schuimm::Renderer2D& renderer);
+    void drawScriptConsole(schuimm::Renderer2D& renderer, float top);
     void drawPanel(schuimm::Renderer2D& renderer, const schuimm::RectF& rect, int layer);
 
     schuimm::Renderer2D& renderer_;
@@ -125,6 +131,8 @@ private:
     bool showHelp_ = true;
     std::string statusLine_;
     std::string helpText_;
+    std::deque<std::string> scriptLines_;
+    std::string scriptStatus_;
 };
 
 } // namespace demo

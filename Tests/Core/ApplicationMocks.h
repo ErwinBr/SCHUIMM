@@ -174,6 +174,7 @@ struct ApplicationFixture {
     RecordingListener listener;
     std::chrono::nanoseconds now{std::chrono::seconds(1)};
     ApplicationSettings settings;
+    script::ScriptHost* scripts = nullptr;
 
     // Every pump advances time by one 60 Hz frame unless the script changes `now`.
     std::unique_ptr<Application> makeApplication()
@@ -185,7 +186,7 @@ struct ApplicationFixture {
                 userScript(pump);
             }
         };
-        return std::make_unique<Application>(Application::Services{logger, platform, window, graphics}, listener,
+        return std::make_unique<Application>(Application::Services{logger, platform, window, graphics, nullptr, scripts}, listener,
                                              settings, [this] { return now; });
     }
 };

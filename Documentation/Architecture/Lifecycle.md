@@ -5,7 +5,7 @@
 ```text
 Logger  →  AssetLocator (explicit root, or next to the executable)
         →  Platform (createNativePlatform)  →  Window  →  OpenGLSurface
-        →  GraphicsDevice (takes the surface)  →  AudioDevice (optional)
+        →  GraphicsDevice (takes the surface)  →  AudioDevice (optional)  →  ScriptHost (optional)
         →  ApplicationListener (game)  →  Application
 run():  onInitialize loads the scene (caches, textures, fonts, render targets, sounds)
         onShutdown releases them while the devices are still alive
@@ -58,6 +58,7 @@ if (running) {
     input.update();               // pressed/held/released for this frame
     const double dt = clock.tick();
     listener.onUpdate(app, dt);
+    if (scripts) scripts->update(dt); // resume due script coroutines (cooperative, never blocks)
     if (framebuffer not empty) {
         graphics.beginFrame();
         listener.onRender(app, graphics.renderer());
@@ -86,6 +87,15 @@ device because the device owns the context.
 (0.25 s), and keeps rolling statistics (average/min/max frame time and FPS over 120 frames,
 computed from the unclamped measurements). The clamp protects the simulation against stalls
 the loop cannot see: debugger breaks, drags on platforms without a refresh callback, system sleep.
+
+## Scripts
+
+The optional `ScriptHost` service is updated once per frame, right after `onUpdate`, with the
+same clamped delta, so script `wait()`s run on game time. While the application is suspended
+nothing is updated, and the first frame after a resume has a delta of 0, so waits pause with the
+game. The listener registers its natives and starts coroutines in `onInitialize`, and stops them
+in `onShutdown` (natives usually refer to listener-owned objects). See
+[Runtime.md](../Scripting/Runtime.md#scripthost-and-the-game-loop).
 
 ## Modal loops and live resize
 

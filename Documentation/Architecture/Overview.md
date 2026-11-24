@@ -16,8 +16,15 @@ A small, native, testable engine core built from one source tree on Windows, mac
 * audio playback;
 * an interactive demo scene that uses all of them.
 
-Later milestones (scripting, adventure systems, editor) build on the interfaces described here,
-never on native APIs.
+**Milestone 3** adds scripting ([Scripting/README.md](../Scripting/README.md)):
+* a statically typed, Python-inspired script language with a standalone compiler (lexer, parser,
+  type checker, IR, optimizer);
+* a platform-independent, validated bytecode format;
+* a register VM with native function registration;
+* cooperative coroutines (wait, yield, instruction budgets) driven by the game loop.
+
+Later milestones (adventure systems, editor) build on the interfaces described here, never on
+native APIs.
 
 ## Project structure
 
@@ -37,10 +44,15 @@ never on native APIs.
 | `Source/GraphicsResources` | `schuimm_graphics_resources` | `TextureCache`, `Font`: assets → GPU resources through `Renderer2D` ([Text.md](Text.md)) |
 | `Source/Audio` | `schuimm_audio` | `AudioDevice`, `Sound`, `Mixer`: playback without an audio API ([Audio.md](Audio.md)) |
 | `Source/Audio/Miniaudio` | `schuimm_audio_miniaudio` | audio output through miniaudio |
+| `Source/Script/Bytecode` | `schuimm_script_bytecode` | bytecode `Module`, opcodes, shared arithmetic semantics, reader/validator, writer, disassembler ([Bytecode.md](../Scripting/Bytecode.md)) |
+| `Source/Script/Compiler` | `schuimm_script_compiler` | lexer, parser, type checker, IR, optimizer, code generator ([Compiler.md](../Scripting/Compiler.md)); tools and tests only |
+| `Source/Script/Runtime` | `schuimm_script_runtime` | `Value`, `Program`, `NativeRegistry`, VM, `ScriptScheduler`, `ScriptHost` ([Runtime.md](../Scripting/Runtime.md)) |
 | `Source/Core/Application` | `schuimm_application` | `Application`, `ApplicationListener`, lifecycle |
 | `Source/Platform/<OS>` | `schuimm_platform` | exactly one native backend, chosen at configure time |
 | `Source/Graphics/OpenGL` | `schuimm_graphics_opengl` | OpenGL 3.3 core `GraphicsDevice`, batched `Renderer2D`, render targets |
-| `Applications/EngineDemo` | `EngineDemo` | composition root, demo scene and assets, self-test |
+| `Applications/EngineDemo` | `EngineDemo` | composition root, demo scene and assets, demo scripts, self-test |
+| `Applications/ScriptCompiler` | `schuimmc` | command-line script compiler with debug dumps |
+| `Applications/ScriptRunner` | `schuimm-run` | headless bytecode runner (runtime only) |
 | `ThirdParty` | `schuimm_zlib`, `schuimm_png`, `schuimm_freetype`, `schuimm_miniaudio` | vendored C libraries, each used privately by one engine library ([README](../../ThirdParty/README.md)) |
 
 Two folders were added to the structure requested for the milestone:
@@ -55,6 +67,9 @@ on the platform, graphics and audio *interfaces*, which in turn depend on `schui
 ## Dependency graph
 
 ```text
+   schuimm_script_compiler ──► schuimm_script_bytecode ◄── schuimm_script_runtime ◄── schuimm_application
+                                         │                          (optional ScriptHost service)
+                                         ▼
                            schuimm_core (Common, Image, Audio data, Text, Logging, Timing, Input)
             ▲                  ▲                   ▲                     ▲
  platform_interface     schuimm_graphics     schuimm_audio      schuimm_filesystem (POSIX | Win32)
@@ -71,6 +86,8 @@ on the platform, graphics and audio *interfaces*, which in turn depend on `schui
 ```
 
 * The resource layer depends neither on windowing, graphics nor audio.
+* The script libraries depend on `schuimm_core` only. The compiler is used by the `schuimmc`
+  tool and the tests; the game links the runtime and loads precompiled bytecode.
 * The graphics and audio layers do not depend on the resource layer or on each other. They meet
   the resource layer only in Core's data types (`Image`, `SoundData`), and in
   `schuimm_graphics_resources`, the one bridge that turns image and font assets into GPU
@@ -142,7 +159,8 @@ Programming errors (violated invariants) use `SCHUIMM_ASSERT` (Debug builds) or 
 
 ## Threading
 
-Engine code runs on the main thread. Window creation, event processing, resource loading and
+Engine code runs on the main thread. Script coroutines are not threads: they run cooperatively
+on the main thread inside `ScriptHost::update`. Window creation, event processing, resource loading and
 every OpenGL call happen there, and the main thread also owns the GL context (made current once
 at creation and again before teardown).
 
@@ -168,6 +186,11 @@ that could overflow), never through locks (see [Audio.md](Audio.md#threading-mod
     [KnownLimitations.md](KnownLimitations.md)).
 * **Paths** are UTF-8 strings with `/` separators throughout the engine. They are converted to
   UTF-16 and `\` only inside the Win32 file system implementation.
+* **Script runtime and compiler on 10.13:** no `std::filesystem`, `std::format` or floating-point
+  `std::to_chars`/`from_chars` (macOS 13.3); float text uses streams with the classic locale.
+  Besides the arm64 CI builds, an x86_64 build with deployment target 10.13 (where the
+  availability errors check against 10.13 rather than 11) builds cleanly and its unit tests pass
+  under Rosetta; see [KnownLimitations.md](KnownLimitations.md).
 * **Windows 7 target:** `_WIN32_WINNT=0x0601`. Newer APIs (`SetProcessDpiAwarenessContext`,
   `GetDpiForWindow`, `SetProcessDpiAwareness`) are resolved at run time with fallbacks.
 * **Units:** window sizes and mouse positions are *logical* units (points on macOS, 96-DPI units

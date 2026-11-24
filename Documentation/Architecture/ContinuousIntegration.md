@@ -60,6 +60,10 @@ Both jobs build the integration tests but do not run them. A step writes the rea
 of tests that were not run into the job summary, so the gap is visible rather than silent. On
 those platforms the integration tests are run by hand (see [ManualTesting.md](ManualTesting.md)).
 
+The scripting tests (`ScriptTests` and the `schuimmc`/`schuimm-run` command-line tests) are
+`unit` tests: they need no display or device and run on every job, so the compiler, bytecode
+format and VM are built and tested with MSVC, Apple Clang, GCC and Clang in Debug and Release.
+
 The tests run through [`.github/scripts/run-tests.sh`](../../.github/scripts/run-tests.sh), which:
 * lists the CTest tests with the label (`ctest -N`);
 * runs them with `--output-on-failure --verbose`, so every test case's `[ RUN ]` / `[ OK ]` /

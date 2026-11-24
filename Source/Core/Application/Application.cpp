@@ -2,6 +2,7 @@
 
 #include "Core/Common/Assert.h"
 #include "Core/Common/StringBuilder.h"
+#include "Script/Runtime/ScriptHost.h"
 
 #include <type_traits>
 
@@ -186,6 +187,10 @@ void Application::updateAndRender()
     input_.update();
     const double deltaSeconds = clock_.tick();
     listener_.onUpdate(*this, deltaSeconds);
+    if (services_.scripts != nullptr && state_ == LifecycleState::Running) {
+        // Cooperative: each coroutine runs until it waits, yields or exhausts its budget.
+        services_.scripts->update(deltaSeconds);
+    }
     if (state_ != LifecycleState::Running) {
         return; // The listener requested quit (or the state changed) during update.
     }

@@ -475,13 +475,13 @@ void DemoScene::drawUi(Application& app, Renderer2D& renderer)
 
     if (showHelp_) {
         // The panel is sized from the measured text.
-        float textWidth = measureText(*titleFont_, "SCHUIMM · Milestone 2").x;
+        float textWidth = measureText(*titleFont_, "SCHUIMM · Milestone 3").x;
         for (const char* line : helpLines) {
             textWidth = std::max(textWidth, measureText(*uiFont_, line).x);
         }
         const float lineAdvance = uiFont_->lineMetrics().lineHeight;
         drawPanel(renderer, {6, 6, textWidth + 22.0f, 36.0f + lineAdvance * static_cast<float>(std::size(helpLines))}, 0);
-        drawText(renderer, *titleFont_, "SCHUIMM · Milestone 2", {16, 10}, {Color{1.0f, 0.85f, 0.45f, 1.0f}, TextAlign::Left, 1});
+        drawText(renderer, *titleFont_, "SCHUIMM · Milestone 3", {16, 10}, {Color{1.0f, 0.85f, 0.45f, 1.0f}, TextAlign::Left, 1});
         drawText(renderer, *uiFont_, std::string_view(helpText_), {16, 38}, text);
     }
 
@@ -492,6 +492,8 @@ void DemoScene::drawUi(Application& app, Renderer2D& renderer)
     drawText(renderer, *uiFont_, "Minimap", {minimap.x + minimap.width * 0.5f, minimap.y + minimap.height + 4.0f},
              {Color{1, 1, 1, 0.85f}, TextAlign::Center, 1});
 
+    drawScriptConsole(renderer, minimap.y + minimap.height + 22.0f);
+
     const float lineAdvance = uiFont_->lineMetrics().lineHeight;
     const float statusTop = height - 10.0f - lineAdvance * 3.0f;
     drawPanel(renderer, {6, statusTop - 4.0f, width - 12.0f, lineAdvance * 3.0f + 8.0f}, 0);
@@ -501,6 +503,32 @@ void DemoScene::drawUi(Application& app, Renderer2D& renderer)
     if (transition_ > 0.0f) {
         drawText(renderer, *titleFont_, "Pixel transition", {width * 0.5f, height * 0.5f - 12.0f},
                  {Color{1, 1, 1, transition_}, TextAlign::Center, 2});
+    }
+}
+
+void DemoScene::addScriptOutput(std::string line)
+{
+    constexpr std::size_t maxLines = 7;
+    scriptLines_.push_back(std::move(line));
+    while (scriptLines_.size() > maxLines) {
+        scriptLines_.pop_front();
+    }
+}
+
+void DemoScene::drawScriptConsole(Renderer2D& renderer, float top)
+{
+    const float width = static_cast<float>(renderer.targetSize().width);
+    const float lineAdvance = uiFont_->lineMetrics().lineHeight;
+    constexpr float panelWidth = 200.0f;
+    const float left = width - panelWidth - 6.0f;
+    const auto lines = static_cast<float>(scriptLines_.size() + 1);
+    drawPanel(renderer, {left, top, panelWidth, lineAdvance * lines + 10.0f}, 0);
+    drawText(renderer, *uiFont_, scriptStatus_.empty() ? std::string_view("Scripts") : std::string_view(scriptStatus_),
+             {left + 8.0f, top + 4.0f}, {Color{1.0f, 0.85f, 0.45f, 1.0f}, TextAlign::Left, 1});
+    float y = top + 4.0f + lineAdvance;
+    for (const std::string& line : scriptLines_) {
+        drawText(renderer, *uiFont_, line, {left + 8.0f, y}, {Color{0.85f, 1.0f, 0.85f, 1.0f}, TextAlign::Left, 1});
+        y += lineAdvance;
     }
 }
 

@@ -1,0 +1,87 @@
+#pragma once
+
+#include "Script/Bytecode/ScriptType.h"
+
+#include <cstdint>
+#include <string>
+#include <string_view>
+
+namespace schuimm::script {
+
+// Immutable runtime string with an intrusive, non-atomic reference count. Strings are created
+// by the VM (concatenation, str()) and by Program for constants; a string is freed when its last
+// Value is destroyed. Strings reference nothing, so cycles (and a garbage collector) are
+// impossible. All script execution happens on one thread (the game thread); string Values must
+// not be shared across threads.
+class StringObject {
+public:
+    [[nodiscard]] static StringObject* create(std::string text);
+
+    [[nodiscard]] std::string_view view() const noexcept { return text_; }
+    [[nodiscard]] const std::string& text() const noexcept { return text_; }
+    [[nodiscard]] std::uint32_t referenceCount() const noexcept { return references_; }
+
+    void retain() noexcept { ++references_; }
+    void release() noexcept;
+
+    // Live string objects in the process (single-threaded use): for leak checks in tests.
+    [[nodiscard]] static std::int64_t liveCount() noexcept;
+
+private:
+    explicit StringObject(std::string text);
+    ~StringObject();
+
+    std::string text_;
+    std::uint32_t references_ = 1;
+};
+
+// A register value: a 16-byte tagged union. Copying a string Value adds a reference.
+class Value {
+public:
+    Value() noexcept = default;
+    ~Value() { reset(); }
+    Value(const Value& other) noexcept;
+    Value(Value&& other) noexcept;
+    Value& operator=(const Value& other) noexcept;
+    Value& operator=(Value&& other) noexcept;
+
+    [[nodiscard]] static Value none() noexcept { return {}; }
+    [[nodiscard]] static Value fromBool(bool value) noexcept;
+    [[nodiscard]] static Value fromInt(std::int64_t value) noexcept;
+    [[nodiscard]] static Value fromFloat(double value) noexcept;
+    [[nodiscard]] static Value fromString(std::string text);
+    // Takes over one reference of `string`.
+    [[nodiscard]] static Value adoptString(StringObject* string) noexcept;
+
+    [[nodiscard]] ScriptType type() const noexcept { return type_; }
+    [[nodiscard]] bool is(ScriptType type) const noexcept { return type_ == type; }
+    [[nodiscard]] bool asBool() const noexcept { return bool_; }
+    [[nodiscard]] std::int64_t asInt() const noexcept { return int_; }
+    [[nodiscard]] double asFloat() const noexcept { return float_; }
+    [[nodiscard]] std::string_view asString() const noexcept { return string_->view(); }
+    [[nodiscard]] const StringObject* stringObject() const noexcept { return type_ == ScriptType::String ? string_ : nullptr; }
+
+    // Whether the value fits a declared parameter or return type (Any: anything but None).
+    [[nodiscard]] bool matches(ScriptType declared) const noexcept
+    {
+        return declared == ScriptType::Any ? type_ != ScriptType::None : type_ == declared;
+    }
+
+    void reset() noexcept;
+
+private:
+    void copyPayload(const Value& other) noexcept;
+
+    ScriptType type_ = ScriptType::None;
+    union {
+        bool bool_;
+        std::int64_t int_ = 0;
+        double float_;
+        StringObject* string_;
+    };
+};
+
+// The text print() and str() produce: 42, 1.5, True, the string itself, None.
+[[nodiscard]] std::string toDisplayString(const Value& value);
+
+} // namespace schuimm::script

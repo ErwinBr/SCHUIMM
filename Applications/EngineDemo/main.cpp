@@ -14,6 +14,7 @@
 #include "Platform/FileSystem/FileSystem.h"
 #include "Platform/NativePlatform.h"
 #include "Resource/AssetLocator.h"
+#include "Script/Runtime/ScriptHost.h"
 
 #include <cstdio>
 
@@ -112,10 +113,15 @@ int main(int argc, char** argv)
         }
     }
 
+    // Scripting runtime: the listener registers its natives and starts the precompiled scripts;
+    // the Application updates it every frame. It outlives the listener, which stops all scripts
+    // in onShutdown().
+    script::ScriptHost scripts(logger);
+
     int exitCode = 0;
     {
         demo::DemoListener listener(*options, *assets);
-        Application application({logger, **platform, **window, **graphics, audio.get()}, listener);
+        Application application({logger, **platform, **window, **graphics, audio.get(), &scripts}, listener);
         if (auto status = application.run(); !status) {
             logger.error("Demo", concat("Application failed: ", describe(status.error())));
             exitCode = 1;

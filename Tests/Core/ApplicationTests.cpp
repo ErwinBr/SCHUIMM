@@ -264,3 +264,78 @@ SCHUIMM_TEST(Application_StateNames)
     CHECK_EQ(std::string(toString(LifecycleState::Suspended)), std::string("Suspended"));
     CHECK_EQ(std::string(toString(LifecycleState::Stopped)), std::string("Stopped"));
 }
+
+// --- Script host service ------------------------------------------------------------------------
+
+#include "Script/Runtime/ScriptHost.h"
+
+namespace {
+
+// main(): while True: tick(); yield()   (hand-assembled, so CoreTests needs no compiler)
+std::shared_ptr<const script::Program> tickProgram(script::ScriptHost& host, int& ticks)
+{
+    using namespace script;
+    REQUIRE(host.natives()
+                .add({"tick", {}, ScriptType::None,
+                      [&ticks](NativeContext&, std::span<const Value>) {
+                          ++ticks;
+                          return NativeResult::returnValue();
+                      },
+                      {}})
+                .has_value());
+    Module module;
+    module.strings = {"test.sch", "main", "tick", "yield"};
+    module.sourceNameIndex = 0;
+    module.imports = {{2, {}, ScriptType::None}, {3, {}, ScriptType::None}};
+    Function main;
+    main.nameIndex = 1;
+    main.code = {{Opcode::CallNative, noRegister, 0, 0}, {Opcode::CallNative, noRegister, 1, 0}, {Opcode::Jump, 0, 0, 0}};
+    main.positions = {{2, 2}, {3, 2}, {1, 1}};
+    module.functions.push_back(main);
+    auto program = Program::link(std::move(module), host.natives(), "test.sch");
+    REQUIRE(program.has_value());
+    return *program;
+}
+
+} // namespace
+
+SCHUIMM_TEST(Application_UpdatesScriptsOncePerFrameWithTheFrameDelta)
+{
+    ApplicationFixture f;
+    script::ScriptHost host(f.logger);
+    int ticks = 0;
+    auto program = tickProgram(host, ticks);
+    REQUIRE(host.start(program).has_value());
+    f.scripts = &host;
+    f.listener.quitAfterUpdates = 4;
+    auto app = f.makeApplication();
+    CHECK(app->scripts() == &host);
+    REQUIRE(app->run().has_value());
+    // Updates 1-3 run the scripts; quit is requested during the 4th listener update.
+    CHECK_EQ(ticks, 3);
+    double total = 0.0;
+    for (std::size_t i = 0; i + 1 < f.listener.deltas.size(); ++i) {
+        total += f.listener.deltas[i];
+    }
+    CHECK_NEAR(static_cast<double>(host.scheduler().timeNanoseconds()) / 1e9, total, 1e-6);
+    CHECK_EQ(host.activeCount(), std::size_t{1}); // Still looping: the game loop was never blocked.
+}
+
+SCHUIMM_TEST(Application_SuspendedApplicationDoesNotRunScripts)
+{
+    ApplicationFixture f;
+    script::ScriptHost host(f.logger);
+    int ticks = 0;
+    auto program = tickProgram(host, ticks);
+    REQUIRE(host.start(program).has_value());
+    f.scripts = &host;
+    f.platform.script = [&](int pump) {
+        if (pump == 1) f.window.push(MinimizedChangedEvent{true});
+        if (pump == 4) f.window.push(MinimizedChangedEvent{false});
+    };
+    f.listener.quitAfterUpdates = 3;
+    auto app = f.makeApplication();
+    REQUIRE(app->run().has_value());
+    CHECK_EQ(f.listener.updates, 3);
+    CHECK_EQ(ticks, 2); // Frames 1 and the first after resume; the quitting frame skips scripts.
+}

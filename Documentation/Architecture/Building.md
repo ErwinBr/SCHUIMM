@@ -28,11 +28,13 @@ The same commands run in CI on every push; see
 
 | Executable | Label | Covers |
 |---|---|---|
-| `CoreTests` | `unit` | application lifecycle (mock platform, fake renderer), clock, input state, logger, presentation math, `Image`, `Transform2D`, UTF-8, errors |
+| `CoreTests` | `unit` | application lifecycle (mock platform, fake renderer, script host service), clock, input state, logger, presentation math, `Image`, `Transform2D`, UTF-8, errors |
 | `PlatformTests` | `unit` | native key-code tables of the configured backend |
 | `FileSystemTests` | `unit` | path manipulation (both path styles) and file operations on the real file system, below the build tree |
 | `ResourceTests` | `unit` | asset paths, asset root, resource cache, PNG and WAV decoding, font loading and rasterisation (assets in `Tests/Assets` and the demo font) |
 | `GraphicsTests` | `unit` | camera, sprite batcher (vertices, slots, splitting, ordering, memory reuse), shelf packer, text layout, `Font` atlas, `TextureCache`, all on a fake renderer |
+| `ScriptTests` | `unit` | script lexer, parser, type checker, IR, optimizer, bytecode writer/reader/validator (incl. corruption sweep), VM, natives, scheduler, end-to-end (examples and demo scripts, optimized vs. unoptimized) |
+| `ScriptCompilerCli`, `ScriptRunnerCli`, `ScriptCompilerCliRejectsErrors` | `unit` | `schuimmc` compiles an example, `schuimm-run` runs the bytecode, invalid source fails |
 | `AudioTests` | `unit` | `AudioDevice` and mixer through a manual backend (state, volume, looping, voice pool, ownership), and the miniaudio device on its null backend |
 | `LifecycleTests` | `integration` | real platform/window/OpenGL context/graphics device created, used, destroyed and re-created |
 | `RenderingTests` | `integration` | pixel checks of the presented frame: texture upload and premultiplied blending, filtering and wrapping, flips/rotation/view, multi-texture batches and order, render targets (incl. nested), dynamic texture updates, invalid sizes, resource counts |
@@ -115,7 +117,8 @@ CMake finds these with `find_package(X11)` (requires `X11_Xkb_FOUND`) and
 | Option | Default | Effect |
 |---|---|---|
 | `SCHUIMM_BUILD_TESTS` | `ON` | build tests and register them with CTest |
-| `SCHUIMM_BUILD_DEMO` | `ON` | build EngineDemo (and the integration smoke test) |
+| `SCHUIMM_BUILD_DEMO` | `ON` | build EngineDemo (and the integration smoke test); also builds `schuimmc`, which compiles the demo scripts |
+| `SCHUIMM_BUILD_TOOLS` | `ON` | build the script tools `schuimmc` (compiler) and `schuimm-run` (headless runner) |
 | `SCHUIMM_WARNINGS_AS_ERRORS` | `ON` | `/WX` or `-Werror` |
 | `SCHUIMM_LINUX_BACKEND` | `X11` | Linux windowing backend (only X11 exists so far) |
 

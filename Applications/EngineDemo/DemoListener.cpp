@@ -35,6 +35,11 @@ Status DemoListener::onInitialize(Application& app)
         return std::unexpected(scene.error());
     }
     scene_ = std::move(*scene);
+    if (script::ScriptHost* scripts = app.scripts()) {
+        if (auto status = startScripts(app, *scripts); !status) {
+            return status;
+        }
+    }
     if (options_.selfTest) {
         app.logger().info(category, "Self-test enabled");
     }
@@ -52,6 +57,11 @@ void DemoListener::onUpdate(Application& app, double deltaSeconds)
     handleInput(app);
     logInputEdges(app);
     scene_->update(app, deltaSeconds);
+    if (const script::ScriptHost* scripts = app.scripts(); scripts != nullptr && scriptsStarted_) {
+        const auto& stats = scripts->statistics();
+        scene_->setScriptStatus(concat("Scripts: ", scripts->activeCount(), " running, ", stats.finished, " finished",
+                                       stats.failed > 0 ? concat(", ", stats.failed, " failed") : std::string()));
+    }
 
     titleTimer_ += deltaSeconds;
     if (titleTimer_ >= 0.5) {
@@ -174,6 +184,11 @@ void DemoListener::onResume(Application& app)
 
 void DemoListener::onShutdown(Application& app)
 {
+    // Script natives and the output callback refer to this listener and its scene.
+    if (script::ScriptHost* scripts = app.scripts()) {
+        scripts->stopAll();
+        scripts->setOutputCallback({});
+    }
     // GPU resources (and the scene's sounds) must be released while the devices are alive.
     scene_.reset();
     if (options_.selfTest) {
@@ -203,6 +218,69 @@ void DemoListener::saveCapturedFrame(Application& app)
         app.logger().error(category, concat("Could not write screenshot to ", options_.screenshotPath));
         exitCode_ = 1;
     }
+}
+
+// --- Scripts ---------------------------------------------------------------------------------
+
+Status DemoListener::startScripts(Application& app, script::ScriptHost& scripts)
+{
+    using namespace schuimm::script;
+    // A game function exposed to scripts. The VM only knows its signature.
+    if (auto status = scripts.natives().add({"play_chime", {}, ScriptType::None,
+                                             [this](NativeContext&, std::span<const Value>) {
+                                                 if (scene_) {
+                                                     scene_->playChime();
+                                                 }
+                                                 return NativeResult::returnValue();
+                                             },
+                                             "Plays the demo's chime sound effect."});
+        !status) {
+        return status;
+    }
+    scripts.setOutputCallback([this](std::string_view, std::string_view text) {
+        scriptOutput_.emplace_back(text);
+        if (scene_) {
+            scene_->addScriptOutput(std::string(text));
+        }
+    });
+
+    // Only precompiled bytecode is loaded: the game contains no compiler.
+    auto path = AssetPath::parse("Scripts/demo.schb");
+    if (!path) {
+        return std::unexpected(path.error());
+    }
+    auto bytes = assets_.readBytes(*path);
+    if (!bytes) {
+        return std::unexpected(bytes.error());
+    }
+    auto program = scripts.load(*bytes, "Scripts/demo.sch");
+    if (!program) {
+        return std::unexpected(program.error());
+    }
+    // Two coroutines run concurrently; both wait without blocking the game loop.
+    for (const char* entry : {"main", "ticker"}) {
+        if (auto handle = scripts.start(*program, entry); !handle) {
+            return std::unexpected(handle.error());
+        }
+    }
+    scriptsStarted_ = true;
+    app.logger().info(category, "Scripts started: main and ticker (Scripts/demo.schb)");
+    return {};
+}
+
+void DemoListener::checkScripts(Application& app)
+{
+    const script::ScriptHost* scripts = app.scripts();
+    if (scripts == nullptr) {
+        app.logger().warning("SelfTest", "No script host; scripting not exercised");
+        return;
+    }
+    const auto& stats = scripts->statistics();
+    const bool expectedOutput = std::find(scriptOutput_.begin(), scriptOutput_.end(), "Finished!") != scriptOutput_.end() &&
+                                std::find(scriptOutput_.begin(), scriptOutput_.end(), "ticker: done") != scriptOutput_.end();
+    recordResult(app, "scripts", scriptsStarted_ && stats.finished == 2 && stats.failed == 0 && expectedOutput,
+                 concat(stats.finished, " coroutines finished, ", stats.failed, " failed, ", scriptOutput_.size(),
+                        " lines printed"));
 }
 
 // --- Scripted self-test ----------------------------------------------------------------------
@@ -384,6 +462,11 @@ void DemoListener::runSelfTest(Application& app)
         break;
 
     case SelfTestStep::Done:
+        // The scripts run concurrently with the whole test; give them time to finish.
+        if (app.scripts() != nullptr && app.scripts()->activeCount() > 0 && elapsed < 10.0) {
+            break;
+        }
+        checkScripts(app);
         app.requestQuit();
         break;
     }

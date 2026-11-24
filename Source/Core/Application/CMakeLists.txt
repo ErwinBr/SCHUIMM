@@ -1,6 +1,7 @@
 # Application lifecycle and main loop. Talks to platform and graphics only through their interfaces.
+# The script runtime is an optional service (platform independent; no compiler).
 add_library(schuimm_application STATIC Application.cpp)
 add_library(Schuimm::Application ALIAS schuimm_application)
 target_link_libraries(schuimm_application PUBLIC
-    Schuimm::Core Schuimm::PlatformInterface Schuimm::Graphics Schuimm::Audio)
+    Schuimm::Core Schuimm::PlatformInterface Schuimm::Graphics Schuimm::Audio Schuimm::ScriptRuntime)
 schuimm_configure_target(schuimm_application)

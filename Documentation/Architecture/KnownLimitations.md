@@ -83,6 +83,30 @@ Deliberate scope limits (as of Milestone 2) and known platform caveats.
   there is no memory budget or eviction.
 * No application packaging (installers, icons, Info.plist customisation beyond the bundle ID).
 
+## Scripting
+
+Language scope (version 1.0, see [Language.md](../Scripting/Language.md#11-limitations-version-10)):
+* no `break`/`continue`, augmented assignment, lists, dictionaries, structures, modules/imports,
+  global variables or exception handling;
+* one source file is one program; natives are linked by exact signature.
+
+Runtime:
+* Coroutine state cannot be saved or restored (no save games of running scripts yet).
+* No hot reloading: a changed script needs a rebuild (the demo recompiles at build time; with
+  the Visual Studio generator, rebuild EngineDemo after editing a script).
+* Waits use the engine's clamped frame delta, so after a stall longer than 0.25 s waits run
+  late by the clamped amount (as all game time does).
+* The VM checks register types per instruction instead of verifying them at load time; this
+  costs a little speed but keeps execution memory-safe for any bytecode.
+* String values use a non-atomic reference count: scripts and their values belong to the game
+  thread.
+
+macOS 10.13: the scripting code avoids APIs newer than 10.13 and builds with
+`-Werror=unguarded-availability-new`. Because Apple Silicon builds are checked against macOS 11
+only, it was additionally built for x86_64 with deployment target 10.13 (binaries carry
+`LC_VERSION_MIN_MACOSX 10.13`), and the unit tests passed under Rosetta on macOS 26. It has not
+been run on a real 10.13 machine.
+
 ## Platform caveats
 
 **All**

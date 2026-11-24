@@ -20,7 +20,15 @@ Milestone 2 added graphics and audio:
 * audio playback (WAV, mixing, volume, looping) through miniaudio's device layer;
 * an interactive demo scene that uses all of it.
 
-Scripting, the adventure systems and the editor come later.
+Milestone 3 added scripting ([Documentation/Scripting](Documentation/Scripting/README.md)):
+* SCHUIMM Script, a statically typed, Python-inspired language for game logic;
+* a standalone compiler (`schuimmc`: lexer, parser, type checker, IR, optimizer) producing
+  platform-independent, validated bytecode;
+* a register VM with native engine functions and cooperative coroutines (`wait`, `yield`,
+  instruction budgets), updated by the game loop;
+* the EngineDemo runs two script coroutines alongside its scene.
+
+The adventure systems and the editor come later.
 
 ## Repository layout
 
@@ -38,10 +46,14 @@ Source/Graphics/Common/             Camera2D, SpriteBatcher, text layout (no gra
 Source/Graphics/OpenGL/             OpenGL 3.3 core backend: batched renderer, render targets, function loader
 Source/GraphicsResources/           TextureCache and Font (glyph atlases): assets -> GPU resources
 Source/Audio/                       AudioDevice, mixer, playback; Miniaudio/ output backend
+Source/Script/                      Scripting: Bytecode/ (format, validation), Compiler/, Runtime/ (VM, scheduler)
 ThirdParty/                         Vendored libpng, zlib, FreeType, miniaudio (sources, licences)
-Applications/EngineDemo/            Demo scene, its assets and asset generator, self-test (composition root)
+Applications/EngineDemo/            Demo scene, its assets, scripts and asset generator, self-test (composition root)
+Applications/ScriptCompiler/        schuimmc, the command-line script compiler
+Applications/ScriptRunner/          schuimm-run, runs compiled scripts headlessly
 Tests/                              Self-contained test harness, unit and integration tests, test assets
 Documentation/Architecture/         Architecture and process documentation
+Documentation/Scripting/            Script language specification, compiler, bytecode, runtime; example scripts
 ```
 
 ## Requirements
@@ -140,7 +152,9 @@ Options:
 * `--assets DIR` (absolute path), `--no-audio`;
 * `--log FILE`, `--verbose`.
 
-See `EngineDemo --help`. The assets are regenerated with
+See `EngineDemo --help`. Scripts: the demo runs `Applications/EngineDemo/Scripts/demo.sch`
+(compiled at build time); to compile and run scripts yourself, see
+[Documentation/Scripting/README.md](Documentation/Scripting/README.md#quick-start). The assets are regenerated with
 `python3 Applications/EngineDemo/Tools/generate_demo_assets.py`; the font is Noto Sans (SIL OFL).
 
 ## Verification status
