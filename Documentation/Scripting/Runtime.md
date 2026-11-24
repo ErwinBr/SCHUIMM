@@ -110,9 +110,16 @@ extern func play_sound(name: string, volume: float)   # in the script
   against the declared return type (a mismatch is a `Native` error).
 * `ScriptType::Any` accepts every value but None (used by `print`).
 * An implementation returns `NativeResult::returnValue(v)`, `waitFor(nanoseconds)`,
-  `yieldNow()` or `error(message)`. The last three suspend or fail the coroutine — this is how
+  `yieldNow()` or `error(message)`. `waitFor` and `yieldNow` suspend the coroutine — this is how
   `wait`/`yield` are implemented, and how future natives such as `wait_until`, `say` or
   `move_character` can suspend until something happens.
+* **Only natives returning None may suspend.** The coroutine resumes *after* the call, so a
+  native with a result would leave its destination register without a value; `waitFor` or
+  `yieldNow` from such a native is a `Native` runtime error ("a native function with a result
+  cannot suspend"). A native that waits and then produces a value (e.g. a dialogue choice) needs
+  a "resume with result" mechanism, which does not exist yet.
+* An exception thrown by an implementation is caught at the call and fails the calling coroutine
+  with a `Native` error ("threw an exception: …"); other coroutines are unaffected.
 * `NativeContext` tells the implementation which coroutine and program call it and the current
   scheduler time.
 * Natives must not call back into the VM. They typically capture engine objects by reference;
@@ -158,6 +165,12 @@ so a stale handle never refers to a new coroutine.
 3. Never blocks: waiting coroutines cost nothing (they are not polled).
 
 Completion, failure, cancellation and budget warnings are reported to an event callback.
+
+**Exceptions.** Native exceptions never leave the VM (see above). The event and trace callbacks
+are host code: an exception from them propagates out of `update()`, but a guard restores the
+scheduler's internal state on the way out, and a coroutine interrupted in the middle of its run
+is marked `Failed` ("Aborted by an exception thrown from a scheduler callback"), so the scheduler
+stays usable.
 
 ### Time
 

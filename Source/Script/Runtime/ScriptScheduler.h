@@ -51,6 +51,9 @@ struct CoroutineEvent {
 //     floating-point error. Negative or non-finite deltas count as 0.
 //   * A coroutine that waits resumes in the first update whose time has reached the deadline,
 //     never in the update in which it started waiting. wait(0) behaves like yield().
+//   * Exceptions: natives that throw fail their coroutine (see runCoroutine). An exception from
+//     the event or trace callback propagates out of update(), but the scheduler stays usable:
+//     the coroutine that was running is marked Failed and update() may be called again.
 //   * Finished, failed and cancelled coroutines release their frames immediately but keep their
 //     state and error until release()/releaseFinished(), so callers can inspect the outcome.
 class ScriptScheduler {
@@ -107,6 +110,10 @@ private:
         std::string program;
         std::string function;
     };
+
+    // Restores updating_/running_ when update() exits, also by an exception from a callback.
+    class UpdateGuard;
+    friend class UpdateGuard;
 
     Slot* find(CoroutineHandle handle);
     const Slot* find(CoroutineHandle handle) const;

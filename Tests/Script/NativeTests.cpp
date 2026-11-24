@@ -1,5 +1,7 @@
 #include "ScriptTestSupport.h"
 
+#include <stdexcept>
+
 using namespace schuimm;
 using namespace schuimm::script;
 using namespace schuimm::script::test;
@@ -132,4 +134,49 @@ SCHUIMM_TEST(Native_NativesCanSuspend)
     const ScriptRun run = runScript("extern func pause(seconds: int)\nfunc main():\n\tpause(2)\n\tprint(\"done\")\n", config, &registry);
     CHECK_EQ(run.joined(), std::string("done\n"));
     CHECK_EQ(run.updates, 5); // t = 0, 0.5, 1.0, 1.5, 2.0
+}
+
+SCHUIMM_TEST(Native_NativesWithResultsCannotSuspend)
+{
+    NativeRegistry registry;
+    REQUIRE(registry
+                .add(native("wait_for_choice", {}, ScriptType::Int,
+                            [](NativeContext&, std::span<const Value>) { return NativeResult::waitFor(1'000'000); }))
+                .has_value());
+    REQUIRE(registry
+                .add(native("yield_flag", {}, ScriptType::Bool,
+                            [](NativeContext&, std::span<const Value>) { return NativeResult::yieldNow(); }))
+                .has_value());
+    const ScriptRun run = runScript("extern func wait_for_choice() -> int\nextern func yield_flag() -> bool\n"
+                                    "func first():\n\tprint(\"a\")\n\tchoice = wait_for_choice()\n\tprint(choice)\n"
+                                    "func second():\n\tflag = yield_flag()\n",
+                                    RunConfig{.entries = {"first", "second"}}, &registry);
+    REQUIRE(run.errors.size() == 2);
+    CHECK(run.errors[0].kind == ScriptErrorKind::Native);
+    CHECK_EQ(run.errors[0].message, std::string("wait_for_choice(): a native function with a result cannot suspend (wait/yield)"));
+    CHECK_EQ(run.errors[0].position.line, std::uint32_t{5});
+    CHECK(run.errors[1].message.find("yield_flag(): a native function with a result cannot suspend") == 0);
+    CHECK_EQ(run.joined(), std::string("a\n")); // The stale destination register is never used.
+}
+
+SCHUIMM_TEST(Native_ExceptionsBecomeNativeErrors)
+{
+    NativeRegistry registry;
+    REQUIRE(registry
+                .add(native("boom", {}, ScriptType::None,
+                            [](NativeContext&, std::span<const Value>) -> NativeResult { throw std::runtime_error("boom"); }))
+                .has_value());
+    REQUIRE(registry
+                .add(native("odd", {}, ScriptType::None, [](NativeContext&, std::span<const Value>) -> NativeResult { throw 42; }))
+                .has_value());
+    const ScriptRun run = runScript("extern func boom()\nextern func odd()\n"
+                                    "func a():\n\tboom()\nfunc b():\n\todd()\n"
+                                    "func c():\n\tfor i in range(3):\n\t\tprint(i)\n\t\tyield()\n",
+                                    RunConfig{.entries = {"a", "b", "c"}}, &registry);
+    REQUIRE(run.errors.size() == 2);
+    CHECK_EQ(run.errors[0].message, std::string("boom(): threw an exception: boom"));
+    CHECK_EQ(run.errors[0].position.line, std::uint32_t{4});
+    CHECK_EQ(run.errors[1].message, std::string("odd(): threw an unknown exception"));
+    CHECK_EQ(run.joined(), std::string("0\n1\n2\n")); // The other coroutine and later updates are unaffected.
+    CHECK_EQ(run.stillActive, std::size_t{0});
 }

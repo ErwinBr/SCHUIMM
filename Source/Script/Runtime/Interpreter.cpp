@@ -4,6 +4,8 @@
 #include "Script/Bytecode/Disassembler.h"
 #include "Script/Bytecode/Semantics.h"
 
+#include <exception>
+
 namespace schuimm::script {
 
 std::string formatTrace(const TraceEvent& event)
@@ -258,7 +260,23 @@ struct Interpreter {
                 for (std::size_t i = 0; i < arguments.size(); ++i) {
                     if (!arguments[i].matches(import.parameters[i])) return typeMismatch();
                 }
-                NativeResult outcome = native.implementation(context, arguments);
+                // Natives are host code: an exception becomes a controlled error of this
+                // coroutine instead of unwinding through the VM and the scheduler.
+                NativeResult outcome;
+                try {
+                    outcome = native.implementation(context, arguments);
+                } catch (const std::exception& exception) {
+                    return fail(ScriptErrorKind::Native, concat(native.name, "(): threw an exception: ", exception.what()));
+                } catch (...) {
+                    return fail(ScriptErrorKind::Native, concat(native.name, "(): threw an unknown exception"));
+                }
+                // Only natives without a result may suspend: the coroutine resumes after the
+                // call, so there would be no value for the destination register.
+                if ((outcome.kind == NativeResult::Kind::Wait || outcome.kind == NativeResult::Kind::Yield) &&
+                    import.returnType != ScriptType::None) {
+                    return fail(ScriptErrorKind::Native,
+                                concat(native.name, "(): a native function with a result cannot suspend (wait/yield)"));
+                }
                 switch (outcome.kind) {
                 case NativeResult::Kind::Return:
                     if (import.returnType != ScriptType::None) {

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 
 using namespace schuimm;
 using namespace schuimm::script;
@@ -323,4 +324,47 @@ SCHUIMM_TEST(Scheduler_ScriptHostLogsAndReleases)
     host.update(1.0);
     CHECK_EQ(host.statistics().finished, std::uint64_t{1});
     CHECK_EQ(host.activeCount(), std::size_t{0});
+}
+
+SCHUIMM_TEST(Scheduler_RecoversWhenACallbackThrows)
+{
+    Fixture f;
+    const auto program = f.load("func main():\n\tprint(\"x\")\n\tyield()\n\tprint(\"y\")\nfunc other():\n\tyield()\n\tprint(\"other\")\n");
+
+    // 1. The trace callback throws while a coroutine is running.
+    const auto traced = f.start(program);
+    const auto bystander = f.start(program, "other");
+    f.scheduler.setTraceCallback([](const TraceEvent&) { throw std::runtime_error("trace failed"); });
+    bool thrown = false;
+    try {
+        f.scheduler.update(0.0);
+    } catch (const std::runtime_error&) {
+        thrown = true;
+    }
+    CHECK(thrown); // Host-code exceptions are not swallowed...
+    CHECK(f.scheduler.state(traced) == std::optional<CoroutineState>(CoroutineState::Failed)); // ...nor left Running.
+    REQUIRE(f.scheduler.error(traced) != nullptr);
+    CHECK(f.scheduler.error(traced)->message.find("Aborted by an exception") == 0);
+    f.scheduler.setTraceCallback({});
+    f.scheduler.update(0.0); // The scheduler is usable again (no "re-entrant update" abort).
+    f.scheduler.update(0.0);
+    CHECK(f.scheduler.state(bystander) == std::optional<CoroutineState>(CoroutineState::Finished));
+
+    // 2. The event callback throws after a coroutine finished.
+    const auto finishing = f.start(program, "other");
+    f.scheduler.setEventCallback([](const CoroutineEvent&) { throw std::logic_error("event failed"); });
+    thrown = false;
+    for (int i = 0; i < 3 && !thrown; ++i) {
+        try {
+            f.scheduler.update(0.0);
+        } catch (const std::logic_error&) {
+            thrown = true;
+        }
+    }
+    CHECK(thrown);
+    CHECK(f.scheduler.state(finishing) == std::optional<CoroutineState>(CoroutineState::Finished));
+    f.scheduler.setEventCallback({});
+    f.scheduler.releaseFinished();
+    f.scheduler.clear();
+    CHECK_EQ(f.scheduler.size(), std::size_t{0});
 }

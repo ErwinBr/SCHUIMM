@@ -28,23 +28,34 @@ else()
     set(demo_asset_destination "$<TARGET_FILE_DIR:EngineDemo>/Assets")
 endif()
 
+# Scripts: schuimmc compiles them into the build tree as a declared output, so a changed script
+# *or* a rebuilt compiler regenerates the bytecode. The demo itself loads only validated
+# bytecode and contains no compiler. Per configuration, because the command uses that
+# configuration's schuimmc.
+set(demo_script_source "${CMAKE_CURRENT_SOURCE_DIR}/Scripts/demo.sch")
+set(demo_script_bytecode "${CMAKE_CURRENT_BINARY_DIR}/Scripts/$<CONFIG>/demo.schb")
+add_custom_command(
+    OUTPUT "${demo_script_bytecode}"
+    COMMAND "$<TARGET_FILE:schuimmc>" "${demo_script_source}" --name Scripts/demo.sch
+            -o "${demo_script_bytecode}" --verify
+    DEPENDS "${demo_script_source}" schuimmc
+    COMMENT "Compiling EngineDemo scripts"
+    VERBATIM)
+add_custom_target(EngineDemoScripts DEPENDS "${demo_script_bytecode}")
+add_dependencies(EngineDemo EngineDemoScripts)
+# Relink, and so redeploy below, when the bytecode changes (Ninja and Makefile generators;
+# with Visual Studio rebuild EngineDemo after editing a script).
+set_property(TARGET EngineDemo APPEND PROPERTY LINK_DEPENDS "${demo_script_bytecode}")
+
 # Deploy the assets where the executable looks for them (defaultAssetRootCandidates): next to
 # the executable, or in the bundle's Resources on macOS. Replaced on every build, so removed
-# or renamed assets do not linger.
-#
-# Scripts are compiled here with schuimmc into Assets/Scripts/*.schb: the demo itself loads only
-# validated bytecode and contains no compiler. LINK_DEPENDS re-runs this step when a script
-# changes (Ninja and Makefile generators; with Visual Studio rebuild EngineDemo after editing).
-set(demo_scripts "${CMAKE_CURRENT_SOURCE_DIR}/Scripts/demo.sch")
-add_dependencies(EngineDemo schuimmc)
-set_property(TARGET EngineDemo APPEND PROPERTY LINK_DEPENDS ${demo_scripts})
+# or renamed assets do not linger. The compiled scripts go to Assets/Scripts.
 add_custom_command(TARGET EngineDemo POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E rm -rf "${demo_asset_destination}"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/Assets" "${demo_asset_destination}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${demo_asset_destination}/Scripts"
-    COMMAND "$<TARGET_FILE:schuimmc>" "${CMAKE_CURRENT_SOURCE_DIR}/Scripts/demo.sch" --name Scripts/demo.sch
-            -o "${demo_asset_destination}/Scripts/demo.schb" --verify
-    COMMENT "Copying EngineDemo assets and compiling its scripts"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${demo_script_bytecode}" "${demo_asset_destination}/Scripts/demo.schb"
+    COMMENT "Deploying EngineDemo assets and compiled scripts"
     VERBATIM)
 
 if(WIN32)

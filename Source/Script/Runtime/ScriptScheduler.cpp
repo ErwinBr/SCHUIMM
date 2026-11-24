@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <limits>
 
 namespace schuimm::script {
@@ -15,6 +16,46 @@ std::optional<std::int64_t> secondsToNanoseconds(double seconds) noexcept
     }
     return static_cast<std::int64_t>(std::llround(seconds * 1e9));
 }
+
+class ScriptScheduler::UpdateGuard {
+public:
+    explicit UpdateGuard(ScriptScheduler& scheduler) noexcept
+        : scheduler_(scheduler)
+        , exceptions_(std::uncaught_exceptions())
+    {
+        scheduler_.updating_ = true;
+    }
+
+    UpdateGuard(const UpdateGuard&) = delete;
+    UpdateGuard& operator=(const UpdateGuard&) = delete;
+
+    ~UpdateGuard()
+    {
+        const std::uint32_t running = scheduler_.running_;
+        if (std::uncaught_exceptions() > exceptions_ && running < scheduler_.slots_.size()) {
+            Slot& slot = scheduler_.slots_[running];
+            if (slot.used && slot.state == CoroutineState::Running) {
+                // Unwinding from a callback in the middle of this coroutine's run: its state is
+                // unknown, so it fails. No event is emitted (a throwing callback must not run
+                // again while unwinding).
+                ScriptError error;
+                error.kind = ScriptErrorKind::Runtime;
+                error.message = "Aborted by an exception thrown from a scheduler callback";
+                error.script = slot.program;
+                error.function = slot.function;
+                slot.error = std::move(error);
+                slot.state = CoroutineState::Failed;
+                slot.coroutine->releaseFrames();
+            }
+        }
+        scheduler_.running_ = 0xFFFFFFFFu;
+        scheduler_.updating_ = false;
+    }
+
+private:
+    ScriptScheduler& scheduler_;
+    int exceptions_;
+};
 
 ScriptScheduler::ScriptScheduler(SchedulerSettings settings)
     : settings_(settings)
@@ -108,7 +149,7 @@ void ScriptScheduler::update(double deltaSeconds)
         const double nanoseconds = std::min(scaled * 1e9, 1e15); // At most ~11.6 days per update.
         now_ += static_cast<std::int64_t>(std::llround(nanoseconds));
     }
-    updating_ = true;
+    const UpdateGuard guard(*this);
     // Coroutines started during this update are appended to order_ but skipped below.
     const std::size_t count = order_.size();
     for (std::size_t i = 0; i < count; ++i) {
@@ -160,7 +201,6 @@ void ScriptScheduler::update(double deltaSeconds)
             break;
         }
     }
-    updating_ = false;
 }
 
 std::optional<CoroutineState> ScriptScheduler::state(CoroutineHandle handle) const

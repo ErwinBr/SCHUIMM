@@ -24,6 +24,11 @@ struct NativeContext {
 
 // What a native function does after it returns: produce a value, suspend the coroutine (wait,
 // yield) or fail. Natives never call back into the VM.
+//
+// Only natives whose return type is None may suspend: the coroutine resumes after the call,
+// with no value for a result. Wait/Yield from a native with a result is a runtime error.
+// An exception thrown by an implementation is caught by the VM and becomes a Native error of
+// the calling coroutine.
 class NativeResult {
 public:
     enum class Kind : std::uint8_t { Return, Wait, Yield, Error };
