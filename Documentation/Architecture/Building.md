@@ -71,7 +71,7 @@ for the host architecture; for a universal binary add
 ### Debian 13
 
 ```bash
-sudo apt install build-essential cmake ninja-build libx11-dev libgl-dev libglx-dev
+sudo apt install build-essential cmake ninja-build libx11-dev libgl-dev libglx-dev libopengl-dev
 cmake --preset linux-gcc
 cmake --build --preset linux-gcc-release
 ./Build/linux-gcc/bin/Release/EngineDemo
@@ -89,6 +89,7 @@ xvfb-run -a ctest --preset linux-gcc-release
 | `libx11-dev` | Xlib, Xutil, Xatom and the XKB client API (`X11/XKBlib.h`) |
 | `libgl-dev` | GLVND `libGL` and `GL/gl.h` |
 | `libglx-dev` | GLVND `libGLX` and `GL/glx.h`, `GL/glxext.h` |
+| `libopengl-dev` | GLVND `libOpenGL`; without it CMake's FindOpenGL reports GLX as found but creates no `OpenGL::GLX` target (configuration stops with a clear message) |
 | `xvfb`, `mesa-utils` (optional) | virtual X server, `glxinfo` for diagnostics |
 
 CMake finds these with `find_package(X11)` (requires `X11_Xkb_FOUND`) and

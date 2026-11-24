@@ -55,7 +55,7 @@ Tools). Each build was configured from an empty build directory.
 | No per-frame autorelease leak (`OBJC_DEBUG_MISSING_POOLS=YES`, 30 vs 600 frames) | ✅ count constant, none on the main thread | n/a | n/a |
 | X protocol error is logged and not fatal (deliberate `XDestroyWindow` of a bogus id) | n/a | ✅ | n/a |
 | `.github/scripts/run-tests.sh` | ✅ | ✅ including `xvfb-run` wrapper | ✅ under Git Bash |
-| GitHub Actions workflow | ☐ not yet run: the branch has not been pushed | ☐ | ☐ |
+| GitHub Actions: build + unit tests | ✅ hosted `macos-15` runner (first run, before the libopengl-dev fix) | ☐ first run failed to configure (missing `libopengl-dev`); fixed, not yet re-run | ✅ hosted `windows-2022` runner |
 
 Notes:
 
@@ -63,9 +63,11 @@ Notes:
   pixel format on Windows. That works with the NVIDIA driver, so the suspected WGL problem was not
   reproduced and that code was left unchanged (see
   [KnownLimitations.md](KnownLimitations.md)).
-* The workflow YAML was parsed and every command in it was run by hand on the three machines,
-  but GitHub's hosted runners themselves have not run it yet. In particular, whether the
-  `macos-15` runner can create an OpenGL context for the integration step is unverified.
+* First CI run: Windows passed. On macOS the build and unit tests passed, but the hosted VM has
+  no hardware-accelerated OpenGL, so the integration tests are now reported as not run there
+  (like Windows). On Linux, configuration failed because the Ubuntu image lacks `libopengl-dev`
+  (without it CMake creates no `OpenGL::GLX` target); the package was added to the workflow and
+  to the documented package list.
 * Physical keyboard/mouse checks (checklist 3–7, 10, 11) were not repeated; Milestone 1.5 did not
   change input handling.
 

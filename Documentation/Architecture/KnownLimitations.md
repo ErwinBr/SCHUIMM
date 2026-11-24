@@ -45,9 +45,10 @@ Deliberate scope limits (as of Milestone 1.5) and known platform caveats.
   only shows up as GL errors.
 
 **CI**
-* Hosted Windows runners have no OpenGL 3.3 driver, so integration tests (real window and
-  context) are built but not run there. They are run by hand on a Windows machine with a GPU.
-  The job summary states this.
+* Hosted Windows and macOS runners have no usable OpenGL driver (Windows: GDI OpenGL 1.1 only;
+  macOS: a VM with no hardware-accelerated pixel format), so integration tests (real window and
+  context) are built but not run there. They are run by hand on machines with a GPU. The job
+  summaries state this.
 * Integration tests on Linux CI use Mesa's software renderer (llvmpipe) under Xvfb without a
   window manager, so fullscreen and swap control are not exercised there (the EngineDemo
   self-test covers them on real desktops).

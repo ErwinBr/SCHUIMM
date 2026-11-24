@@ -64,6 +64,12 @@ elseif(SCHUIMM_PLATFORM STREQUAL "macOS")
 elseif(SCHUIMM_PLATFORM STREQUAL "Linux")
     find_package(X11 REQUIRED)
     find_package(OpenGL REQUIRED COMPONENTS GLX)
+    # FindOpenGL only creates OpenGL::GLX when the GLVND libOpenGL is present as well; without it
+    # the GLX component is still reported as found, and the error would only surface later.
+    if(NOT TARGET OpenGL::GLX)
+        message(FATAL_ERROR "OpenGL::GLX is unavailable: the GLVND libraries are incomplete. "
+                            "Install libgl-dev, libglx-dev and libopengl-dev.")
+    endif()
     if(NOT X11_Xkb_FOUND)
         message(FATAL_ERROR "XKB headers (X11/XKBlib.h) not found. Install libx11-dev.")
     endif()

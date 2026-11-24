@@ -12,13 +12,14 @@ configuration does not hide the others.
 |---|---|---|---|---|
 | `windows` | `windows-2022` | Debug, Release | MSVC (Visual Studio 2022), preset `windows-msvc` | none: VS 2022 and CMake are on the image |
 | `macos` | `macos-15` | Debug, Release | Apple Clang (Xcode), preset `macos-clang` | `brew install ninja` |
-| `linux` | `ubuntu-24.04` | Debug, Release × GCC 14 / Clang 18 | presets `linux-gcc` / `linux-clang`, compiler overridden to `gcc-14`/`g++-14` or `clang-18`/`clang++-18` | `apt-get install` of exactly the packages in [Building.md](Building.md), plus `xvfb`, `xauth`, `libgl1-mesa-dri` for the integration tests |
+| `linux` | `ubuntu-24.04` | Debug, Release × GCC 14 / Clang 18 | presets `linux-gcc` / `linux-clang`, compiler overridden to `gcc-14`/`g++-14` or `clang-18`/`clang++-18` | `apt-get install` of the packages in [Building.md](Building.md) (including `libopengl-dev`, which the Ubuntu image lacks), plus `xvfb`, `xauth`, `libgl1-mesa-dri` for the integration tests |
 
 Each job:
 1. configures with the platform's configure preset;
 2. builds with `<preset>-<config>`, which compiles the engine, EngineDemo and all tests with
    warnings as errors;
-3. runs the unit tests and then the integration tests.
+3. runs the unit tests, then the integration tests (Linux) or a summary step stating why they
+   cannot run on that runner (Windows, macOS).
 
 The only actions used are GitHub's own `actions/checkout` and `actions/upload-artifact`.
 
@@ -29,13 +30,18 @@ Every test has exactly one category, enforced by `schuimm_add_test` in `Tests/CM
 | Label | Needs | CI |
 |---|---|---|
 | `unit` | nothing: no display, GPU or network | all jobs; must pass |
-| `integration` | a desktop session and an OpenGL 3.3 driver | Linux under Xvfb with Mesa llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`); macOS on the runner's GUI session. **Not run on Windows.** |
+| `integration` | a desktop session and an OpenGL 3.3 driver | Linux under Xvfb with Mesa llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`). **Not run on Windows or macOS.** |
 
-Windows runners have no GPU driver, and `opengl32.dll` only offers Microsoft's OpenGL 1.1 GDI
-renderer, so no 3.3 core context can be created there. The Windows job builds the integration
-tests but does not run them. A step writes that statement and the list of tests that were not run
-into the job summary, so the gap is visible rather than silent. On Windows they are run by hand
-(see [ManualTesting.md](ManualTesting.md)).
+Neither hosted runner type can create the context the engine needs:
+* **Windows** runners have no GPU driver, and `opengl32.dll` only offers Microsoft's OpenGL 1.1
+  GDI renderer.
+* **macOS** runners are virtual machines without a GPU. `NSOpenGLPixelFormat` finds no
+  hardware-accelerated core profile, and the engine deliberately requests an accelerated one.
+  This was observed on the first CI run on `macos-15`.
+
+Both jobs build the integration tests but do not run them. A step writes the reason and the list
+of tests that were not run into the job summary, so the gap is visible rather than silent. On
+those platforms the integration tests are run by hand (see [ManualTesting.md](ManualTesting.md)).
 
 The tests run through [`.github/scripts/run-tests.sh`](../../.github/scripts/run-tests.sh), which:
 * lists the CTest tests with the label (`ctest -N`);

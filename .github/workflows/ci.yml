@@ -3,8 +3,9 @@
 #
 # Test categories (see Tests/CMakeLists.txt):
 #   unit         headless; must pass on every job.
-#   integration  needs a desktop session and an OpenGL 3.3 driver. Run on Linux (Xvfb + Mesa
-#                llvmpipe) and macOS. Not run on Windows, and the job summary says so explicitly.
+#   integration  needs a desktop session and a hardware-accelerated (or, on Linux, Mesa) OpenGL
+#                3.3 driver. Run on Linux (Xvfb + Mesa llvmpipe). Not run on Windows and macOS,
+#                whose hosted runners have no such driver; their job summaries say so explicitly.
 #
 # Adding a subsystem: give its tests a label in Tests/<Subsystem>/CMakeLists.txt. The jobs below
 # select tests by preset and label only, so no change is needed here.
@@ -99,9 +100,20 @@ jobs:
       - name: Unit tests
         run: .github/scripts/run-tests.sh macos-clang-${{ matrix.config }} unit
 
-      # The runner has a logged-in GUI session and Apple's OpenGL-on-Metal implementation.
-      - name: Integration tests
-        run: .github/scripts/run-tests.sh macos-clang-${{ matrix.config }} integration
+      - name: Integration tests (not run on this runner)
+        run: |
+          {
+            echo "### \`integration\` tests: NOT RUN on macOS"
+            echo
+            echo "Hosted macOS runners are virtual machines without a GPU: NSOpenGLPixelFormat"
+            echo "finds no hardware-accelerated OpenGL core profile, which the engine requires."
+            echo "These tests were built but not executed here; run them on a Mac"
+            echo "(see Documentation/Architecture/ContinuousIntegration.md):"
+            echo
+            echo '```text'
+            ctest --preset macos-clang-${{ matrix.config }} -L integration -N
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test results
         if: always()
@@ -131,7 +143,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             cmake ninja-build ${{ matrix.compiler.package }} \
-            libx11-dev libgl-dev libglx-dev \
+            libx11-dev libgl-dev libglx-dev libopengl-dev \
             xvfb xauth libgl1-mesa-dri mesa-utils
 
       - name: Configure

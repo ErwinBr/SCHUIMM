@@ -44,11 +44,12 @@ Documentation/Architecture/         Architecture and process documentation
 Debian packages:
 
 ```bash
-sudo apt install build-essential cmake ninja-build libx11-dev libgl-dev libglx-dev
+sudo apt install build-essential cmake ninja-build libx11-dev libgl-dev libglx-dev libopengl-dev
 ```
 
-`libx11-dev` provides Xlib *and* the XKB client API (`X11/XKBlib.h`); `libgl-dev`/`libglx-dev`
-provide the GLVND `libGL`/`libGLX` and GLX headers. Optional, for headless testing:
+`libx11-dev` provides Xlib *and* the XKB client API (`X11/XKBlib.h`); `libgl-dev`/`libglx-dev`/
+`libopengl-dev` provide the GLVND `libGL`/`libGLX`/`libOpenGL` and GLX headers (CMake's
+`OpenGL::GLX` target needs all three). Optional, for headless testing:
 `sudo apt install xvfb mesa-utils`. No other libraries need to be installed on any platform: the
 only third-party code, libpng and zlib for PNG decoding, is vendored in `ThirdParty/` and built
 with the project (see [ThirdParty/README.md](ThirdParty/README.md)).
@@ -74,8 +75,9 @@ lifecycle and smoke tests, which need a display (on headless Linux use
 `xvfb-run -a ctest --preset linux-gcc-debug`).
 
 GitHub Actions builds Debug and Release on Windows (MSVC), macOS (Apple Clang) and Linux (GCC 14
-and Clang 18), and runs the unit tests everywhere and the integration tests on Linux (Xvfb) and
-macOS. See [ContinuousIntegration.md](Documentation/Architecture/ContinuousIntegration.md).
+and Clang 18), runs the unit tests everywhere, and runs the integration tests on Linux (Xvfb +
+Mesa). The hosted Windows and macOS runners have no usable OpenGL driver; their jobs say so
+explicitly instead of running the integration tests. See [ContinuousIntegration.md](Documentation/Architecture/ContinuousIntegration.md).
 
 ## Running the demo
 
@@ -109,8 +111,8 @@ Verified by building and running on real machines (Milestone 1.5; see
 | Rendering screenshot inspected | ✅ | ✅ | ✅ |
 | Physical keyboard/mouse input | ◐ partly (manual run) | ☐ manual | ☐ manual |
 
-The GitHub Actions workflow has not run on GitHub's runners yet: its commands were run by hand
-on the machines above.
+CI status is on the repository's Actions page; see
+[ManualTesting.md](Documentation/Architecture/ManualTesting.md) for what the first run showed.
 
 Windows 7 and macOS 10.13 are the *targeted* minimums (API usage and compiler settings), but no
 such system was available, so runtime support there is unverified.
