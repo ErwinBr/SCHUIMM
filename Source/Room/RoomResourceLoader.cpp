@@ -469,7 +469,13 @@ private:
             if (!(scale > 0.0) || scale > 1e6) {
                 return fail(member(pointPath, "scale"), concat("must be a positive number, found ", member_->dump()));
             }
-            out.points.push_back(ScalePoint{static_cast<float>(y), static_cast<float>(scale)});
+            // Finite (at most 1e6), but a tiny scale such as 1e-50 becomes 0 as a float.
+            const float storedScale = static_cast<float>(scale);
+            if (!(storedScale > 0.0f)) {
+                return fail(member(pointPath, "scale"),
+                            concat("must remain positive when stored as a float, found ", member_->dump()));
+            }
+            out.points.push_back(ScalePoint{static_cast<float>(y), storedScale});
         }
         return {};
     }

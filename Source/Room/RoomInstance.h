@@ -14,7 +14,8 @@
 // Coroutines: the instance remembers the coroutines it started (dispatch(), start()) and cancels
 // those still alive when it is destroyed, so no handler of a destroyed room keeps running. An
 // instance must therefore not be destroyed while the ScriptHost updates (from a native or a
-// script event callback): the running coroutine cannot be cancelled. Destroy it between frames.
+// script event callback): the running coroutine cannot be cancelled. This is checked in every
+// build (violating it stops the program). Destroy rooms between frames.
 // The ScriptHost must outlive its instances.
 
 #include "Core/Common/Error.h"
@@ -36,16 +37,41 @@
 
 namespace schuimm::room {
 
-// The runtime state of one interactive object. Initialised from its definition; changing it
-// never changes the definition.
-struct RoomObject {
-    const RoomObjectDefinition* definition = nullptr; // In the shared RoomResource.
-    script::ObjectRef handle;                         // Passed to its handlers as self.
+// One interactive object of a room instance. Its identity (definition and handle) is fixed when
+// the instance creates it; its state is initialised from the definition and is the instance's
+// own: changing it never changes the definition.
+//
+// Assignment is deleted, so the identity cannot be overwritten through objects() either. Copying
+// one out gives a snapshot that does not affect the room.
+class RoomObject {
+public:
+    RoomObject(const RoomObject&) = default;
+    RoomObject(RoomObject&&) noexcept = default;
+    RoomObject& operator=(const RoomObject&) = delete;
+    RoomObject& operator=(RoomObject&&) = delete;
+
+    // In the shared RoomResource.
+    [[nodiscard]] const RoomObjectDefinition& definition() const noexcept { return *definition_; }
+    // Passed to the object's handlers as self; never null, never reused.
+    [[nodiscard]] script::ObjectRef handle() const noexcept { return handle_; }
+    [[nodiscard]] const std::string& id() const noexcept { return definition_->id; }
+
+    // Mutable runtime state.
     Vec2 position;
     bool visible = true;
     std::map<std::string, bool, std::less<>> flags;
 
-    [[nodiscard]] const std::string& id() const noexcept { return definition->id; }
+private:
+    friend class RoomInstance;
+    RoomObject(const RoomObjectDefinition& definition, script::ObjectRef handle)
+        : position(definition.position)
+        , definition_(&definition)
+        , handle_(handle)
+    {
+    }
+
+    const RoomObjectDefinition* definition_;
+    script::ObjectRef handle_;
 };
 
 class RoomInstance {

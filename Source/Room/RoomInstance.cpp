@@ -43,17 +43,15 @@ RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host)
 {
     objects_.reserve(room_.resource->objects.size());
     for (const RoomObjectDefinition& definition : room_.resource->objects) {
-        RoomObject object;
-        object.definition = &definition;
-        object.handle = allocateObjectRef();
-        object.position = definition.position;
-        objects_.push_back(std::move(object));
+        objects_.push_back(RoomObject(definition, allocateObjectRef()));
     }
 }
 
 RoomInstance::~RoomInstance()
 {
-    SCHUIMM_ASSERT(!host_.isUpdating(), "a RoomInstance must not be destroyed while the ScriptHost updates");
+    // Checked in every build: the running coroutine cannot be cancelled, so it would go on running
+    // for a room that no longer exists.
+    SCHUIMM_VERIFY(!host_.isUpdating(), "a RoomInstance must not be destroyed while the ScriptHost updates");
     for (const script::CoroutineHandle handle : coroutines_) {
         if (isAlive(host_, handle)) host_.cancel(handle);
     }
@@ -74,7 +72,7 @@ RoomObject* RoomInstance::object(script::ObjectRef handle) noexcept
 {
     if (handle.isNull()) return nullptr;
     const auto found =
-        std::find_if(objects_.begin(), objects_.end(), [handle](const RoomObject& o) { return o.handle == handle; });
+        std::find_if(objects_.begin(), objects_.end(), [handle](const RoomObject& o) { return o.handle() == handle; });
     return found == objects_.end() ? nullptr : &*found;
 }
 
@@ -91,7 +89,7 @@ Result<script::DispatchResult> RoomInstance::dispatch(std::string_view objectId,
         return makeError(ErrorCode::NotFound, concat("room '", resource().id, "' has no object '", objectId, "'"));
     }
     if (!room_.script) return script::DispatchResult{};
-    auto result = host_.dispatch(room_.script, objectId, event, target->handle, std::move(arguments));
+    auto result = host_.dispatch(room_.script, objectId, event, target->handle(), std::move(arguments));
     if (result && result->handled) track(result->handle);
     return result;
 }

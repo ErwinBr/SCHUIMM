@@ -93,8 +93,8 @@ See [Rooms.md](Rooms.md).
 * Loading reports the first error only, not every error in the file.
 * Room object state (`RoomInstance` objects) is reachable from C++ only; there are no natives
   over it yet, and no lookup from an arbitrary `ObjectRef` to its live room.
-* A `RoomInstance` must be destroyed between frames, not while the `ScriptHost` updates (this is
-  asserted). Coroutines it did not start are not cancelled when it is destroyed; their handles
+* A `RoomInstance` must be destroyed between frames, not while the `ScriptHost` updates (checked
+  in every build; violating it stops the program). Coroutines it did not start are not cancelled when it is destroyed; their handles
   just become stale.
 * Room ids are not checked for uniqueness across a game (a single file cannot know the others).
 

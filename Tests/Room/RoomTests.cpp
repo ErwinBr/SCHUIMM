@@ -20,6 +20,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 using namespace schuimm;
@@ -345,6 +347,10 @@ SCHUIMM_TEST(Room_ScaleMap)
                 "scale_map.points[0].scale: must be a positive number, found 0");
     CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = -0.5; }), "scale_map.points[0].scale: must be a positive");
     CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = "big"; }), "scale_map.points[0].scale: expected a number");
+    // Positive as a double, but 0 once stored as a float.
+    CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = 1e-50; }),
+                "scale_map.points[0].scale: must remain positive when stored as a float, found 1e-50");
+    CHECK(decode(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = 1e-30; })).has_value()); // Fits a float.
     CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["type"] = "curve"; }),
                 "scale_map.type: unsupported scale map type 'curve' (supported: linear)");
     CHECK_ERROR(mutated([](Json& j) { j["scale_map"].erase("points"); }), "scale_map.points: missing required property");
@@ -515,10 +521,10 @@ SCHUIMM_TEST(Room_CompletionCriteria)
     const RoomObject* cupboard = room.object("cupboard");
     REQUIRE(blender != nullptr);
     REQUIRE(cupboard != nullptr);
-    CHECK(!blender->handle.isNull());
-    CHECK(!cupboard->handle.isNull());
-    CHECK(!(blender->handle == cupboard->handle));
-    CHECK(room.object(blender->handle) == blender);
+    CHECK(!blender->handle().isNull());
+    CHECK(!cupboard->handle().isNull());
+    CHECK(!(blender->handle() == cupboard->handle()));
+    CHECK(room.object(blender->handle()) == blender);
     CHECK(blender->position == (Vec2{420.0f, 310.0f}));
 
     REQUIRE(room.dispatch("cupboard", "look_at")->handled);
@@ -656,9 +662,9 @@ SCHUIMM_TEST(Room_InstancesHaveIndependentHandlesAndState)
     std::vector<std::uint64_t> ids;
     for (const RoomInstance* instance : {a.get(), b.get()}) {
         for (const RoomObject& object : instance->objects()) {
-            CHECK(!object.handle.isNull());
-            CHECK(object.definition == instance->resource().findObject(object.id()));
-            ids.push_back(object.handle.id);
+            CHECK(!object.handle().isNull());
+            CHECK(&object.definition() == instance->resource().findObject(object.id()));
+            ids.push_back(object.handle().id);
         }
     }
     REQUIRE(ids.size() == 4);
@@ -666,7 +672,7 @@ SCHUIMM_TEST(Room_InstancesHaveIndependentHandlesAndState)
         for (std::size_t j = i + 1; j < ids.size(); ++j) CHECK(ids[i] != ids[j]);
     }
     // A handle belongs to one instance only.
-    CHECK(b->object(a->object("blender")->handle) == nullptr);
+    CHECK(b->object(a->object("blender")->handle()) == nullptr);
     CHECK(a->object(script::ObjectRef{}) == nullptr);
 
     // State changes stay in the instance; the shared resource never changes.
@@ -680,11 +686,16 @@ SCHUIMM_TEST(Room_InstancesHaveIndependentHandlesAndState)
     CHECK(a->resource() == decode(fullRoom).value());
 
     // A newly created instance gets new handles, never ones used before.
-    const std::uint64_t oldBlender = a->object("blender")->handle.id;
+    const std::uint64_t oldBlender = a->object("blender")->handle().id;
     a.reset();
     auto c = RoomInstance::create(*loaded, fixture.host).value();
-    for (const RoomObject& object : c->objects()) CHECK(object.handle.id > oldBlender);
+    for (const RoomObject& object : c->objects()) CHECK(object.handle().id > oldBlender);
 }
+
+// A room object's identity cannot be overwritten, not even through objects().
+static_assert(!std::is_copy_assignable_v<RoomObject> && !std::is_move_assignable_v<RoomObject>);
+static_assert(std::is_same_v<decltype(std::declval<RoomObject&>().handle()), script::ObjectRef>);
+static_assert(std::is_same_v<decltype(std::declval<RoomObject&>().definition()), const RoomObjectDefinition&>);
 
 SCHUIMM_TEST(Room_DispatchPassesTheObjectHandleAsSelf)
 {
@@ -702,9 +713,35 @@ SCHUIMM_TEST(Room_DispatchPassesTheObjectHandleAsSelf)
     REQUIRE(a->dispatch("cupboard", "look_at")->handled);
     fixture.host.update(0.0);
     REQUIRE(fixture.recorded.size() == 3);
-    CHECK(fixture.recorded[0] == a->object("blender")->handle);
-    CHECK(fixture.recorded[1] == b->object("blender")->handle);
-    CHECK(fixture.recorded[2] == a->object("cupboard")->handle);
+    CHECK(fixture.recorded[0] == a->object("blender")->handle());
+    CHECK(fixture.recorded[1] == b->object("blender")->handle());
+    CHECK(fixture.recorded[2] == a->object("cupboard")->handle());
+}
+
+SCHUIMM_TEST(Room_HostReportsWhenItUpdates)
+{
+    // RoomInstance's destructor refuses to run during an update (SCHUIMM_VERIFY, every build);
+    // this is the state it checks.
+    RoomFixture fixture;
+    std::vector<bool> duringUpdate;
+    REQUIRE(fixture.host.natives()
+                .add({"probe", {}, script::ScriptType::None,
+                      [&](script::NativeContext&, std::span<const script::Value>) {
+                          duringUpdate.push_back(fixture.host.isUpdating());
+                          return script::NativeResult::returnValue();
+                      },
+                      {}})
+                .has_value());
+    auto program = fixture.host.load(compileToBytecode("extern func say(text: string)\nextern func probe()\n"
+                                                       "func main():\n\tprobe()\n"),
+                                     "probe.schb");
+    REQUIRE(program.has_value());
+    REQUIRE(fixture.host.start(*program, "main").has_value());
+    CHECK(!fixture.host.isUpdating());
+    fixture.host.update(0.0);
+    CHECK(!fixture.host.isUpdating());
+    REQUIRE(duringUpdate.size() == 1);
+    CHECK(duringUpdate[0]);
 }
 
 SCHUIMM_TEST(Room_DestroyingAnInstanceCancelsItsCoroutines)
@@ -718,7 +755,7 @@ SCHUIMM_TEST(Room_DestroyingAnInstanceCancelsItsCoroutines)
     REQUIRE(loaded.has_value());
     auto a = RoomInstance::create(*loaded, fixture.host).value();
     auto b = RoomInstance::create(*loaded, fixture.host).value();
-    const script::ObjectRef survivor = b->object("blender")->handle;
+    const script::ObjectRef survivor = b->object("blender")->handle();
     REQUIRE(a->dispatch("blender", "use")->handled);
     REQUIRE(b->dispatch("blender", "use")->handled);
     fixture.host.update(0.0); // Both handlers now wait.

@@ -234,12 +234,17 @@ be combined by hand.
 
 `RoomInstance::create` creates one `RoomObject` per object definition, in resource order. Each
 `RoomObject` has:
-- `definition`, which points into the shared resource;
-- `handle`, a `script::ObjectRef`;
-- `position`, initialised from the definition;
-- `visible`;
-- `flags`, a name → bool map;
-- `id()`.
+- an identity that is fixed at creation and read-only:
+  - `definition()`, its definition in the shared resource;
+  - `handle()`, its `script::ObjectRef`;
+  - `id()`;
+- mutable state:
+  - `position`, initialised from the definition;
+  - `visible`;
+  - `flags`, a name → bool map.
+
+`RoomObject` cannot be assigned, so its identity cannot be overwritten, not even through
+`objects()`. Copying one out gives a snapshot that does not affect the room.
 
 The state is the instance's own: changing it never changes the resource or any other instance. The live state is deliberately small, since later milestones add what their systems need. Scripts cannot reach it yet; natives over room state come with the interaction milestone. Look objects up with `object(id)` or `object(handle)`.
 
@@ -276,7 +281,7 @@ Two instances of the same room have different handles for "the same" object, and
   - Its destructor cancels the ones still running or waiting, so no handler of a destroyed room resumes later. Other instances' coroutines are unaffected.
 - **Destroy rooms between frames**
   - A coroutine cannot be cancelled while it is the one running, so an instance must not be destroyed while the `ScriptHost` updates (from inside a native or a script event callback).
-  - This is asserted. The future room-transition code will request an unload and perform it after the update.
+  - This is checked in every build (`SCHUIMM_VERIFY`, not only in debug builds): violating it stops the program. The future room-transition code will request an unload and perform it after the update.
 - **Not covered yet**
   - Coroutines started by other code that hold one of the room's handles are not cancelled; their handles are simply stale.
   - Cross-room handle lookup (mapping any `ObjectRef` to its live instance, which natives over object state will need) comes with those natives.
