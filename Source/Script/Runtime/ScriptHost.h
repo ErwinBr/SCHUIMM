@@ -71,6 +71,7 @@ public:
 
     [[nodiscard]] ScriptScheduler& scheduler() noexcept { return scheduler_; }
     [[nodiscard]] std::size_t activeCount() const noexcept { return scheduler_.activeCount(); }
+    [[nodiscard]] bool isUpdating() const noexcept { return scheduler_.isUpdating(); }
 
     struct Statistics {
         std::uint64_t started = 0;

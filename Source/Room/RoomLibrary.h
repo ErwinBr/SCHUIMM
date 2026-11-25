@@ -1,0 +1,52 @@
+#pragma once
+
+// Loads rooms (resource + compiled script) once and shares them: every RoomInstance of a room
+// uses the same immutable RoomResource and the same Program.
+
+#include "Core/Common/Error.h"
+#include "Resource/AssetLocator.h"
+#include "Resource/AssetPath.h"
+#include "Resource/ResourceCache.h"
+#include "Room/RoomResource.h"
+#include "Script/Runtime/Program.h"
+#include "Script/Runtime/ScriptHost.h"
+
+#include <cstddef>
+#include <map>
+#include <memory>
+
+namespace schuimm::room {
+
+// A loaded, validated room: its resource and its compiled script (nullptr if it has none). The
+// script's object declarations have been checked against the resource. Cheap to copy.
+struct LoadedRoom {
+    std::shared_ptr<const RoomResource> resource;
+    std::shared_ptr<const script::Program> script;
+};
+
+// Caches room resources (ResourceCache<RoomResource>) and their programs (by script asset path,
+// so rooms that share a script share the program). Programs are linked against `host`'s natives,
+// so register the game's natives before loading rooms. `locator` and `host` must outlive the
+// library. Unloading drops the library's references only: instances keep what they use.
+class RoomLibrary {
+public:
+    RoomLibrary(const AssetLocator& locator, script::ScriptHost& host);
+
+    RoomLibrary(const RoomLibrary&) = delete;
+    RoomLibrary& operator=(const RoomLibrary&) = delete;
+
+    // Reads, validates and verifies the room resource, then loads and validates its script.
+    [[nodiscard]] Result<LoadedRoom> load(const AssetPath& room);
+
+    void unloadAll();
+    [[nodiscard]] std::size_t resourceCount() const noexcept { return resources_.size(); }
+    [[nodiscard]] std::size_t scriptCount() const noexcept { return scripts_.size(); }
+
+private:
+    const AssetLocator& locator_;
+    script::ScriptHost& host_;
+    ResourceCache<RoomResource> resources_;
+    std::map<AssetPath, std::shared_ptr<const script::Program>> scripts_;
+};
+
+} // namespace schuimm::room

@@ -47,13 +47,15 @@ Source/Graphics/OpenGL/             OpenGL 3.3 core backend: batched renderer, r
 Source/GraphicsResources/           TextureCache and Font (glyph atlases): assets -> GPU resources
 Source/Audio/                       AudioDevice, mixer, playback; Miniaudio/ output backend
 Source/Script/                      Scripting: Bytecode/ (format, validation), Compiler/, Runtime/ (VM, scheduler)
-ThirdParty/                         Vendored libpng, zlib, FreeType, miniaudio (sources, licences)
+Source/Room/                        Room resources (JSON) and room instances
+ThirdParty/                         Vendored libpng, zlib, FreeType, miniaudio, nlohmann/json (sources, licences)
 Applications/EngineDemo/            Demo scene, its assets, scripts and asset generator, self-test (composition root)
 Applications/ScriptCompiler/        schuimmc, the command-line script compiler
 Applications/ScriptRunner/          schuimm-run, runs compiled scripts headlessly
 Tests/                              Self-contained test harness, unit and integration tests, test assets
 Documentation/Architecture/         Architecture and process documentation
 Documentation/Scripting/            Script language specification, compiler, bytecode, runtime; example scripts
+Documentation/Rooms/Examples/       Example room resource and its room script
 ```
 
 ## Requirements
@@ -181,6 +183,7 @@ system was available, so runtime support there is unverified.
 * [Architecture overview](Documentation/Architecture/Overview.md): structure, dependencies, ownership, error handling
 * [Platform layer](Documentation/Architecture/Platform.md): windows, events and OpenGL contexts per OS; file system; adding Wayland
 * [Resources and assets](Documentation/Architecture/Resources.md): asset root and paths, resource IDs, ownership, image, sound and font loading
+* [Rooms](Documentation/Architecture/Rooms.md): the room resource format (JSON), loading and validation, script association, room instances
 * [Graphics](Documentation/Architecture/Graphics.md): coordinate systems, textures and the texture cache, camera, sprite batching, render targets, the OpenGL backend
 * [Text](Documentation/Architecture/Text.md): UTF-8, fonts, glyph atlases, layout
 * [Audio](Documentation/Architecture/Audio.md): architecture, formats, threading, ownership

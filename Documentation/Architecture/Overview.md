@@ -23,6 +23,13 @@ A small, native, testable engine core built from one source tree on Windows, mac
 * a register VM with native function registration;
 * cooperative coroutines (wait, yield, instruction budgets) driven by the game loop.
 
+**Room resources** ([Rooms.md](Rooms.md)) start the adventure layer:
+* a versioned JSON room format (size, background, props, interactive objects, scale map,
+  walkable areas, regions, optional compiled script), parsed and validated without a window;
+* matching of the room script's `object` declarations against the room's objects;
+* `RoomInstance`: live objects with their own handles and state, sharing the immutable resource
+  and program.
+
 Later milestones (adventure systems, editor) build on the interfaces described here, never on
 native APIs.
 
@@ -47,13 +54,14 @@ native APIs.
 | `Source/Script/Bytecode` | `schuimm_script_bytecode` | bytecode `Module`, opcodes, shared arithmetic semantics, reader/validator, writer, disassembler ([Bytecode.md](../Scripting/Bytecode.md)) |
 | `Source/Script/Compiler` | `schuimm_script_compiler` | lexer, parser, type checker, IR, optimizer, code generator ([Compiler.md](../Scripting/Compiler.md)); tools and tests only |
 | `Source/Script/Runtime` | `schuimm_script_runtime` | `Value`, `Program`, `NativeRegistry`, VM, `ScriptScheduler`, `ScriptHost` ([Runtime.md](../Scripting/Runtime.md)) |
+| `Source/Room` | `schuimm_room` | `RoomResource`, room resource loader (JSON), `RoomLibrary`, `RoomInstance` ([Rooms.md](Rooms.md)) |
 | `Source/Core/Application` | `schuimm_application` | `Application`, `ApplicationListener`, lifecycle |
 | `Source/Platform/<OS>` | `schuimm_platform` | exactly one native backend, chosen at configure time |
 | `Source/Graphics/OpenGL` | `schuimm_graphics_opengl` | OpenGL 3.3 core `GraphicsDevice`, batched `Renderer2D`, render targets |
 | `Applications/EngineDemo` | `EngineDemo` | composition root, demo scene and assets, demo scripts, self-test |
 | `Applications/ScriptCompiler` | `schuimmc` | command-line script compiler with debug dumps |
 | `Applications/ScriptRunner` | `schuimm-run` | headless bytecode runner (runtime only) |
-| `ThirdParty` | `schuimm_zlib`, `schuimm_png`, `schuimm_freetype`, `schuimm_miniaudio` | vendored C libraries, each used privately by one engine library ([README](../../ThirdParty/README.md)) |
+| `ThirdParty` | `schuimm_zlib`, `schuimm_png`, `schuimm_freetype`, `schuimm_miniaudio`, `schuimm_json` | vendored libraries (the C libraries and the header-only nlohmann/json), each used privately by one engine library ([README](../../ThirdParty/README.md)) |
 
 Two folders were added to the structure requested for the milestone:
 
@@ -88,6 +96,9 @@ on the platform, graphics and audio *interfaces*, which in turn depend on `schui
 * The resource layer depends neither on windowing, graphics nor audio.
 * The script libraries depend on `schuimm_core` only. The compiler is used by the `schuimmc`
   tool and the tests; the game links the runtime and loads precompiled bytecode.
+* `schuimm_room` depends on `schuimm_resource` and `schuimm_script_runtime` (not on the
+  compiler, graphics or audio): room resources are parsed and validated headlessly, and images
+  are only checked for existence; textures come later through `TextureCache`.
 * The graphics and audio layers do not depend on the resource layer or on each other. They meet
   the resource layer only in Core's data types (`Image`, `SoundData`), and in
   `schuimm_graphics_resources`, the one bridge that turns image and font assets into GPU
@@ -102,7 +113,8 @@ Rules enforced by this layout:
 * POSIX and Win32 file APIs are only called in `Source/Platform/FileSystem/{Posix,Windows}`.
 * Each third-party library is included by exactly one engine file: `png.h` by
   `Source/Resource/Image/PngDecoder.cpp`, FreeType by `Source/Resource/Font/FontFace.cpp`,
-  `miniaudio.h` by `Source/Audio/Miniaudio/MiniaudioAudioDevice.cpp`.
+  `miniaudio.h` by `Source/Audio/Miniaudio/MiniaudioAudioDevice.cpp`, nlohmann/json by
+  `Source/Room/RoomResourceLoader.cpp` (the room tests use it as well, to build test documents).
 * `Application` and all game code see interfaces only. The single place that names concrete
   backends is the composition root (`Applications/EngineDemo/main.cpp`).
 

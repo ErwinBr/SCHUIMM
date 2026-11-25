@@ -110,6 +110,8 @@ public:
 
     [[nodiscard]] std::size_t activeCount() const noexcept; // Not yet ended.
     [[nodiscard]] std::size_t size() const noexcept;        // Including ended, unreleased ones.
+    // True while update() runs (i.e. inside a native or a callback called from it).
+    [[nodiscard]] bool isUpdating() const noexcept { return updating_; }
     [[nodiscard]] std::int64_t timeNanoseconds() const noexcept { return now_; }
     [[nodiscard]] std::uint64_t updateCount() const noexcept { return updates_; }
     [[nodiscard]] const SchedulerSettings& settings() const noexcept { return settings_; }

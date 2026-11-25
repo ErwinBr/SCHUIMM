@@ -1,0 +1,60 @@
+{
+    "version": 1,
+    "id": "kitchen",
+    "size": { "width": 2560, "height": 1440 },
+    "script": "Rooms/Kitchen/Kitchen.schb",
+    "background": { "image": "Rooms/Kitchen/Assets/background.png" },
+    "props": [
+        {
+            "id": "table",
+            "sprite": "Rooms/Kitchen/Assets/table.png",
+            "position": [800, 500],
+            "pivot": [0, 0]
+        }
+    ],
+    "objects": [
+        {
+            "id": "blender",
+            "sprite": "Rooms/Kitchen/Assets/blender.png",
+            "position": [420, 310],
+            "pivot": [24, 60]
+        },
+        {
+            "id": "cupboard",
+            "sprite": "Rooms/Kitchen/Assets/cupboard.png",
+            "position": [720, 280]
+        },
+        {
+            "id": "window",
+            "position": [1800, 200]
+        }
+    ],
+    "scale_map": {
+        "type": "linear",
+        "points": [
+            { "y": 200, "scale": 0.55 },
+            { "y": 1100, "scale": 1.0 }
+        ]
+    },
+    "navigation": {
+        "walkable_areas": [
+            {
+                "id": "floor",
+                "points": [[100, 800], [2400, 800], [2400, 1350], [100, 1350]]
+            }
+        ]
+    },
+    "regions": [
+        {
+            "id": "kitchen_exit",
+            "type": "rectangle",
+            "position": [2300, 700],
+            "size": [200, 400]
+        },
+        {
+            "id": "sink_area",
+            "type": "polygon",
+            "points": [[1200, 820], [1500, 820], [1450, 950], [1250, 950]]
+        }
+    ]
+}

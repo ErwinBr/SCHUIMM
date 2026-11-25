@@ -198,7 +198,10 @@ runtime error naming the handler and line. Equality of handles is equality of id
 this contract is exactly object identity. Bytecode has no `object` constants, so scripts can only
 hold handles the engine issued.
 
-Room resources (JSON), the adventure runtime and `self.property` syntax are later milestones.
+Room resources and room instances, which own the objects and allocate their handles as this
+contract requires, are described in [Rooms.md](../Architecture/Rooms.md): `RoomInstance::dispatch`
+calls `ScriptHost::dispatch` with the object's handle. The adventure runtime (interaction,
+natives over object state) and `self.property` syntax are later milestones.
 
 ## Scheduler
 

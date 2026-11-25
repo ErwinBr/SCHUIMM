@@ -31,6 +31,11 @@ separate, explicit step in the graphics or audio layer.
 The texture cache is described in [Graphics.md](Graphics.md#texture-cache), fonts in
 [Text.md](Text.md) and sounds in [Audio.md](Audio.md).
 
+Room resources (`*.room.json`) are a resource type of the room layer (`schuimm_room`), built
+from the same pieces: read through the `AssetLocator`, decoded by `decodeRoomResource`, cached in
+a `ResourceCache<RoomResource>`. Their asset references are ordinary asset paths, checked for
+existence but not decoded. See [Rooms.md](Rooms.md).
+
 ## Dependencies
 
 ```text

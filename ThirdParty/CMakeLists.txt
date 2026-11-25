@@ -136,3 +136,16 @@ elseif(UNIX)
     target_link_libraries(schuimm_miniaudio PUBLIC Threads::Threads ${CMAKE_DL_LIBS} m)
 endif()
 schuimm_third_party_target(schuimm_miniaudio)
+
+# nlohmann/json 3.12.0: header-only C++ JSON library (the single-header json.hpp), used privately
+# by the room resource loader (Source/Room/RoomResourceLoader.cpp) only. The SYSTEM include
+# keeps its warnings out of the engine's -Werror//WX build. Its std::filesystem integration is
+# switched off: <filesystem> is unavailable on the macOS 10.13 deployment target.
+add_library(schuimm_json INTERFACE)
+add_library(Schuimm::ThirdParty::Json ALIAS schuimm_json)
+target_include_directories(schuimm_json SYSTEM INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/nlohmann/include")
+target_compile_definitions(schuimm_json INTERFACE
+    JSON_HAS_FILESYSTEM=0
+    JSON_HAS_EXPERIMENTAL_FILESYSTEM=0
+    JSON_NO_IO=1
+    JSON_USE_IMPLICIT_CONVERSIONS=0)

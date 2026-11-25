@@ -83,6 +83,21 @@ Deliberate scope limits (as of Milestone 2) and known platform caveats.
   there is no memory budget or eviction.
 * No application packaging (installers, icons, Info.plist customisation beyond the bundle ID).
 
+## Rooms
+
+See [Rooms.md](Rooms.md).
+* Room resources are parsed, validated and instantiated only: nothing draws a room, and there
+  is no interaction detection, movement, scaling, pathfinding or room transition yet.
+* Polygons are not checked for self-intersection; walkable areas and regions are not checked
+  against the room bounds (scale-map points are).
+* Loading reports the first error only, not every error in the file.
+* Room object state (`RoomInstance` objects) is reachable from C++ only; there are no natives
+  over it yet, and no lookup from an arbitrary `ObjectRef` to its live room.
+* A `RoomInstance` must be destroyed between frames, not while the `ScriptHost` updates (this is
+  asserted). Coroutines it did not start are not cancelled when it is destroyed; their handles
+  just become stale.
+* Room ids are not checked for uniqueness across a game (a single file cannot know the others).
+
 ## Scripting
 
 Language scope (version 1.1, see [Language.md](../Scripting/Language.md#12-limitations-version-11)):
