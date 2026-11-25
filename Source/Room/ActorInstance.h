@@ -6,17 +6,23 @@
 //
 // Identity (fixed at creation, never changes): the room-local identifier from the placement, a
 // runtime handle (script::ObjectRef, unique among all actors and room objects ever created, see
-// ObjectHandles.h) and the shared, immutable actor resource. Copying and assignment are deleted,
-// so an identity can be neither duplicated nor overwritten.
+// ObjectHandles.h) and the shared, immutable actor resource. An actor can be neither copied nor
+// moved: create() hands out a unique_ptr, so an identity is never duplicated, overwritten or
+// moved out of its room, and an actor's address is fixed for its whole lifetime.
 //
 // State (all of it here, none in the resources): ground position (room coordinates), facing,
 // visibility, scale, the logical animation and its playback. State changes are validated: a
 // failed change leaves the actor exactly as it was.
 //
-//   * playAnimation(name) selects a logical animation for the current facing. If that resolves
-//     to the clip already playing (or paused), playback continues untouched.
-//   * setFacing(facing) resolves the current animation for the new facing. The same clip (perhaps
-//     with different mirroring) continues untouched; a different clip starts from its beginning.
+//   * setAnimation(name, facing) changes both at once: the combination is resolved first and the
+//     actor changes only if it resolves (so idle-south -> walk-north works even when idle has no
+//     north clip and walk no south clip). The same clip (perhaps with different mirroring)
+//     continues untouched, whatever its playback status; a different clip starts from its
+//     beginning. Movement code should use this.
+//   * setFacing(facing) is setAnimation(current animation, facing).
+//   * playAnimation(name) is setAnimation(name, current facing), except that it also restarts the
+//     resolved clip if that clip is stopped or finished ("play this"): a finished wave plays again.
+//     A clip that is playing or paused continues untouched.
 //   * Visibility only affects drawing: an invisible actor keeps animating.
 //   * update(ticks) advances playback; nothing else does (drawing is read-only).
 
@@ -56,10 +62,11 @@ class ActorInstance {
 public:
     // Validates `configuration` (position, scale, and that the animation resolves for the facing),
     // allocates a fresh handle and starts the animation.
-    [[nodiscard]] static Result<ActorInstance> create(std::string id, std::shared_ptr<const ActorResource> resource,
-                                                      const ActorConfiguration& configuration);
+    [[nodiscard]] static Result<std::unique_ptr<ActorInstance>> create(std::string id,
+                                                                       std::shared_ptr<const ActorResource> resource,
+                                                                       const ActorConfiguration& configuration);
 
-    ActorInstance(ActorInstance&&) noexcept = default;
+    ActorInstance(ActorInstance&&) = delete;
     ActorInstance(const ActorInstance&) = delete;
     ActorInstance& operator=(const ActorInstance&) = delete;
     ActorInstance& operator=(ActorInstance&&) = delete;
@@ -78,6 +85,8 @@ public:
     [[nodiscard]] Facing facing() const noexcept { return facing_; }
     // NotFound if the current animation has no clip for `facing` (state unchanged).
     [[nodiscard]] Status setFacing(Facing facing);
+    // Animation and facing together; NotFound (state unchanged) unless the pair resolves.
+    [[nodiscard]] Status setAnimation(std::string_view name, Facing facing);
 
     [[nodiscard]] bool visible() const noexcept { return visible_; }
     void setVisible(bool visible) noexcept { visible_ = visible; }
@@ -106,6 +115,10 @@ public:
     [[nodiscard]] ActorRenderState renderState() const;
 
 private:
+    enum class RestartFinished { No, Yes };
+
+    Status changeAnimation(std::string_view name, Facing facing, RestartFinished restart);
+
     ActorInstance(std::string id, script::ObjectRef handle, std::shared_ptr<const ActorResource> resource,
                   const ActorConfiguration& configuration, ResolvedActorClip clip);
 

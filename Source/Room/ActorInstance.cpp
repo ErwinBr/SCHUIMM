@@ -47,7 +47,7 @@ ActorConfiguration placementConfiguration(const ActorPlacement& placement, const
     return configuration;
 }
 
-Result<ActorInstance> ActorInstance::create(std::string id, std::shared_ptr<const ActorResource> resource,
+Result<std::unique_ptr<ActorInstance>> ActorInstance::create(std::string id, std::shared_ptr<const ActorResource> resource,
                                             const ActorConfiguration& configuration)
 {
     if (!resource) return makeError(ErrorCode::InvalidArgument, concat("actor '", id, "': no actor resource"));
@@ -58,8 +58,8 @@ Result<ActorInstance> ActorInstance::create(std::string id, std::shared_ptr<cons
     if (auto status = checkScale(configuration.scale); !status) return prefix(status.error());
     auto clip = resource->resolve(configuration.animation, configuration.facing);
     if (!clip) return prefix(clip.error());
-    return ActorInstance(std::move(id), detail::allocateObjectHandle(), std::move(resource), configuration,
-                         std::move(*clip));
+    return std::unique_ptr<ActorInstance>(new ActorInstance(std::move(id), detail::allocateObjectHandle(),
+                                                            std::move(resource), configuration, std::move(*clip)));
 }
 
 ActorInstance::ActorInstance(std::string id, script::ObjectRef handle, std::shared_ptr<const ActorResource> resource,
@@ -91,25 +91,37 @@ Status ActorInstance::setScale(float scale)
     return {};
 }
 
-Status ActorInstance::setFacing(Facing facing)
+Status ActorInstance::changeAnimation(std::string_view name, Facing facing, RestartFinished restart)
 {
-    auto clip = resource_->resolve(animation_, facing);
+    // Resolve the whole combination first: nothing changes unless it resolves.
+    auto clip = resource_->resolve(name, facing);
     if (!clip) return std::unexpected(clip.error());
+    // `name` may refer to animation_ itself (setFacing): copy before assigning.
+    std::string animation(name);
+    animation_ = std::move(animation);
     facing_ = facing;
     flipX_ = clip->flipX;
-    // Continues if it is the clip already selected; starts a different one from the beginning.
-    if (!(clip->clip == player_.clip())) player_.play(std::move(clip->clip));
+    if (!(clip->clip == player_.clip()) || restart == RestartFinished::Yes) {
+        // A different clip starts from its beginning; for the same clip, play() restarts it only
+        // if it is stopped or finished and leaves it untouched if it is playing or paused.
+        player_.play(std::move(clip->clip));
+    }
     return {};
+}
+
+Status ActorInstance::setAnimation(std::string_view name, Facing facing)
+{
+    return changeAnimation(name, facing, RestartFinished::No);
+}
+
+Status ActorInstance::setFacing(Facing facing)
+{
+    return changeAnimation(animation_, facing, RestartFinished::No);
 }
 
 Status ActorInstance::playAnimation(std::string_view name)
 {
-    auto clip = resource_->resolve(name, facing_);
-    if (!clip) return std::unexpected(clip.error());
-    animation_ = std::string(name);
-    flipX_ = clip->flipX;
-    player_.play(std::move(clip->clip));
-    return {};
+    return changeAnimation(name, facing_, RestartFinished::Yes);
 }
 
 ActorRenderState ActorInstance::renderState() const

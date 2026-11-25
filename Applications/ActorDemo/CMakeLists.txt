@@ -20,6 +20,10 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
     set(actor_demo_asset_destination "$<TARGET_BUNDLE_CONTENT_DIR:ActorDemo>/Resources/Assets")
 else()
+    # Its own directory (bin/ActorDemo/<config>): the asset root is "Assets" next to the
+    # executable, and EngineDemo deploys its own Assets next to itself in bin/<config>. Sharing
+    # that directory would let each demo's deployment replace the other's assets.
+    set_target_properties(ActorDemo PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/ActorDemo")
     set(actor_demo_asset_destination "$<TARGET_FILE_DIR:ActorDemo>/Assets")
 endif()
 

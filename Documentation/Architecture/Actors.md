@@ -117,7 +117,17 @@ directions they use.
 **Mirroring** happens only through an explicit `flip_x` on a mapping; the engine never mirrors on
 its own. The walker's `east` mapping is `idle_west` mirrored.
 
-**Changing facing** (`ActorInstance::setFacing`):
+**Changing animation and facing together** (`ActorInstance::setAnimation(name, facing)`) resolves
+the whole combination first and changes the actor only if it resolves. Movement code needs this.
+Take an actor that is idle and facing south, where `idle` has no north clip and `walk` has no
+south clip:
+- calling `setFacing(North)` then `playAnimation("walk")` fails at the first step;
+- calling them the other way round also fails at the first step;
+- `setAnimation("walk", North)` succeeds.
+
+`setFacing(f)` is `setAnimation(current animation, f)`.
+
+**Changing facing** (`ActorInstance::setFacing`, and `setAnimation` in general):
 - **Same clip:** if the new facing resolves to the clip already selected (perhaps mirrored
   differently), playback continues untouched, including a paused state.
 - **Different clip:** it starts from its first frame. The phase is not synchronised between
@@ -128,17 +138,25 @@ its own. The walker's `east` mapping is `idle_west` mirrored.
 ## Actor instances
 
 - **Identity:** an `ActorInstance` has a room-local `id`, a runtime `handle()` (a
-  `script::ObjectRef`) and a shared `ActorResource`. All three are fixed at creation. Copying and
-  assignment are deleted, so an identity can be neither duplicated nor overwritten, not even
-  through the room's `std::span<ActorInstance>`.
+  `script::ObjectRef`) and a shared `ActorResource`. All three are fixed at creation.
+- **No copying or moving:** an actor can be neither copied nor moved. `ActorInstance::create`
+  returns a `std::unique_ptr` and the room owns its actors that way, so an identity is never
+  duplicated, overwritten or moved out of its room, and an actor's address is fixed for its
+  lifetime.
 - **State:** position, facing, visibility, scale, the logical animation and its playback. All of
   it lives in the instance; the resources never change.
 - **Validation:** changes are validated, and a failed one leaves the actor exactly as it was.
   - `setPosition` requires finite coordinates within 2^20.
   - `setScale` requires a positive, finite value of at most 1000.
   - `setFacing` and `playAnimation` require a clip that resolves.
-- **Playing an animation:** `playAnimation(name)` follows the player's same-clip rule, so asking for
-  the animation that is already playing does not restart it.
+- **Playing an animation:** `playAnimation(name)` is "play this":
+  - it uses the current facing;
+  - asking for the clip that is already playing or paused does not restart it;
+  - a stopped or finished clip starts again, so a finished wave can be replayed.
+
+  `setAnimation` and `setFacing` never restart the clip that is already selected, whatever its
+  status. Re-asserting the current animation every frame therefore leaves a finished clip on its
+  last frame.
 - **Playback controls:** `restartAnimation`, `pauseAnimation`, `resumeAnimation`,
   `stopAnimation`.
 - **Advancing:** `update(ticks)` advances playback; nothing else does.
@@ -240,7 +258,8 @@ yet.
 ### Ownership, lookup and lifetime
 
 **Lookup:**
-- `RoomInstance::actors()` returns the actors in placement order.
+- `RoomInstance::actors()` returns the actors in placement order as an `ActorView`: a span-like
+  view of `ActorInstance&` (`actors()[i]`, `size()` and range-for all work).
 - `actor(id)` and `actor(ObjectRef)` return nullptr if there is no such actor in this instance.
 - Objects and actors are distinct kinds: `object()` never returns an actor and `actor()` never
   returns an object.

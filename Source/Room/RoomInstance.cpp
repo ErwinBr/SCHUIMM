@@ -31,7 +31,7 @@ Result<std::unique_ptr<RoomInstance>> RoomInstance::create(LoadedRoom room, scri
     }
     // Every actor is created before the instance exists: a failure publishes nothing.
     const auto& placements = room.resource->actors;
-    std::vector<ActorInstance> actors;
+    std::vector<std::unique_ptr<ActorInstance>> actors;
     actors.reserve(placements.size());
     for (std::size_t i = 0; i < placements.size(); ++i) {
         auto actor = ActorInstance::create(placements[i].id, room.actors[i],
@@ -44,7 +44,7 @@ Result<std::unique_ptr<RoomInstance>> RoomInstance::create(LoadedRoom room, scri
     return std::unique_ptr<RoomInstance>(new RoomInstance(std::move(room), host, std::move(actors)));
 }
 
-RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<ActorInstance> actors)
+RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<std::unique_ptr<ActorInstance>> actors)
     : room_(std::move(room))
     , host_(host)
     , actors_(std::move(actors))
@@ -91,8 +91,9 @@ const RoomObject* RoomInstance::object(script::ObjectRef handle) const noexcept
 
 ActorInstance* RoomInstance::actor(std::string_view id) noexcept
 {
-    const auto found = std::find_if(actors_.begin(), actors_.end(), [id](const ActorInstance& a) { return a.id() == id; });
-    return found == actors_.end() ? nullptr : &*found;
+    const auto found = std::find_if(actors_.begin(), actors_.end(),
+                                    [id](const std::unique_ptr<ActorInstance>& a) { return a->id() == id; });
+    return found == actors_.end() ? nullptr : found->get();
 }
 
 const ActorInstance* RoomInstance::actor(std::string_view id) const noexcept
@@ -103,9 +104,9 @@ const ActorInstance* RoomInstance::actor(std::string_view id) const noexcept
 ActorInstance* RoomInstance::actor(script::ObjectRef handle) noexcept
 {
     if (handle.isNull()) return nullptr;
-    const auto found =
-        std::find_if(actors_.begin(), actors_.end(), [handle](const ActorInstance& a) { return a.handle() == handle; });
-    return found == actors_.end() ? nullptr : &*found;
+    const auto found = std::find_if(actors_.begin(), actors_.end(),
+                                    [handle](const std::unique_ptr<ActorInstance>& a) { return a->handle() == handle; });
+    return found == actors_.end() ? nullptr : found->get();
 }
 
 const ActorInstance* RoomInstance::actor(script::ObjectRef handle) const noexcept
@@ -117,7 +118,7 @@ void RoomInstance::update(double deltaSeconds)
 {
     const std::uint64_t ticks = clock_.advance(deltaSeconds);
     if (ticks == 0) return;
-    for (ActorInstance& actor : actors_) actor.update(ticks);
+    for (const std::unique_ptr<ActorInstance>& actor : actors_) actor->update(ticks);
 }
 
 RoomDrawList RoomInstance::drawList() const
@@ -125,7 +126,7 @@ RoomDrawList RoomInstance::drawList() const
     RoomDrawList list;
     list.reserve(actors_.size());
     for (std::size_t i = 0; i < actors_.size(); ++i) {
-        const ActorInstance& actor = actors_[i];
+        const ActorInstance& actor = *actors_[i];
         if (!actor.visible()) continue;
         list.push_back(RoomDrawItem{actor.position().y, i, actor.renderState()});
     }

@@ -255,7 +255,7 @@ be combined by hand.
   - `flags`, a name → bool map.
 
 `RoomObject` cannot be assigned, so its identity cannot be overwritten, not even through
-`objects()`. Copying one out gives a snapshot that does not affect the room.
+`objects()`. Copying one out, or "moving" one out (there is no move constructor, so that copies too), gives a snapshot that does not affect the room.
 
 The state is the instance's own: changing it never changes the resource or any other instance. The live state is deliberately small, since later milestones add what their systems need. Scripts cannot reach it yet; natives over room state come with the interaction milestone. Look objects up with `object(id)` or `object(handle)`.
 

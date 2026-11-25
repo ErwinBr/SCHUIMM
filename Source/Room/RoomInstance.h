@@ -19,8 +19,9 @@
 // actor() never an object, and the room script's object declarations refer to objects only.
 //
 // Lifetime of views: the object and actor collections are fixed when the instance is created, so
-// spans, pointers and references from objects(), actors(), object() and actor() stay valid until
-// the instance is destroyed.
+// spans, views, pointers and references from objects(), actors(), object() and actor() stay valid
+// until the instance is destroyed. Each actor is allocated on its own and can be neither copied
+// nor moved, so its address is stable.
 //
 // Updating: update(deltaSeconds) converts engine time to animation ticks (one AnimationClock per
 // instance, so every actor advances by the same ticks) and advances all actors, visible or not.
@@ -51,6 +52,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace schuimm::room {
@@ -60,11 +62,11 @@ namespace schuimm::room {
 // own: changing it never changes the definition.
 //
 // Assignment is deleted, so the identity cannot be overwritten through objects() either. Copying
-// one out gives a snapshot that does not affect the room.
+// one out gives a snapshot that does not affect the room; so does "moving" one out, because there
+// is no move constructor (an rvalue is copied), so the room's object keeps its state.
 class RoomObject {
 public:
     RoomObject(const RoomObject&) = default;
-    RoomObject(RoomObject&&) noexcept = default;
     RoomObject& operator=(const RoomObject&) = delete;
     RoomObject& operator=(RoomObject&&) = delete;
 
@@ -92,6 +94,52 @@ private:
     script::ObjectRef handle_;
 };
 
+// A view of a room's actors: ActorInstance& (or const ActorInstance&) in placement order, with
+// operator[], size(), empty() and range-for. Like std::span it is a pointer and a size (trivially
+// copyable), so references taken from a temporary view, as in `auto& a = room.actors()[0];`,
+// refer to the room's actor and stay valid as long as the room (GCC's -Wdangling-reference
+// recognises such span-like views; it flags std::views::transform).
+template <typename T>
+class ActorView {
+public:
+    using Pointer = std::unique_ptr<std::remove_const_t<T>>;
+
+    class Iterator {
+    public:
+        explicit Iterator(const Pointer* at) noexcept
+            : at_(at)
+        {
+        }
+        T& operator*() const noexcept { return **at_; }
+        T* operator->() const noexcept { return at_->get(); }
+        Iterator& operator++() noexcept
+        {
+            ++at_;
+            return *this;
+        }
+        friend bool operator==(Iterator, Iterator) noexcept = default;
+
+    private:
+        const Pointer* at_;
+    };
+
+    ActorView(const Pointer* data, std::size_t size) noexcept
+        : data_(data)
+        , size_(size)
+    {
+    }
+
+    [[nodiscard]] T& operator[](std::size_t index) const noexcept { return *data_[index]; }
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+    [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
+    [[nodiscard]] Iterator begin() const noexcept { return Iterator(data_); }
+    [[nodiscard]] Iterator end() const noexcept { return Iterator(data_ + size_); }
+
+private:
+    const Pointer* data_;
+    std::size_t size_;
+};
+
 class RoomInstance {
 public:
     // Creates the runtime objects and actors of `room`. Checks the script's object declarations
@@ -117,9 +165,9 @@ public:
     [[nodiscard]] RoomObject* object(script::ObjectRef handle) noexcept;
     [[nodiscard]] const RoomObject* object(script::ObjectRef handle) const noexcept;
 
-    // In the order of the resource's actor placements.
-    [[nodiscard]] std::span<ActorInstance> actors() noexcept { return actors_; }
-    [[nodiscard]] std::span<const ActorInstance> actors() const noexcept { return actors_; }
+    // In the order of the resource's actor placements (ActorView: actors()[i], size(), range-for).
+    [[nodiscard]] ActorView<ActorInstance> actors() noexcept { return {actors_.data(), actors_.size()}; }
+    [[nodiscard]] ActorView<const ActorInstance> actors() const noexcept { return {actors_.data(), actors_.size()}; }
     // nullptr if there is no such actor (in this instance).
     [[nodiscard]] ActorInstance* actor(std::string_view id) noexcept;
     [[nodiscard]] const ActorInstance* actor(std::string_view id) const noexcept;
@@ -146,14 +194,14 @@ public:
     [[nodiscard]] std::size_t activeCoroutineCount() const;
 
 private:
-    RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<ActorInstance> actors);
+    RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<std::unique_ptr<ActorInstance>> actors);
     void track(script::CoroutineHandle handle);
     void prune();
 
     LoadedRoom room_;
     script::ScriptHost& host_;
     std::vector<RoomObject> objects_;
-    std::vector<ActorInstance> actors_;
+    std::vector<std::unique_ptr<ActorInstance>> actors_;
     animation::AnimationClock clock_;
     std::vector<script::CoroutineHandle> coroutines_;
 };

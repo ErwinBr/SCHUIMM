@@ -155,7 +155,8 @@ std::string actorReplacing(std::string_view from, std::string_view to)
         }                                                                                          \
     } while (false)
 
-ActorInstance makeActor(std::string id, const std::shared_ptr<const ActorResource>& resource, Vec2 position = {100, 200})
+std::unique_ptr<ActorInstance> makeActor(std::string id, const std::shared_ptr<const ActorResource>& resource,
+                                         Vec2 position = {100, 200})
 {
     auto actor = ActorInstance::create(std::move(id), resource, defaultActorConfiguration(*resource, position));
     REQUIRE(actor.has_value());
@@ -307,8 +308,11 @@ SCHUIMM_TEST(Actor_DefaultScale)
 SCHUIMM_TEST(Actor_IdentityIsImmutable)
 {
     static_assert(!std::is_copy_constructible_v<ActorInstance>);
+    static_assert(!std::is_move_constructible_v<ActorInstance>);
     static_assert(!std::is_copy_assignable_v<ActorInstance>);
     static_assert(!std::is_move_assignable_v<ActorInstance>);
+    static_assert(std::is_same_v<decltype(ActorInstance::create("a", nullptr, {})),
+                                 Result<std::unique_ptr<ActorInstance>>>);
     static_assert(std::is_same_v<decltype(std::declval<const ActorInstance&>().handle()), script::ObjectRef>);
     static_assert(std::is_same_v<decltype(std::declval<ActorInstance&>().id()), const std::string&>);
     static_assert(std::is_same_v<decltype(std::declval<ActorInstance&>().resource()), const ActorResource&>);
@@ -317,7 +321,8 @@ SCHUIMM_TEST(Actor_IdentityIsImmutable)
 SCHUIMM_TEST(Actor_CreatedFromTheResourceDefaults)
 {
     const auto resource = heroResource();
-    const ActorInstance actor = makeActor("hero", resource);
+    const auto actorOwner = makeActor("hero", resource);
+    const ActorInstance& actor = *actorOwner;
     CHECK(actor.id() == "hero");
     CHECK(!actor.handle().isNull());
     CHECK(&actor.resource() == resource.get());
@@ -353,8 +358,10 @@ SCHUIMM_TEST(Actor_CreationValidatesTheConfiguration)
 SCHUIMM_TEST(Actor_InstancesSharingAResourceAreIndependent)
 {
     const auto resource = heroResource();
-    ActorInstance a = makeActor("guard_01", resource, {10, 10});
-    ActorInstance b = makeActor("guard_02", resource, {20, 20});
+    const auto aOwner = makeActor("guard_01", resource, {10, 10});
+    ActorInstance& a = *aOwner;
+    const auto bOwner = makeActor("guard_02", resource, {20, 20});
+    ActorInstance& b = *bOwner;
     CHECK(a.handle() != b.handle());
     CHECK(&a.resource() == &b.resource());
     REQUIRE(a.setFacing(Facing::West).has_value());
@@ -375,7 +382,8 @@ SCHUIMM_TEST(Actor_InstancesSharingAResourceAreIndependent)
 
 SCHUIMM_TEST(Actor_PlayingTheCurrentAnimationDoesNotRestart)
 {
-    ActorInstance actor = makeActor("hero", heroResource());
+    const auto actorOwner = makeActor("hero", heroResource());
+    ActorInstance& actor = *actorOwner;
     actor.update(7);
     REQUIRE(actor.playAnimation("idle").has_value());
     CHECK_EQ(actor.player().elapsedTicks(), std::uint64_t{7});
@@ -395,7 +403,8 @@ SCHUIMM_TEST(Actor_PlayingTheCurrentAnimationDoesNotRestart)
 
 SCHUIMM_TEST(Actor_FacingChanges)
 {
-    ActorInstance actor = makeActor("hero", heroResource());
+    const auto actorOwner = makeActor("hero", heroResource());
+    ActorInstance& actor = *actorOwner;
     actor.update(5);
     // A different clip starts from its beginning.
     REQUIRE(actor.setFacing(Facing::West).has_value());
@@ -422,7 +431,8 @@ SCHUIMM_TEST(Actor_FacingChanges)
 
 SCHUIMM_TEST(Actor_FailedChangesPreserveTheState)
 {
-    ActorInstance actor = makeActor("hero", heroResource());
+    const auto actorOwner = makeActor("hero", heroResource());
+    ActorInstance& actor = *actorOwner;
     REQUIRE(actor.setFacing(Facing::East).has_value());
     actor.update(4);
     const auto before = [&] {
@@ -458,7 +468,8 @@ SCHUIMM_TEST(Actor_FailedChangesPreserveTheState)
 
 SCHUIMM_TEST(Actor_StopPauseResume)
 {
-    ActorInstance actor = makeActor("hero", heroResource());
+    const auto actorOwner = makeActor("hero", heroResource());
+    ActorInstance& actor = *actorOwner;
     actor.update(12);
     actor.pauseAnimation();
     actor.update(100);
@@ -474,11 +485,79 @@ SCHUIMM_TEST(Actor_StopPauseResume)
     CHECK(actor.playbackStatus() == PlaybackStatus::Playing);
 }
 
+SCHUIMM_TEST(Actor_SetAnimationChangesAnimationAndFacingTogether)
+{
+    // idle has only a south clip, walk only a north one: neither single change can get from
+    // idle-south to walk-north.
+    const auto resource = decodeActor(R"({ "version": 1, "id": "mover",
+      "animation_resources": { "main": "Actors/Hero/hero.anim.json" },
+      "animations": {
+        "idle": { "south": { "resource": "main", "clip": "idle_south" } },
+        "walk": { "north": { "resource": "main", "clip": "idle_north" },
+                  "north_west": { "resource": "main", "clip": "idle_north", "flip_x": true } } },
+      "default_animation": "idle", "default_facing": "south" })");
+    REQUIRE(resource.has_value());
+    const auto shared = std::make_shared<const ActorResource>(*resource);
+    const auto owner = makeActor("mover", shared);
+    ActorInstance& actor = *owner;
+    actor.update(7);
+    const auto state = [&] {
+        return std::make_tuple(actor.facing(), actor.animation(), clipName(actor), actor.flipX(),
+                               actor.player().elapsedTicks(), actor.playbackStatus());
+    };
+    const auto before = state();
+
+    CHECK(!actor.setFacing(Facing::North).has_value());   // idle has no north clip
+    CHECK(!actor.playAnimation("walk").has_value());      // walk has no south clip
+    CHECK(state() == before);
+    CHECK(!actor.setAnimation("walk", Facing::South).has_value());
+    CHECK(!actor.setAnimation("run", Facing::North).has_value());
+    CHECK(state() == before);
+
+    REQUIRE(actor.setAnimation("walk", Facing::North).has_value());
+    CHECK(actor.animation() == "walk");
+    CHECK(actor.facing() == Facing::North);
+    CHECK(clipName(actor) == "idle_north");
+    CHECK_EQ(actor.player().elapsedTicks(), std::uint64_t{0}); // A different clip starts over.
+
+    // The same clip, mirrored: continues, even while paused.
+    actor.update(5);
+    actor.pauseAnimation();
+    REQUIRE(actor.setAnimation("walk", Facing::NorthWest).has_value());
+    CHECK(actor.flipX());
+    CHECK(actor.playbackStatus() == PlaybackStatus::Paused);
+    CHECK_EQ(actor.player().elapsedTicks(), std::uint64_t{5});
+    actor.resumeAnimation();
+
+    // Back to idle-south in one step.
+    REQUIRE(actor.setAnimation("idle", Facing::South).has_value());
+    CHECK(clipName(actor) == "idle_south");
+    CHECK(!actor.flipX());
+}
+
+SCHUIMM_TEST(Actor_SetAnimationDoesNotRestartAFinishedClipButPlayAnimationDoes)
+{
+    const auto owner = makeActor("hero", heroResource());
+    ActorInstance& actor = *owner;
+    REQUIRE(actor.playAnimation("wave").has_value());
+    CHECK(actor.update(100).finished);
+    // Re-asserting the same animation (as movement code would) leaves it finished.
+    REQUIRE(actor.setAnimation("wave", Facing::South).has_value());
+    CHECK(actor.playbackStatus() == PlaybackStatus::Finished);
+    REQUIRE(actor.setAnimation("wave", Facing::West).has_value()); // Fallback: the same clip.
+    CHECK(actor.playbackStatus() == PlaybackStatus::Finished);
+    // "Play this" starts it again.
+    REQUIRE(actor.playAnimation("wave").has_value());
+    CHECK(actor.playbackStatus() == PlaybackStatus::Playing);
+    CHECK_EQ(actor.player().elapsedTicks(), std::uint64_t{0});
+}
+
 // --- Render state ---
 
 SCHUIMM_TEST(Actor_RenderStatePlacesThePivotOnTheGroundPoint)
 {
-    ActorInstance actor = makeActor("hero", heroResource(), {100, 200});
+    const auto actorOwner = makeActor("hero", heroResource(), {100, 200});
+    ActorInstance& actor = *actorOwner;
     // Frame 0 of idle_south: source [0, 0, 32, 64], pivot [16, 60].
     ActorRenderState state = actor.renderState();
     CHECK(state.image == AssetPath::parse("Actors/Hero/hero.png").value());
@@ -497,7 +576,8 @@ SCHUIMM_TEST(Actor_RenderStatePlacesThePivotOnTheGroundPoint)
 
 SCHUIMM_TEST(Actor_RenderStateMirroringAndScale)
 {
-    ActorInstance actor = makeActor("hero", heroResource(), {100, 200});
+    const auto actorOwner = makeActor("hero", heroResource(), {100, 200});
+    ActorInstance& actor = *actorOwner;
     REQUIRE(actor.setFacing(Facing::West).has_value());
     // idle_west frame 0: source [104, 0, 30, 64], pivot [10, 60].
     CHECK(actor.renderState().destination == (RectF{90, 140, 30, 64}));
@@ -516,7 +596,8 @@ SCHUIMM_TEST(Actor_RenderStateMirroringAndScale)
 
 SCHUIMM_TEST(Actor_RenderingDoesNotAdvancePlayback)
 {
-    ActorInstance actor = makeActor("hero", heroResource());
+    const auto actorOwner = makeActor("hero", heroResource());
+    ActorInstance& actor = *actorOwner;
     actor.update(3);
     const ActorRenderState first = actor.renderState();
     for (int i = 0; i < 10; ++i) {
@@ -775,6 +856,29 @@ SCHUIMM_TEST(RoomActors_LookupAndHandles)
     for (const ActorInstance& actor : room->actors()) handles.insert(actor.handle().id);
     CHECK_EQ(handles.size(), room->objects().size() + room->actors().size());
     CHECK(handles.count(0) == 0);
+}
+
+SCHUIMM_TEST(RoomActors_ActorsCannotBeMovedOutAndObjectsOnlyCopied)
+{
+    static_assert(!std::is_move_constructible_v<ActorInstance>);
+    ActorRoomFixture fixture;
+    const AssetLocator locator = fixture.locator();
+    RoomLibrary library(locator, fixture.host);
+    const auto room = instantiate(library, fixture.host, "Rooms/Hall.room.json");
+
+    // Actors stay where they are: stable addresses, reachable through the view.
+    const ActorInstance* hero = room->actor("hero");
+    CHECK(&room->actors()[0] == hero);
+    CHECK_EQ(room->actors().size(), std::size_t{4});
+
+    // "Moving" a room object out copies it: the room's object keeps its state.
+    RoomObject& door = room->objects()[0];
+    door.flags["open"] = true;
+    const RoomObject taken = std::move(room->objects()[0]);
+    CHECK(taken.flags.at("open"));
+    CHECK(door.flags.count("open") == 1);
+    CHECK(door.handle() == taken.handle());
+    CHECK(room->object(door.handle()) == &door);
 }
 
 SCHUIMM_TEST(RoomActors_RecreatingARoomStartsFromItsPlacements)

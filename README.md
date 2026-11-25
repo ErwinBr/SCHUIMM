@@ -163,7 +163,8 @@ See `EngineDemo --help`. Scripts: the demo runs `Applications/EngineDemo/Scripts
 
 ```bash
 ./Build/macos-clang/bin/Debug/ActorDemo.app/Contents/MacOS/ActorDemo   # macOS
-./Build/linux-gcc/bin/Debug/ActorDemo                                  # Linux
+./Build/linux-gcc/bin/ActorDemo/Debug/ActorDemo                        # Linux
+Build\windows-msvc\bin\ActorDemo\Debug\ActorDemo.exe                  # Windows
 ```
 
 Two rooms (a hall and a garden) with actors that share one walker resource and one lamp
