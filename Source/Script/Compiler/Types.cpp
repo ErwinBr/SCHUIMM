@@ -12,6 +12,7 @@ const char* toString(Type type) noexcept
     case Type::Float: return "float";
     case Type::String: return "string";
     case Type::Any: return "any";
+    case Type::Object: return "object";
     }
     return "?";
 }
@@ -24,6 +25,7 @@ ScriptType toScriptType(Type type) noexcept
     case Type::Float: return ScriptType::Float;
     case Type::String: return ScriptType::String;
     case Type::Any: return ScriptType::Any;
+    case Type::Object: return ScriptType::Object;
     case Type::Error:
     case Type::None: return ScriptType::None;
     }
@@ -39,6 +41,7 @@ Type fromScriptType(ScriptType type) noexcept
     case ScriptType::Float: return Type::Float;
     case ScriptType::String: return Type::String;
     case ScriptType::Any: return Type::Any;
+    case ScriptType::Object: return Type::Object;
     }
     return Type::Error;
 }

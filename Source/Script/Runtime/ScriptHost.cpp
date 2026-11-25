@@ -61,6 +61,26 @@ Result<CoroutineHandle> ScriptHost::start(std::shared_ptr<const Program> program
     return handle;
 }
 
+Result<DispatchResult> ScriptHost::dispatch(std::shared_ptr<const Program> program, std::string_view object,
+                                            std::string_view event, ObjectRef self, std::vector<Value> arguments)
+{
+    const std::string name = program ? program->name() : std::string("<none>");
+    auto result = scheduler_.dispatch(std::move(program), object, event, self, std::move(arguments));
+    if (!result) {
+        logger_.error(category, concat("Cannot dispatch '", object, ".", event, "' of script '", name, "': ",
+                                       result.error().message));
+        return result;
+    }
+    if (!result->handled) {
+        logger_.debug(category, concat("No handler ", name, ":", object, ".", event));
+        return result;
+    }
+    ++statistics_.started;
+    logger_.debug(category, concat("Started coroutine ", result->handle.index, " running ", name, ":", object, ".", event,
+                                   " for object#", self.id));
+    return result;
+}
+
 void ScriptHost::update(double deltaSeconds)
 {
     scheduler_.update(deltaSeconds);

@@ -69,11 +69,9 @@ public:
     {
         model_.natives_ = preludeNatives();
         declareFunctions();
-        std::size_t functionIndex = 0;
-        for (const auto& function : unit_.functions) {
-            if (!function->isExtern) {
-                checkFunction(*function, functionIndex++);
-            }
+        declareObjects();
+        for (std::size_t i = 0; i < model_.functions_.size(); ++i) {
+            checkFunction(*model_.functions_[i].declaration, i);
         }
         return std::move(model_);
     }
@@ -111,14 +109,7 @@ private:
                 }
                 valid = false;
             }
-            for (std::size_t p = 0; p < function->parameters.size(); ++p) {
-                for (std::size_t q = 0; q < p; ++q) {
-                    if (function->parameters[p].name == function->parameters[q].name) {
-                        error(function->parameters[p].nameRange,
-                              concat("Duplicate parameter '", function->parameters[p].name, "'."));
-                    }
-                }
-            }
+            checkParameterNames(*function);
             if (function->isExtern) {
                 NativeSignature native;
                 native.name = name;
@@ -143,12 +134,82 @@ private:
         }
     }
 
+    void checkParameterNames(const FunctionDecl& function)
+    {
+        for (std::size_t p = 0; p < function.parameters.size(); ++p) {
+            for (std::size_t q = 0; q < p; ++q) {
+                if (function.parameters[p].name == function.parameters[q].name) {
+                    error(function.parameters[p].nameRange, concat("Duplicate parameter '", function.parameters[p].name, "'."));
+                }
+            }
+        }
+    }
+
+    // Object declarations and their handlers. Objects share the room namespace (an object
+    // cannot be named like a function or native); handler names are scoped to their object.
+    void declareObjects()
+    {
+        std::unordered_map<std::string, SourceRange> objectNames;
+        for (std::size_t o = 0; o < unit_.objects.size(); ++o) {
+            const ObjectDecl& object = *unit_.objects[o];
+            const auto objectIndex = static_cast<std::uint32_t>(o);
+            if (isReservedName(object.name)) {
+                error(object.nameRange, concat("'", object.name, "' is a built-in name and cannot be used as an object name."));
+            } else if (const auto existing = objectNames.find(object.name); existing != objectNames.end()) {
+                error(object.nameRange, concat("Duplicate declaration of object '", object.name, "'."),
+                      {concat("'", object.name, "' was first declared on line ", existing->second.begin.line,
+                              "; put all handlers of an object in one declaration.")});
+            } else if (const auto symbol = symbols_.find(object.name); symbol != symbols_.end()) {
+                error(object.nameRange, concat("Object '", object.name, "' has the same name as a function."),
+                      {symbol->second.declaration.begin.line == 0
+                           ? concat("'", object.name, "' is a built-in function.")
+                           : concat("The function was declared on line ", symbol->second.declaration.begin.line, ".")});
+            } else {
+                objectNames.emplace(object.name, object.nameRange);
+            }
+            ObjectSemantics semantics;
+            semantics.declaration = &object;
+            std::unordered_map<std::string, SourceRange> handlerNames;
+            for (const auto& handler : object.handlers) {
+                checkParameterNames(*handler);
+                const auto functionIndex = static_cast<std::uint32_t>(model_.functions_.size());
+                FunctionSemantics function;
+                function.declaration = handler.get();
+                function.object = objectIndex;
+                model_.functions_.push_back(std::move(function));
+                if (isReservedName(handler->name)) {
+                    error(handler->nameRange, concat("'", handler->name, "' is a built-in name and cannot be used as a handler name."));
+                } else if (const auto existing = handlerNames.find(handler->name); existing != handlerNames.end()) {
+                    error(handler->nameRange,
+                          concat("Duplicate handler '", handler->name, "' in object '", object.name, "'."),
+                          {concat("'", handler->name, "' was first declared on line ", existing->second.begin.line, ".")});
+                } else {
+                    handlerNames.emplace(handler->name, handler->nameRange);
+                    semantics.handlers.push_back({handler->name, functionIndex});
+                }
+            }
+            model_.objects_.push_back(std::move(semantics));
+        }
+    }
+
+    // "blender.use" for handlers, "use" for room-level functions (messages only).
+    [[nodiscard]] std::string displayName(const FunctionDecl& function) const
+    {
+        if (current_ != nullptr && current_->isHandler()) {
+            return concat(unit_.objects[current_->object]->name, ".", function.name);
+        }
+        return function.name;
+    }
+
     // --- Pass 2: function bodies -------------------------------------------------------------
     void checkFunction(const FunctionDecl& function, std::size_t index)
     {
         current_ = &model_.functions_[index];
         scopes_.clear();
         scopes_.emplace_back();
+        if (current_->isHandler()) {
+            declareVariable("self", Type::Object, function.nameRange, true); // Variable 0: the hidden parameter.
+        }
         for (const Parameter& parameter : function.parameters) {
             if (scopes_.back().count(parameter.name) == 0) {
                 declareVariable(parameter.name, parameter.type, parameter.nameRange, true);
@@ -159,7 +220,7 @@ private:
             if (function.returnType != Type::None && function.returnType != Type::Error &&
                 !alwaysReturns(*function.body)) {
                 error(function.nameRange,
-                      concat("Function '", function.name, "' must return a value of type ", quoted(function.returnType),
+                      concat("Function '", displayName(function), "' must return a value of type ", quoted(function.returnType),
                              " on every path."),
                       {"Add a 'return' statement at the end of the function."});
             }
@@ -367,6 +428,16 @@ private:
         case ExprKind::BoolLiteral: info.type = Type::Bool; break;
         case ExprKind::NoneLiteral: info.type = Type::None; break;
         case ExprKind::Name: return checkName(expression);
+        case ExprKind::Self:
+            if (current_ == nullptr || !current_->isHandler()) {
+                error(expression.range, "'self' is only available inside object handlers.",
+                      {"Declare the function inside an 'object name:' block to use 'self'."});
+                info.type = Type::Error;
+            } else {
+                info.type = Type::Object;
+                info.variable = 0;
+            }
+            break;
         case ExprKind::Unary: return checkUnary(expression);
         case ExprKind::Binary: return checkBinary(expression);
         case ExprKind::Call: return checkCall(expression);
@@ -523,6 +594,11 @@ private:
         if (symbol == symbols_.end()) {
             if (lookupVariable(name)) {
                 error(call.nameRange, concat("'", name, "' is a variable, not a function."));
+            } else if (isSiblingHandler(name)) {
+                error(call.nameRange, concat("Undefined function '", name, "'."),
+                      {concat("'", name, "' is a handler of object '", unit_.objects[current_->object]->name,
+                              "'; handlers are invoked by the engine and cannot be called directly. "
+                              "Move shared code into a room-level function.")});
             } else {
                 error(call.nameRange, concat("Undefined function '", name, "'."),
                       {"Declare engine functions with 'extern func name(...)'."});
@@ -562,6 +638,17 @@ private:
             }
         }
         return record(call, info);
+    }
+
+    [[nodiscard]] bool isSiblingHandler(const std::string& name) const
+    {
+        if (current_ == nullptr || !current_->isHandler()) {
+            return false;
+        }
+        for (const auto& handler : unit_.objects[current_->object]->handlers) {
+            if (handler->name == name) return true;
+        }
+        return false;
     }
 
     Type checkIntrinsic(const Expr& call, Intrinsic intrinsic, const std::vector<Type>& arguments)

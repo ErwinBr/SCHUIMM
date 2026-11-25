@@ -14,6 +14,7 @@ enum class ScriptType : std::uint8_t {
     Float = 3,  // IEEE 754 binary64.
     String = 4, // Immutable UTF-8 text.
     Any = 5,    // Native parameters only: accepts any value except None (e.g. print).
+    Object = 6, // Opaque handle of an engine object (ObjectRef); format 1.1 and later.
 };
 
 [[nodiscard]] const char* toString(ScriptType type) noexcept;

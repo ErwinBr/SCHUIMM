@@ -29,7 +29,9 @@ bytecode lives exactly as long as it is needed.
 
 ## Values and strings
 
-`Value` is a 16-byte tagged union: None, bool, int (`int64_t`), float (`double`) or string.
+`Value` is a 16-byte tagged union: None, bool, int (`int64_t`), float (`double`), string or
+object. An object value is an `ObjectRef { std::uint64_t id; }`: an opaque handle chosen by the
+engine (see [Object handlers](#object-handlers-and-dispatch)); it owns nothing.
 Strings are `StringObject`s: immutable, with an intrusive, **non-atomic** reference count; a
 string `Value` holds one reference, so registers contain a pointer, not a `std::string`.
 Ownership rules:
@@ -109,6 +111,9 @@ extern func play_sound(name: string, volume: float)   # in the script
 * Arguments arrive already checked against the declared types; the return value is checked
   against the declared return type (a mismatch is a `Native` error).
 * `ScriptType::Any` accepts every value but None (used by `print`).
+* `ScriptType::Object` parameters and results carry `ObjectRef` handles (`arguments[0].asObject()`,
+  `Value::fromObject(ref)`). This is how scripts reach object state: the engine resolves the
+  handle to its own object.
 * An implementation returns `NativeResult::returnValue(v)`, `waitFor(nanoseconds)`,
   `yieldNow()` or `error(message)`. `waitFor` and `yieldNow` suspend the coroutine — this is how
   `wait`/`yield` are implemented, and how future natives such as `wait_until`, `say` or
@@ -126,6 +131,60 @@ extern func play_sound(name: string, volume: float)   # in the script
   those must outlive every program using the native (destroy or `stopAll()` the host first).
 
 The prelude (`registerStandardNatives`): `print(any)`, `wait(float)`, `yield()`.
+
+## Object handlers and dispatch
+
+An `object` declaration ([Language.md §8](Language.md#8-objects-and-handlers)) compiles to
+ordinary functions plus an entry in the bytecode's Objects table. The engine — later, the
+adventure runtime — invokes a handler by object identifier and event name:
+
+```cpp
+// ObjectRef: the engine's handle of the room object; it becomes "self".
+auto result = host.dispatch(roomScript, "blender", "use_with", ObjectRef{blenderId},
+                            {Value::fromObject(ObjectRef{bananaId})});
+if (!result) {
+    // InvalidArgument: the arguments do not match the handler's parameters (logged).
+} else if (!result->handled) {
+    // The script has no such object or handler: a normal no-op (default behaviour is the
+    // caller's business).
+} else {
+    // result->handle: a Ready coroutine; it runs in the next update like any other.
+}
+```
+
+* `Program::findHandler(object, event)`, `hasHandler`, `hasObject` look handlers up without
+  running anything. Event names are arbitrary strings; nothing in the compiler or VM knows
+  `look_at` or `use`.
+* `ScriptScheduler::dispatch` (and `ScriptHost::dispatch`, which adds logging) returns
+  `Result<DispatchResult>`: an error only for invalid arguments (or no program);
+  `handled == false` for a missing object or handler, without creating a coroutine; otherwise the
+  coroutine's handle. Its outcome is observed as for every coroutine: `state()`, `result()`,
+  `error()` and the event callback. A runtime error inside the handler is a `Failed` coroutine
+  with a normal `ScriptError`; handlers appear as `blender.use` in errors, stacks and traces.
+* `Program::findFunction` (and so `start()`) only finds room-level functions: a handler cannot
+  be started without its object.
+* Room-level functions of the same script stay startable by name (`start(program, "enter")`).
+
+**Context: a hidden parameter.** A handler's parameter 0 is `self`; dispatch passes
+`[Value::fromObject(self), arguments...]` to an ordinary entry frame (`Coroutine::createHandler`).
+This reuses everything that exists: the calling convention and argument checks, the bytecode
+validation of argument windows, and the coroutine's register stack. `self` is just register 0
+of the handler's frame, so it is valid for exactly as long as the coroutine — across `wait()`,
+`yield()` and budget preemption — and every invocation has its own. The alternative, a context
+field in `CallFrame`, would have needed a new call path and opcode to read it, and propagation
+rules for nested calls; there is no need for that, because a handler's callees are room-level
+functions without `self`.
+
+**Integration boundary.** The script side ends at the `ObjectRef`. The engine:
+
+* owns the room objects and their state, and assigns the ids — two instances of the same room
+  script must use different ids for their objects, so no state is shared between them;
+* provides natives taking `object` for whatever state scripts may read or change (for now
+  `get_flag(o: object, name: string) -> bool` and similar, as in
+  [Examples/kitchen.sch](Examples/kitchen.sch); the tests implement them with a map);
+* decides which handler to dispatch for an interaction (no fallback or reverse dispatch here).
+
+Room resources (JSON), the adventure runtime and `self.property` syntax are later milestones.
 
 ## Scheduler
 
@@ -202,6 +261,7 @@ reports through the engine `Logger`:
 * `natives()` — register game natives before loading programs that use them;
 * `load(bytes, name)` — read, validate and link; logs success or the reason for failure;
 * `start(program, "main")` — start a coroutine;
+* `dispatch(program, object, event, self, arguments)` — invoke an object handler (see above);
 * `update(dt)` — one scheduler step, then logs and releases ended coroutines;
 * `setOutputCallback` — receives `print()` output (also logged at Info, category `Script`);
 * `setEventCallback`, `statistics()`, `stopAll()`.
@@ -228,15 +288,22 @@ coroutines and releases everything.
 ## Running scripts headlessly: `schuimm-run`
 
 ```bash
-schuimm-run [--entry NAME]... [--dt SECONDS] [--frames N] [--budget N] [--preempt] [--trace] [--disasm] [--frame-log] script.schb
+schuimm-run [--entry NAME]... [--dispatch OBJECT.EVENT[=ID]]... [--dt SECONDS] [--frames N] [--budget N] [--preempt] [--trace] [--disasm] [--frame-log] script.schb
 ```
 
 Loads a `.schb` with the runtime only (no compiler), starts the entry functions (default
-`main`; repeat `--entry` for concurrent coroutines) and simulates frames of `--dt` seconds
+`main`; repeat `--entry` for concurrent coroutines), dispatches the given handlers without
+arguments with `self` = `object#ID` (default 1; `main` then only runs if named with `--entry`;
+a missing handler is reported and skipped) and simulates frames of `--dt` seconds
 (default 0.016) until all coroutines end. `print` goes to stdout, errors to stderr. Exit code
 0: all finished; 1: load/start failure or a coroutine failed; 3: frame limit reached.
 
 ```bash
 schuimmc Documentation/Scripting/Examples/coroutines.sch -o coroutines.schb
 schuimm-run coroutines.schb --entry narrator --entry clock --dt 0.25 --frame-log
+schuimmc Tests/Script/Data/objects.sch -o objects.schb
+schuimm-run objects.schb --dispatch lamp.look_at=7 --dispatch lamp.use --dt 0.25
 ```
+
+`schuimm-run` registers only the prelude natives, so scripts using game natives (like
+`kitchen.sch`) cannot be run with it.

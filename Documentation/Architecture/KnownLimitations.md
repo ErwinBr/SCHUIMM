@@ -85,9 +85,11 @@ Deliberate scope limits (as of Milestone 2) and known platform caveats.
 
 ## Scripting
 
-Language scope (version 1.0, see [Language.md](../Scripting/Language.md#11-limitations-version-10)):
+Language scope (version 1.1, see [Language.md](../Scripting/Language.md#12-limitations-version-11)):
 * no `break`/`continue`, augmented assignment, lists, dictionaries, structures, modules/imports,
   global variables or exception handling;
+* object handlers reach object state only through natives (no `self.property` syntax yet), and
+  the adventure runtime that dispatches events to them is not part of this milestone;
 * one source file is one program; natives are linked by exact signature.
 
 Runtime:

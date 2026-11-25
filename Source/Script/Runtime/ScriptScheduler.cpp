@@ -83,6 +83,27 @@ Result<CoroutineHandle> ScriptScheduler::start(std::shared_ptr<const Program> pr
     if (!coroutine) {
         return std::unexpected(coroutine.error());
     }
+    return add(std::move(*coroutine));
+}
+
+Result<DispatchResult> ScriptScheduler::dispatch(std::shared_ptr<const Program> program, std::string_view object,
+                                                 std::string_view event, ObjectRef self, std::vector<Value> arguments)
+{
+    if (!program) {
+        return makeError(ErrorCode::InvalidArgument, "No program");
+    }
+    if (!program->hasHandler(object, event)) {
+        return DispatchResult{};
+    }
+    auto coroutine = Coroutine::createHandler(std::move(program), object, event, self, std::move(arguments), settings_.limits);
+    if (!coroutine) {
+        return std::unexpected(coroutine.error());
+    }
+    return DispatchResult{true, add(std::move(*coroutine))};
+}
+
+CoroutineHandle ScriptScheduler::add(std::unique_ptr<Coroutine> coroutine)
+{
     std::uint32_t index = 0;
     while (index < slots_.size() && slots_[index].used) {
         ++index;
@@ -93,9 +114,9 @@ Result<CoroutineHandle> ScriptScheduler::start(std::shared_ptr<const Program> pr
     Slot& slot = slots_[index];
     slot.used = true;
     slot.state = CoroutineState::Ready;
-    slot.program = (*coroutine)->program().name();
-    slot.function = std::string(function);
-    slot.coroutine = std::move(*coroutine);
+    slot.program = coroutine->program().name();
+    slot.function = coroutine->entryFunction();
+    slot.coroutine = std::move(coroutine);
     slot.wakeTime = now_;
     slot.startedInUpdate = updating_ ? updates_ : 0;
     slot.sequence = nextSequence_++;

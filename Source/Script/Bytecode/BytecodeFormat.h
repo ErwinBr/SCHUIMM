@@ -25,7 +25,11 @@ enum class SectionId : std::uint32_t {
     Functions = 4,
     Code = 5,
     Debug = 6,
+    Objects = 7, // Format 1.1+.
 };
-inline constexpr std::uint32_t sectionCount = 6;
+inline constexpr std::uint32_t sectionCount = 7;        // Current format (1.1).
+inline constexpr std::uint32_t sectionCountVersion10 = 6; // Format 1.0: no Objects section.
+// The first format minor version with objects (section 7, type object, EqObject/NeObject).
+inline constexpr std::uint16_t objectsMinorVersion = 1;
 
 } // namespace schuimm::script::format

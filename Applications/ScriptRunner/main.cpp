@@ -25,11 +25,39 @@ using namespace schuimm::script;
 
 namespace {
 
+struct DispatchRequest {
+    std::string object;
+    std::string event;
+    std::uint64_t id = 1;
+};
+
+// "blender.look_at" or "blender.look_at=7".
+bool parseDispatch(std::string_view text, DispatchRequest& request)
+{
+    const std::size_t equals = text.find('=');
+    if (equals != std::string_view::npos) {
+        const std::string id(text.substr(equals + 1));
+        char* end = nullptr;
+        request.id = std::strtoull(id.c_str(), &end, 10);
+        if (id.empty() || end == nullptr || *end != '\0') return false;
+        text = text.substr(0, equals);
+    }
+    const std::size_t dot = text.find('.');
+    if (dot == std::string_view::npos || dot == 0 || dot + 1 == text.size()) return false;
+    request.object = std::string(text.substr(0, dot));
+    request.event = std::string(text.substr(dot + 1));
+    return true;
+}
+
 constexpr const char* usage =
     "Usage: schuimm-run [options] <script.schb>\n"
     "\n"
     "Options:\n"
     "  --entry NAME     Function to start (default: main); may be repeated for concurrent coroutines\n"
+    "  --dispatch OBJECT.EVENT[=ID]\n"
+    "                   Invoke the handler EVENT of object OBJECT (without arguments) with object id\n"
+    "                   ID as self (default 1); may be repeated. With --dispatch, main is only\n"
+    "                   started if given with --entry. A missing handler is reported and skipped.\n"
     "  --dt SECONDS     Simulated frame time (default: 0.016)\n"
     "  --frames N       Stop after N frames (default: 100000)\n"
     "  --budget N       Instruction budget per coroutine per frame (default: 100000)\n"
@@ -45,6 +73,7 @@ int main(int argc, char** argv)
 {
     std::string input;
     std::vector<std::string> entries;
+    std::vector<DispatchRequest> dispatches;
     double dt = 0.016;
     long long frames = 100000;
     unsigned long long budget = 100000;
@@ -66,6 +95,14 @@ int main(int argc, char** argv)
             return 0;
         } else if (argument == "--entry") {
             entries.emplace_back(value());
+        } else if (argument == "--dispatch") {
+            DispatchRequest request;
+            const char* text = value();
+            if (!parseDispatch(text, request)) {
+                std::fprintf(stderr, "Invalid --dispatch '%s': expected OBJECT.EVENT or OBJECT.EVENT=ID\n", text);
+                return 2;
+            }
+            dispatches.push_back(std::move(request));
         } else if (argument == "--dt") {
             dt = std::strtod(value(), nullptr);
         } else if (argument == "--frames") {
@@ -91,7 +128,7 @@ int main(int argc, char** argv)
         std::fputs(usage, stderr);
         return 2;
     }
-    if (entries.empty()) {
+    if (entries.empty() && dispatches.empty()) {
         entries.emplace_back("main");
     }
 
@@ -129,6 +166,15 @@ int main(int argc, char** argv)
     for (const std::string& entry : entries) {
         if (!host.start(*program, entry)) {
             return 1;
+        }
+    }
+    for (const DispatchRequest& request : dispatches) {
+        auto result = host.dispatch(*program, request.object, request.event, ObjectRef{request.id});
+        if (!result) {
+            return 1;
+        }
+        if (!result->handled) {
+            std::fprintf(stderr, "schuimm-run: no handler %s.%s (skipped)\n", request.object.c_str(), request.event.c_str());
         }
     }
     for (frame = 1; frame <= frames && host.activeCount() > 0; ++frame) {

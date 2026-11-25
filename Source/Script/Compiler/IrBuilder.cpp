@@ -21,7 +21,11 @@ public:
     {
         const FunctionDecl& declaration = *function_.declaration;
         out_.name = declaration.name;
+        out_.object = function_.isHandler() ? function_.object : noObject;
         out_.returnType = declaration.returnType;
+        if (function_.isHandler()) {
+            out_.parameters.push_back(Type::Object); // Hidden "self" (variable 0).
+        }
         for (const Parameter& parameter : declaration.parameters) {
             out_.parameters.push_back(parameter.type);
         }
@@ -272,7 +276,8 @@ private:
         case ExprKind::NoneLiteral: return noVReg;
         // No copy: an expression cannot assign, so the variable keeps its value while the
         // expression is evaluated. Values that must outlive a statement (range bounds) are copied.
-        case ExprKind::Name: return info.variable;
+        case ExprKind::Name:
+        case ExprKind::Self: return info.variable;
         case ExprKind::Unary: {
             const VReg operand = expression(*e.left);
             const VReg dest = temporary(info.type);
@@ -318,6 +323,7 @@ private:
         case Type::Int: return static_cast<IrOp>(static_cast<int>(IrOp::EqInt) + index);
         case Type::Float: return static_cast<IrOp>(static_cast<int>(IrOp::EqFloat) + index);
         case Type::String: return static_cast<IrOp>(static_cast<int>(IrOp::EqString) + index);
+        case Type::Object: return op == BinaryOp::Equal ? IrOp::EqObject : IrOp::NeObject;
         default: return op == BinaryOp::Equal ? IrOp::EqBool : IrOp::NeBool;
         }
     }
@@ -405,6 +411,14 @@ IrModule buildIr(const SourceUnit& unit, const SemanticModel& semantics, std::st
     for (const FunctionSemantics& function : semantics.functions()) {
         module.functions.emplace_back();
         FunctionBuilder(semantics, function, module.functions.back()).build();
+    }
+    for (const ObjectSemantics& object : semantics.objects()) {
+        IrObject out;
+        out.name = object.declaration->name;
+        for (const HandlerSemantics& handler : object.handlers) {
+            out.handlers.push_back({handler.name, handler.function});
+        }
+        module.objects.push_back(std::move(out));
     }
     return module;
 }

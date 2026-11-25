@@ -96,7 +96,7 @@ std::string formatInstruction(const Module& module, const Instruction& instructi
 
 std::string disassemble(const Module& module)
 {
-    std::string out = concat("; SCHUIMM bytecode ", bytecodeFormatMajor, ".", bytecodeFormatMinor, ", language ",
+    std::string out = concat("; SCHUIMM bytecode ", bytecodeFormatMajor, ".", module.formatMinor, ", language ",
                              module.languageMajor, ".", module.languageMinor, ", source ",
                              quoteString(module.sourceName()), "\n");
     if (!module.constants.empty()) {
@@ -113,10 +113,25 @@ std::string disassemble(const Module& module)
             out += concat("  n", i, " ", signature(module, import.nameIndex, import.parameters, import.returnType), "\n");
         }
     }
+    // Handlers are listed as "object.handler"; their parameter 0 is self.
+    std::vector<std::string> prefix(module.functions.size());
+    if (!module.objects.empty()) {
+        out += "objects:\n";
+        for (const ObjectEntry& object : module.objects) {
+            const std::string& name = module.strings[object.nameIndex];
+            out += concat("  ", name, ":");
+            for (const HandlerEntry& handler : object.handlers) {
+                out += concat(" ", module.strings[handler.nameIndex], " -> f", handler.function);
+                prefix[handler.function] = name + ".";
+            }
+            out += "\n";
+        }
+    }
     for (std::size_t f = 0; f < module.functions.size(); ++f) {
         const Function& function = module.functions[f];
-        out += concat("\nfunction f", f, " ", signature(module, function.nameIndex, function.parameters, function.returnType),
-                      "  ; ", function.registerCount, " registers\n");
+        out += concat("\nfunction f", f, " ", prefix[f],
+                      signature(module, function.nameIndex, function.parameters, function.returnType), "  ; ",
+                      function.registerCount, " registers\n");
         std::uint32_t lastLine = 0;
         for (std::size_t ip = 0; ip < function.code.size(); ++ip) {
             std::string line = concat("  ", ip < 10 ? "   " : (ip < 100 ? "  " : (ip < 1000 ? " " : "")), ip, "  ",

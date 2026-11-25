@@ -7,6 +7,7 @@ schuimm_add_test(ScriptTests
         IrTests.cpp
         LexerTests.cpp
         NativeTests.cpp
+        ObjectTests.cpp
         OptimizerTests.cpp
         ParserTests.cpp
         SchedulerTests.cpp
@@ -29,6 +30,16 @@ if(TARGET schuimmc AND TARGET schuimm-run)
     set_tests_properties(ScriptCompilerCli PROPERTIES LABELS unit FIXTURES_SETUP script_bytecode)
     set_tests_properties(ScriptRunnerCli PROPERTIES LABELS unit FIXTURES_REQUIRED script_bytecode
         PASS_REGULAR_EXPRESSION "Welcome to SCHUIMM!.*0.*1.*2.*Finished!")
+    # Object handlers: compile a script with an object declaration and dispatch its handlers.
+    set(objects_bytecode "${CMAKE_CURRENT_BINARY_DIR}/objects.schb")
+    add_test(NAME ScriptCompilerObjectsCli
+        COMMAND schuimmc "${PROJECT_SOURCE_DIR}/Tests/Script/Data/objects.sch" -o "${objects_bytecode}" --verify)
+    add_test(NAME ScriptRunnerDispatchCli
+        COMMAND schuimm-run "${objects_bytecode}" --dt 0.25 --dispatch lamp.look_at=7 --dispatch lamp.use
+                --dispatch lamp.open)
+    set_tests_properties(ScriptCompilerObjectsCli PROPERTIES LABELS unit FIXTURES_SETUP script_objects_bytecode)
+    set_tests_properties(ScriptRunnerDispatchCli PROPERTIES LABELS unit FIXTURES_REQUIRED script_objects_bytecode
+        PASS_REGULAR_EXPRESSION "You see a lamp\\..*object#7.*Click\\..*The lamp is on\\.")
     add_test(NAME ScriptCompilerCliRejectsErrors
         COMMAND schuimmc "${PROJECT_SOURCE_DIR}/Tests/Script/Data/type_error.sch")
     set_tests_properties(ScriptCompilerCliRejectsErrors PROPERTIES LABELS unit WILL_FAIL TRUE)

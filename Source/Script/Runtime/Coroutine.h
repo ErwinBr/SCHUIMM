@@ -41,8 +41,18 @@ public:
                                                                    std::string_view function, std::vector<Value> arguments,
                                                                    CoroutineLimits limits = {});
 
+    // Prepares a call of object handler `object.event` for the object `self`, with the declared
+    // (visible) `arguments`; "self" becomes the hidden parameter 0. The context is a register of
+    // the entry frame, so it lives exactly as long as the coroutine, also while it is suspended.
+    // Errors: NotFound (no such handler), InvalidArgument (argument count or types).
+    [[nodiscard]] static Result<std::unique_ptr<Coroutine>> createHandler(std::shared_ptr<const Program> program,
+                                                                          std::string_view object, std::string_view event,
+                                                                          ObjectRef self, std::vector<Value> arguments,
+                                                                          CoroutineLimits limits = {});
+
     [[nodiscard]] const Program& program() const noexcept { return *program_; }
     [[nodiscard]] const std::shared_ptr<const Program>& sharedProgram() const noexcept { return program_; }
+    // The entry function's name; "object.event" for handlers.
     [[nodiscard]] const std::string& entryFunction() const noexcept { return entry_; }
     [[nodiscard]] const CoroutineLimits& limits() const noexcept { return limits_; }
 
@@ -60,6 +70,11 @@ public:
 private:
     friend struct Interpreter;
     Coroutine() = default;
+
+    // `hidden`: leading arguments the caller supplies implicitly (self), not counted in messages.
+    [[nodiscard]] static Result<std::unique_ptr<Coroutine>> createAt(std::shared_ptr<const Program> program,
+                                                                     std::uint32_t index, std::vector<Value> arguments,
+                                                                     std::size_t hidden, CoroutineLimits limits);
 
     std::shared_ptr<const Program> program_;
     std::string entry_;

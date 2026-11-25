@@ -45,6 +45,7 @@ public:
         case ExprKind::BoolLiteral: line(depth, concat("Bool ", formatBool(e.boolValue), typeSuffix(e))); return;
         case ExprKind::NoneLiteral: line(depth, concat("None", typeSuffix(e))); return;
         case ExprKind::Name: line(depth, concat("Name ", e.text, typeSuffix(e))); return;
+        case ExprKind::Self: line(depth, concat("Self", typeSuffix(e))); return;
         case ExprKind::Unary:
             line(depth, concat("Unary ", toString(e.unaryOp), typeSuffix(e)));
             expression(*e.left, depth + 1);
@@ -128,15 +129,24 @@ private:
 std::string dumpAst(const SourceUnit& unit, const SemanticModel* semantics)
 {
     Printer printer(semantics);
-    for (const auto& function : unit.functions) {
-        std::string header = concat(function->isExtern ? "ExternFunc " : "Func ", function->name, "(");
-        for (std::size_t i = 0; i < function->parameters.size(); ++i) {
-            header += concat(i == 0 ? "" : ", ", function->parameters[i].name, ": ", toString(function->parameters[i].type));
+    const auto printFunction = [&](const FunctionDecl& function, int depth) {
+        std::string header = concat(function.isExtern ? "ExternFunc " : "Func ", function.name, "(");
+        for (std::size_t i = 0; i < function.parameters.size(); ++i) {
+            header += concat(i == 0 ? "" : ", ", function.parameters[i].name, ": ", toString(function.parameters[i].type));
         }
-        header += concat(") -> ", toString(function->returnType));
-        printer.line(0, header);
-        if (function->body) {
-            printer.block(*function->body, 1);
+        header += concat(") -> ", toString(function.returnType));
+        printer.line(depth, header);
+        if (function.body) {
+            printer.block(*function.body, depth + 1);
+        }
+    };
+    for (const auto& function : unit.functions) {
+        printFunction(*function, 0);
+    }
+    for (const auto& object : unit.objects) {
+        printer.line(0, concat("Object ", object->name));
+        for (const auto& handler : object->handlers) {
+            printFunction(*handler, 1);
         }
     }
     return std::move(printer.out);
@@ -152,6 +162,7 @@ std::string formatExpression(const Expr& e)
     case ExprKind::BoolLiteral: return formatBool(e.boolValue);
     case ExprKind::NoneLiteral: return "None";
     case ExprKind::Name: return e.text;
+    case ExprKind::Self: return "self";
     case ExprKind::Unary:
         return concat("(", toString(e.unaryOp), e.unaryOp == UnaryOp::Not ? " " : "", formatExpression(*e.left), ")");
     case ExprKind::Binary:

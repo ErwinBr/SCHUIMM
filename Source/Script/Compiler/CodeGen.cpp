@@ -61,6 +61,8 @@ Opcode opcodeFor(IrOp op)
     case IrOp::FloatToString: return Opcode::FloatToString;
     case IrOp::BoolToString: return Opcode::BoolToString;
     case IrOp::CheckRangeStep: return Opcode::CheckRangeStep;
+    case IrOp::EqObject: return Opcode::EqObject;
+    case IrOp::NeObject: return Opcode::NeObject;
     default: return Opcode::Nop;
     }
 }
@@ -87,6 +89,14 @@ public:
         }
         for (std::size_t i = 0; i < ir_.functions.size(); ++i) {
             generate(ir_.functions[i], module_.functions[i]);
+        }
+        for (const IrObject& object : ir_.objects) {
+            ObjectEntry out;
+            out.nameIndex = intern(object.name);
+            for (const IrHandler& handler : object.handlers) {
+                out.handlers.push_back({intern(handler.name), handler.function});
+            }
+            module_.objects.push_back(std::move(out));
         }
         if (module_.constants.size() > maxConstants) {
             fail(concat("The script uses ", module_.constants.size(), " distinct constants; the limit is ", maxConstants, "."));
@@ -183,7 +193,7 @@ private:
         }
         const std::size_t total = next + window;
         if (total > maxRegisters) {
-            fail(concat("Function '", function.name, "' needs ", total, " registers; the limit is ", maxRegisters, "."));
+            fail(concat("Function '", displayName(function, ir_), "' needs ", total, " registers; the limit is ", maxRegisters, "."));
             return;
         }
         out.registerCount = static_cast<std::uint16_t>(total);

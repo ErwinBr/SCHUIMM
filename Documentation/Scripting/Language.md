@@ -1,12 +1,13 @@
-# SCHUIMM Script — language specification (version 1.0)
+# SCHUIMM Script — language specification (version 1.1)
 
 SCHUIMM Script is a small, statically typed scripting language with Python-inspired syntax,
 made for 2D adventure games: readable scripts that call engine functions and wait without
 blocking the game. It is **not** Python; see [Differences from Python](#differences-from-python).
 
 This document describes the language as implemented by `schuimmc` and the SCHUIMM runtime.
-The language version (1.0) is recorded in every bytecode file and is independent of the bytecode
-format version ([Bytecode.md](Bytecode.md)).
+The language version (1.1) is recorded in every bytecode file and is independent of the bytecode
+format version ([Bytecode.md](Bytecode.md)). Version 1.1 added object declarations and `self`
+([§8](#8-objects-and-handlers)); `object` and `self` became keywords.
 
 ```python
 # A complete script.
@@ -30,8 +31,9 @@ More examples: [Examples/](Examples/).
 ## 1. Source files
 
 * Source files are UTF-8. Invalid UTF-8 is an error. Line endings may be `\n`, `\r\n` or `\r`.
-* A file is one *module*: a sequence of function declarations (`func`) and native function
-  declarations (`extern func`). There are no global variables and no statements at the top level.
+* A file is one *module*: a sequence of function declarations (`func`), native function
+  declarations (`extern func`) and object declarations (`object`, [§8](#8-objects-and-handlers)).
+  There are no global variables and no statements at the top level.
 * Diagnostics give `file:line:column`; lines and columns are 1-based and columns count bytes
   (a tab is one column).
 
@@ -64,7 +66,7 @@ More examples: [Examples/](Examples/).
 ### 2.3 Identifiers and keywords
 
 * Identifiers: `[A-Za-z_][A-Za-z0-9_]*` (ASCII only). Use `snake_case` by convention.
-* Keywords: `func extern if elif else while for in return pass and or not True False None`.
+* Keywords: `func extern object self if elif else while for in return pass and or not True False None`.
 * Reserved names (not keywords, but they cannot be redefined or used as variable or function
   names): the type names `int float bool string`, the conversion functions `int float str`,
   `range`, and the built-in functions `print wait yield`.
@@ -99,6 +101,7 @@ More examples: [Examples/](Examples/).
 | `float` | IEEE 754 binary64 (including ±infinity and NaN, which can arise from arithmetic) |
 | `bool` | `True`, `False` |
 | `string` | immutable UTF-8 text |
+| `object` | a handle of an engine object, e.g. an object of the current room ([§8.4](#84-self-and-the-object-type)) |
 | `None` | the "no value" type: the result of a function without a return type |
 
 `None` is not a value a variable can hold. It is the return type of functions declared without
@@ -181,9 +184,10 @@ Other `float` operations follow IEEE 754 (overflow gives ±infinity; `inf - inf`
 ### 4.3 Comparisons
 
 * `==` and `!=` compare two values of the same type, or an `int` with a `float` (the `int` is
-  widened). `bool` and `string` compare only with their own type. `None` cannot be compared.
+  widened). `bool`, `string` and `object` compare only with their own type; two `object` values
+  are equal when they are handles of the same engine object. `None` cannot be compared.
 * `< <= > >=` compare numbers (with widening) or two strings. Strings compare byte-wise by their
-  UTF-8 encoding (which equals code point order). Booleans are not ordered.
+  UTF-8 encoding (which equals code point order). Booleans and objects are not ordered.
 * Floats compare by IEEE rules: NaN is unequal to everything, including itself.
 * The result is `bool`.
 
@@ -292,7 +296,8 @@ Always available without declaration:
 `print` and `str` produce: integers in decimal (`-42`); floats as the shortest decimal that
 reads back to the same value, always with `.` or an exponent (`1.0`, `0.1`, `2.5e-07`, `1e+20`,
 `inf`, `-inf`, `nan`, `-0.0`), independent of the system locale; booleans as `True`/`False`;
-strings unchanged.
+strings unchanged. `print` shows an object handle as `object#` and its engine id (`object#7`);
+`str()` does not accept objects.
 
 ## 7. Variables and scope
 
@@ -308,11 +313,127 @@ strings unchanged.
 * Variables cannot use the name of a function, native or reserved name.
 * Each call has its own variables; coroutines never share variables.
 
-## 8. Coroutines
+## 8. Objects and handlers
+
+Room scripts describe what happens when the player interacts with the objects of a room. An
+`object` declaration groups the **handlers** of one object: the functions the engine runs for
+events such as looking at or using it.
+
+```python
+extern func say(text: string)
+extern func get_flag(o: object, name: string) -> bool
+extern func set_flag(o: object, name: string, value: bool)
+extern func play_sound(name: string, volume: float)
+
+
+func play_blender_sound():
+	play_sound("blender.wav", 1.0)
+
+
+object blender:
+	func look_at():
+		say("An old blender.")
+
+	func use():
+		if get_flag(self, "is_running"):
+			say("It's already running.")
+		else:
+			set_flag(self, "is_running", True)
+			play_blender_sound()
+
+
+object cupboard:
+	func look_at():
+		say("A wooden cupboard.")
+```
+
+The complete example is [Examples/kitchen.sch](Examples/kitchen.sch).
+
+### 8.1 Syntax
+
+```text
+object NAME:
+	func HANDLER(parameters) [-> type]:
+		block
+	...
+```
+
+* `object` declarations are top-level declarations, like `func`. They cannot be nested and
+  cannot appear inside a function.
+* The body is an indented block (one tab, §2.1) of one or more `func` declarations. It contains
+  nothing else: no statements, `pass`, variables, `extern func` or nested `object`. An object
+  without handlers is an error ("Expected an indented block of handler functions"); leave out the
+  declaration instead.
+* Handlers are ordinary functions: typed parameters, an optional return type, the usual
+  statements, `wait()`/`yield()`, calls of room-level functions and natives.
+* Object names follow the identifier rules (§2.3). They must be unique in the file and cannot be
+  the name of a function, native or reserved name. Handler names must be unique within their
+  object; the same handler name may appear in several objects and as a room-level function.
+
+### 8.2 Room resources and room scripts
+
+* A room's objects — their identifiers, sprites, positions and state — are defined by the **room
+  resource**, not by the script. The object name of a declaration is the object's identifier in
+  the room resource (`object blender:` belongs to the room object with id `"blender"`).
+* An object declaration **does not create an object**. It is a named scope of functions, not a
+  class: no instances, constructors, inheritance or member variables.
+* One room script holds the room's functions and the handlers of all its objects. There are no
+  per-object script files, and the room resource lists no events or handlers.
+* An object of the room resource without a declaration (or without a handler for some event)
+  simply has no script behaviour for it.
+
+### 8.3 Dispatch
+
+The engine (the adventure runtime) invokes a handler by **object identifier and event name**,
+for example `("blender", "use")`, with the arguments the event provides and the engine's handle
+of the object:
+
+* The event name is the handler name. Any name can be used: the language and the VM have no
+  fixed list of events (`look_at`, `use`, `use_with`, `inspect` … are conventions of the game).
+* If the script declares no such object or handler, nothing happens. **A missing handler is not
+  an error.**
+* A handler runs as a coroutine (§9), so it may `wait()` or `yield()`. A runtime error inside a
+  handler is reported like any other (§10), with the handler named `object.handler`.
+* The arguments must match the handler's parameters, as for any call.
+* There is no fallback: no default handler, and no automatic dispatch to the other object of a
+  "use A with B" interaction. The engine decides which handler to invoke.
+
+The engine API is `ScriptHost::dispatch` ([Runtime.md](Runtime.md#object-handlers-and-dispatch)).
+
+### 8.4 self and the object type
+
+* Inside a handler, `self` is the object the handler runs for: the engine's handle of that
+  object, a value of type `object`. Different objects — also the "same" object in two instances
+  of a room — have different handles, so handlers never share `self`.
+* `self` is available only in handlers ("'self' is only available inside object handlers"
+  elsewhere). It cannot be assigned, declared or used as a parameter name.
+* `self` stays valid for the whole run of the handler, also across `wait()` and `yield()`.
+* `object` is also the name of the type in annotations, parameters and native signatures:
+  `func use_with(item: object):`, `extern func get_flag(o: object, name: string) -> bool`.
+* Object values can be stored in variables, passed and returned, and compared with `==`/`!=`.
+  They have no operators otherwise, no conversions, and no members: object state is owned by the
+  engine and accessed through natives that take an `object` (`self.name` property syntax is not
+  part of version 1.1).
+
+### 8.5 Scopes
+
+| Scope | Contains |
+|---|---|
+| Script (room) | room-level functions, natives (`extern func`, prelude) and object names |
+| Object | the handlers of one object |
+| Function | parameters and variables (§7) |
+| Handler context | the implicit `self` |
+
+A handler calls room-level functions and natives by name. Handlers are not in the script scope:
+a room-level function cannot call a handler, and a handler cannot call another handler (not even
+of its own object) — put shared code in a room-level function. Room-level functions are started
+by the engine by name as before; handlers only through dispatch.
+
+## 9. Coroutines
 
 Script functions run as **coroutines** on the game thread, managed by the engine's scheduler
-([Runtime.md](Runtime.md#scheduler)). The engine starts a coroutine by calling a function
-(usually `main`); several coroutines run concurrently, interleaved cooperatively:
+([Runtime.md](Runtime.md#scheduler)). The engine starts a coroutine by calling a room-level function
+(usually `main`) or by dispatching an object handler (§8.3); several coroutines run concurrently, interleaved cooperatively:
 
 * A coroutine runs until it calls `wait()` or `yield()`, finishes, fails, or uses up its
   instruction budget for the current frame. Then the next coroutine runs.
@@ -322,7 +443,7 @@ Script functions run as **coroutines** on the game thread, managed by the engine
 * A coroutine that waits or yields resumes in a later frame, never in the same one.
 * Coroutines run in the order they were started; within one frame the order is deterministic.
 
-## 9. Runtime errors
+## 10. Runtime errors
 
 A runtime error stops the coroutine (other coroutines continue). The error names the script
 file, function, line and column, and the call stack. Runtime errors are:
@@ -340,7 +461,7 @@ file, function, line and column, and the call stack. Runtime errors are:
 
 There is no exception handling: errors cannot be caught by scripts.
 
-## 10. Differences from Python
+## 11. Differences from Python
 
 Deliberate, so that scripts stay predictable and fast to check:
 
@@ -352,15 +473,19 @@ Deliberate, so that scripts stay predictable and fast to check:
 * Variables are block-scoped and must be declared before use; no shadowing.
 * `for` only iterates over `range(...)`; no `break`, `continue`, `else` on loops.
 * Comparisons do not chain; `and`/`or` return `bool`, not an operand.
-* No classes, closures, generators, decorators, exceptions, imports, lists, dicts, `**`,
-  augmented assignment (`+=`), conditional expressions, f-strings or `global`.
+* No classes (`object` declarations are named groups of handlers, §8), closures, generators,
+  decorators, exceptions, imports, lists, dicts, `**`, augmented assignment (`+=`), conditional
+  expressions, f-strings or `global`.
 * Function parameters require types; there are no default or keyword arguments.
 * `wait`/`yield` are functions provided by the engine, not keywords.
 
-## 11. Limitations (version 1.0)
+## 12. Limitations (version 1.1)
 
 * No `break`/`continue`, no `+=`, no compound data types (lists, dictionaries, structures).
-* No modules or imports: one file is one program. No global variables or constants.
+* No modules or imports: one file is one program. No global (script-level) variables or
+  constants, including for room scripts.
+* Objects (§8): no `self.property` access (object state goes through natives), no variables in
+  object declarations, no calls between handlers, no default or fallback handlers.
 * Up to 255 parameters per function, 65 535 registers per function and 65 536 distinct constants
   per file.
 * `print` output is the only built-in output; everything else comes from engine natives.
@@ -368,12 +493,13 @@ Deliberate, so that scripts stay predictable and fast to check:
 ## Appendix: grammar
 
 ```text
-module      := (NEWLINE | function | extern)* EOF
+module      := (NEWLINE | function | extern | object)* EOF
 function    := "func" NAME "(" [params] ")" ["->" type] ":" block
+object      := "object" NAME ":" NEWLINE INDENT function+ DEDENT
 extern      := "extern" "func" NAME "(" [params] ")" ["->" type] NEWLINE
 params      := param ("," param)* [","]
 param       := NAME ":" type
-type        := "int" | "float" | "bool" | "string" | "None"
+type        := "int" | "float" | "bool" | "string" | "object" | "None"
 block       := NEWLINE INDENT statement+ DEDENT
 statement   := NAME [":" type] "=" expr NEWLINE
              | expr NEWLINE                                   (a call)
@@ -390,6 +516,6 @@ comparison  := sum [("==" | "!=" | "<" | "<=" | ">" | ">=") sum]
 sum         := term (("+" | "-") term)*
 term        := unary (("*" | "/" | "//" | "%") unary)*
 unary       := "-" unary | primary
-primary     := INT | FLOAT | STRING | "True" | "False" | "None"
+primary     := INT | FLOAT | STRING | "True" | "False" | "None" | "self"
              | NAME | NAME "(" [expr ("," expr)* [","]] ")" | "(" expr ")"
 ```

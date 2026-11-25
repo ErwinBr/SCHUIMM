@@ -109,6 +109,12 @@ public:
                 }
                 continue;
             }
+            if (check(TokenKind::KwObject)) {
+                if (auto object = parseObject()) {
+                    unit->objects.push_back(std::move(object));
+                }
+                continue;
+            }
             if (check(TokenKind::Indent)) {
                 error(current(), "Unexpected indentation.");
                 skipIndentedBlock();
@@ -118,7 +124,7 @@ public:
                 advance();
                 continue;
             }
-            error(current(), "Expected a function declaration ('func' or 'extern func') at the top level.",
+            error(current(), "Expected a declaration ('func', 'extern func' or 'object') at the top level.",
                   {"Statements must be inside a function, e.g. 'func main():'."});
             skipLine();
             if (check(TokenKind::Indent)) {
@@ -212,12 +218,15 @@ private:
         if (match(TokenKind::KwNone)) {
             return Type::None;
         }
+        if (match(TokenKind::KwObject)) {
+            return Type::Object;
+        }
         if (check(TokenKind::Identifier)) {
             advance();
             if (const auto type = typeFromName(token.lexeme)) {
                 return type;
             }
-            error(token, concat("Unknown type '", token.lexeme, "'."), {"The types are int, float, bool and string."});
+            error(token, concat("Unknown type '", token.lexeme, "'."), {"The types are int, float, bool, string and object."});
             return Type::Error;
         }
         error(token, concat("Expected a type name, found ", describe(token.kind), "."));
@@ -276,6 +285,76 @@ private:
         }
         function->body = parseBlock("function body");
         return function;
+    }
+
+    // object := "object" NAME ":" NEWLINE INDENT ("func" ...)+ DEDENT
+    std::unique_ptr<ObjectDecl> parseObject()
+    {
+        auto object = std::make_unique<ObjectDecl>();
+        const Token& first = advance(); // 'object'
+        const Token& name = current();
+        if (!expect(TokenKind::Identifier, "for the object name")) {
+            skipLine();
+            if (check(TokenKind::Indent)) skipIndentedBlock();
+            return nullptr;
+        }
+        object->name = std::string(name.lexeme);
+        object->nameRange = name.range;
+        object->range = join(first.range, name.range);
+        if (!expect(TokenKind::Colon, "after the object name")) {
+            skipLine();
+            if (check(TokenKind::Indent)) skipIndentedBlock();
+            return object;
+        }
+        object->range = join(first.range, previous().range);
+        if (!check(TokenKind::Newline)) {
+            error(current(), concat("Expected a new line after ':' to start the body of object '", object->name, "'."),
+                  {"Put each handler function on its own line, indented by one tab."});
+            skipLine();
+            if (!check(TokenKind::Indent)) {
+                return object;
+            }
+        } else {
+            advance();
+        }
+        if (!check(TokenKind::Indent)) {
+            panic_ = false;
+            error(current(), concat("Expected an indented block of handler functions for object '", object->name, "'."),
+                  {"An object declaration contains at least one function, e.g. 'func look_at():', indented by one tab."});
+            return object;
+        }
+        advance();
+        while (!check(TokenKind::Dedent) && !check(TokenKind::EndOfFile)) {
+            panic_ = false;
+            if (match(TokenKind::Newline)) {
+                continue;
+            }
+            if (check(TokenKind::Indent)) {
+                error(current(), "Unexpected indentation.");
+                skipIndentedBlock();
+                continue;
+            }
+            if (check(TokenKind::KwFunc)) {
+                if (auto handler = parseFunction()) {
+                    handler->isHandler = true;
+                    object->handlers.push_back(std::move(handler));
+                }
+                continue;
+            }
+            if (check(TokenKind::KwExtern)) {
+                error(current(), concat("Extern functions cannot be declared inside object '", object->name, "'."),
+                      {"Declare engine functions with 'extern func' at the top level of the script."});
+            } else if (check(TokenKind::KwObject)) {
+                error(current(), "Object declarations cannot be nested.");
+            } else {
+                error(current(), concat("Only function declarations are allowed in object '", object->name, "'."),
+                      {"An object contains handler functions ('func name(...):'), not statements or variables."});
+            }
+            skipLine();
+            if (check(TokenKind::Indent)) skipIndentedBlock();
+        }
+        match(TokenKind::Dedent);
+        return object;
     }
 
     bool parseParameters(FunctionDecl& function)
@@ -400,6 +479,11 @@ private:
             skipLine();
             if (check(TokenKind::Indent)) skipIndentedBlock();
             return nullptr;
+        case TokenKind::KwObject:
+            error(first, "Object declarations are only allowed at the top level.");
+            skipLine();
+            if (check(TokenKind::Indent)) skipIndentedBlock();
+            return nullptr;
         default: break;
         }
         if (first.kind == TokenKind::Identifier &&
@@ -412,7 +496,12 @@ private:
             return recover(std::move(statement));
         }
         if (check(TokenKind::Assign)) {
-            error(current(), "Only a variable name can be assigned to.");
+            if (statement->value->kind == ExprKind::Self) {
+                error(current(), "'self' cannot be assigned.",
+                      {"'self' always refers to the object whose handler is running."});
+            } else {
+                error(current(), "Only a variable name can be assigned to.");
+            }
             return recover(std::move(statement));
         }
         statement->range = statement->value->range;
@@ -627,6 +716,10 @@ private:
             }
             expression->kind = ExprKind::Name;
             expression->text = std::string(token.lexeme);
+            return expression;
+        case TokenKind::KwSelf:
+            advance();
+            expression->kind = ExprKind::Self;
             return expression;
         case TokenKind::LeftParen: {
             advance();

@@ -4,13 +4,18 @@ SCHUIMM runs game logic in **SCHUIMM Script**, a small, statically typed languag
 Python-inspired syntax. Scripts are compiled ahead of time into validated, platform-independent
 bytecode and executed by a register VM as cooperative coroutines driven by the game loop.
 
+Room scripts group the event handlers of room objects in `object` declarations (Milestone 4.1):
+the engine dispatches an event by object identifier and event name, and the handler runs with
+the object as `self` ([Language.md §8](Language.md#8-objects-and-handlers),
+[Runtime.md](Runtime.md#object-handlers-and-dispatch), [Examples/kitchen.sch](Examples/kitchen.sch)).
+
 | Document | Contents |
 |---|---|
-| [Language.md](Language.md) | Language specification: syntax, types, operators, scopes, functions, coroutines, runtime errors, differences from Python |
+| [Language.md](Language.md) | Language specification: syntax, types, operators, scopes, functions, objects and handlers, coroutines, runtime errors, differences from Python |
 | [Compiler.md](Compiler.md) | Compiler architecture: lexer, parser, semantic analysis, IR, optimizer, code generation, diagnostics, `schuimmc` |
 | [Bytecode.md](Bytecode.md) | The `.schb` format, instruction set, versioning and validation |
-| [Runtime.md](Runtime.md) | VM, values and strings, native functions, scheduler, time, instruction budgets, `ScriptHost`, `schuimm-run` |
-| [Examples/](Examples/) | Example scripts (all compiled and run by the tests) |
+| [Runtime.md](Runtime.md) | VM, values and strings, native functions, object handler dispatch, scheduler, time, instruction budgets, `ScriptHost`, `schuimm-run` |
+| [Examples/](Examples/) | Example scripts (all compiled and run by the tests; `kitchen.sch` shows object handlers) |
 
 ## Libraries
 

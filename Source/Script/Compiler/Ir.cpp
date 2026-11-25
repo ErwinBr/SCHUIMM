@@ -29,6 +29,14 @@ std::vector<BlockId> successors(const Terminator& terminator)
     }
 }
 
+std::string displayName(const IrFunction& function, const IrModule& module)
+{
+    if (function.object < module.objects.size()) {
+        return concat(module.objects[function.object].name, ".", function.name);
+    }
+    return function.name;
+}
+
 std::string formatIrInstruction(const IrInstruction& instruction, const IrModule& module)
 {
     std::string text;
@@ -59,7 +67,7 @@ std::string formatIrInstruction(const IrInstruction& instruction, const IrModule
 
 std::string dumpIr(const IrFunction& function, const IrModule& module)
 {
-    std::string out = concat("func ", function.name, "(");
+    std::string out = concat("func ", displayName(function, module), "(");
     for (std::size_t i = 0; i < function.parameters.size(); ++i) {
         out += concat(i == 0 ? "" : ", ", "r", i, ": ", toString(function.parameters[i]));
     }
@@ -91,6 +99,13 @@ std::string dumpIr(const IrModule& module)
             out += concat(i == 0 ? "" : ", ", toString(native.parameters[i]));
         }
         out += concat(") -> ", toString(native.returnType), "\n");
+    }
+    for (const IrObject& object : module.objects) {
+        out += concat("object ", object.name, ":");
+        for (const IrHandler& handler : object.handlers) {
+            out += concat(" ", handler.name, "=f", handler.function);
+        }
+        out += "\n";
     }
     for (const IrFunction& function : module.functions) {
         out += "\n" + dumpIr(function, module);

@@ -35,6 +35,7 @@ void Value::copyPayload(const Value& other) noexcept
     case ScriptType::Int: int_ = other.int_; break;
     case ScriptType::Float: float_ = other.float_; break;
     case ScriptType::String: string_ = other.string_; break;
+    case ScriptType::Object: object_ = other.object_; break;
     default: int_ = 0; break;
     }
 }
@@ -110,6 +111,14 @@ Value Value::fromFloat(double value) noexcept
     return v;
 }
 
+Value Value::fromObject(ObjectRef object) noexcept
+{
+    Value v;
+    v.type_ = ScriptType::Object;
+    v.object_ = object.id;
+    return v;
+}
+
 Value Value::fromString(std::string text) { return adoptString(StringObject::create(std::move(text))); }
 
 Value Value::adoptString(StringObject* string) noexcept
@@ -127,6 +136,7 @@ std::string toDisplayString(const Value& value)
     case ScriptType::Int: return formatInt(value.asInt());
     case ScriptType::Float: return formatFloat(value.asFloat());
     case ScriptType::String: return std::string(value.asString());
+    case ScriptType::Object: return "object#" + std::to_string(value.asObject().id);
     default: return "None";
     }
 }

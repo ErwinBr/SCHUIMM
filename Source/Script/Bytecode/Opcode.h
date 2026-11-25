@@ -78,7 +78,9 @@ inline constexpr std::uint16_t noRegister = 0xFFFF;
     X(Call, OptRegister, Function, ArgWindow, false)                                                \
     X(CallNative, OptRegister, Native, ArgWindow, false)                                            \
     X(Return, OptRegister, Unused, Unused, true)                                                    \
-    X(Unreachable, Unused, Unused, Unused, true)
+    X(Unreachable, Unused, Unused, Unused, true)                                                    \
+    X(EqObject, Register, Register, Register, false)                                                \
+    X(NeObject, Register, Register, Register, false)
 
 enum class Opcode : std::uint8_t {
 #define SCHUIMM_X(name, a, b, c, terminator) name,

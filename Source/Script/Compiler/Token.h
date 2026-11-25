@@ -34,6 +34,8 @@ namespace schuimm::script {
     X(KwTrue, "'True'")                                                                             \
     X(KwFalse, "'False'")                                                                           \
     X(KwNone, "'None'")                                                                             \
+    X(KwObject, "'object'")                                                                         \
+    X(KwSelf, "'self'")                                                                             \
     X(LeftParen, "'('")                                                                             \
     X(RightParen, "')'")                                                                            \
     X(Comma, "','")                                                                                 \

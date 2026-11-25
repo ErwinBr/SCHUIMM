@@ -35,6 +35,15 @@ private:
     std::uint32_t references_ = 1;
 };
 
+// Opaque handle of an engine object (e.g. an object of the current room), the value of "self" in
+// object handlers and of the script type "object". The engine chooses the ids and owns the
+// objects and their state; scripts only compare handles and pass them to natives. Two instances
+// of the same room script must get different ids for their objects.
+struct ObjectRef {
+    std::uint64_t id = 0;
+    friend bool operator==(const ObjectRef&, const ObjectRef&) = default;
+};
+
 // A register value: a 16-byte tagged union. Copying a string Value adds a reference.
 class Value {
 public:
@@ -50,6 +59,7 @@ public:
     [[nodiscard]] static Value fromInt(std::int64_t value) noexcept;
     [[nodiscard]] static Value fromFloat(double value) noexcept;
     [[nodiscard]] static Value fromString(std::string text);
+    [[nodiscard]] static Value fromObject(ObjectRef object) noexcept;
     // Takes over one reference of `string`.
     [[nodiscard]] static Value adoptString(StringObject* string) noexcept;
 
@@ -59,6 +69,7 @@ public:
     [[nodiscard]] std::int64_t asInt() const noexcept { return int_; }
     [[nodiscard]] double asFloat() const noexcept { return float_; }
     [[nodiscard]] std::string_view asString() const noexcept { return string_->view(); }
+    [[nodiscard]] ObjectRef asObject() const noexcept { return {object_}; }
     [[nodiscard]] const StringObject* stringObject() const noexcept { return type_ == ScriptType::String ? string_ : nullptr; }
 
     // Whether the value fits a declared parameter or return type (Any: anything but None).
@@ -78,10 +89,11 @@ private:
         std::int64_t int_ = 0;
         double float_;
         StringObject* string_;
+        std::uint64_t object_;
     };
 };
 
-// The text print() and str() produce: 42, 1.5, True, the string itself, None.
+// The text print() produces: 42, 1.5, True, the string itself, object#7, None.
 [[nodiscard]] std::string toDisplayString(const Value& value);
 
 } // namespace schuimm::script

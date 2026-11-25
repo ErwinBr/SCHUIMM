@@ -13,7 +13,7 @@ std::string formatTrace(const TraceEvent& event)
     const Module& module = event.program.module();
     const Function& function = module.functions[event.function];
     std::string text = concat(std::string(event.callDepth > 0 ? (event.callDepth - 1) * 2 : 0, ' '),
-                              module.string(function.nameIndex), ":", event.ip);
+                              event.program.functionDisplayName(event.function), ":", event.ip);
     if (event.ip < function.positions.size() && function.positions[event.ip].line != 0) {
         text += concat(" (line ", function.positions[event.ip].line, ")");
     }
@@ -184,6 +184,8 @@ struct Interpreter {
             SCHUIMM_COMPARE(LeString, String, asString, compareStrings(x, y) <= 0)
             SCHUIMM_COMPARE(GtString, String, asString, compareStrings(x, y) > 0)
             SCHUIMM_COMPARE(GeString, String, asString, compareStrings(x, y) >= 0)
+            SCHUIMM_COMPARE(EqObject, Object, asObject, x == y)
+            SCHUIMM_COMPARE(NeObject, Object, asObject, x != y)
             case Opcode::IntToFloat:
                 SCHUIMM_REQUIRE(in.b, Int);
                 r[in.a] = Value::fromFloat(static_cast<double>(r[in.b].asInt()));

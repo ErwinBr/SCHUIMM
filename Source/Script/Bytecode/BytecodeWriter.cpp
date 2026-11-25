@@ -186,6 +186,26 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     }
     endSection();
 
+    // Objects: section 7, written after Debug so sections 1-6 keep the 1.0 order.
+    const auto writeObjects = [&]() -> Status {
+        if (!fitsU32(module.objects.size())) {
+            return tooLarge("objects");
+        }
+        out.u32(static_cast<std::uint32_t>(module.objects.size()));
+        for (const ObjectEntry& object : module.objects) {
+            if (!fitsU32(object.handlers.size())) {
+                return tooLarge("handlers");
+            }
+            out.u32(object.nameIndex);
+            out.u32(static_cast<std::uint32_t>(object.handlers.size()));
+            for (const HandlerEntry& handler : object.handlers) {
+                out.u32(handler.nameIndex);
+                out.u32(handler.function);
+            }
+        }
+        return {};
+    };
+
     beginSection(); // Debug
     out.u32(module.sourceNameIndex);
     out.u32(static_cast<std::uint32_t>(totalInstructions));
@@ -194,6 +214,12 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
             out.u32(position.line);
             out.u32(position.column);
         }
+    }
+    endSection();
+
+    beginSection(); // Objects
+    if (auto status = writeObjects(); !status) {
+        return std::unexpected(status.error());
     }
     endSection();
 

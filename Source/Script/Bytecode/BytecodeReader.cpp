@@ -202,17 +202,75 @@ Status checkEnd(const ByteReader& reader, const char* section)
 
 struct Validator {
     const Module& module;
+    // Per function: the object whose handler it is, or noOwner (room-level function).
+    std::vector<std::uint32_t> owner = {};
+
+    static constexpr std::uint32_t noOwner = 0xFFFFFFFFu;
 
     [[nodiscard]] std::string functionName(std::size_t index) const
     {
         const Function& function = module.functions[index];
-        if (function.nameIndex < module.strings.size()) {
-            return module.strings[function.nameIndex];
+        std::string name = function.nameIndex < module.strings.size() ? module.strings[function.nameIndex] : concat("#", index);
+        if (index < owner.size() && owner[index] != noOwner) {
+            return concat(module.strings[module.objects[owner[index]].nameIndex], ".", name);
         }
-        return concat("#", index);
+        return name;
     }
 
-    Status run() const
+    [[nodiscard]] bool hasObjects() const noexcept { return module.formatMinor >= format::objectsMinorVersion; }
+
+    static bool usesObjectType(const std::vector<ScriptType>& parameters, ScriptType returnType)
+    {
+        return returnType == ScriptType::Object ||
+               std::find(parameters.begin(), parameters.end(), ScriptType::Object) != parameters.end();
+    }
+
+    // The Objects table: unique object names, unique handler names per object, existing
+    // functions, each function a handler at most once, and "self" (object) as parameter 0.
+    Status checkObjects()
+    {
+        owner.assign(module.functions.size(), noOwner);
+        if (!hasObjects() && !module.objects.empty()) {
+            return invalid(concat("object declarations require bytecode format 1.", format::objectsMinorVersion));
+        }
+        std::set<std::string_view> objectNames;
+        for (std::size_t o = 0; o < module.objects.size(); ++o) {
+            const ObjectEntry& object = module.objects[o];
+            if (object.nameIndex >= module.strings.size()) {
+                return invalid(concat("object ", o, " refers to a missing name"));
+            }
+            const std::string& name = module.strings[object.nameIndex];
+            if (!objectNames.insert(name).second) {
+                return invalid(concat("duplicate object '", name, "'"));
+            }
+            std::set<std::string_view> handlerNames;
+            for (std::size_t h = 0; h < object.handlers.size(); ++h) {
+                const HandlerEntry& handler = object.handlers[h];
+                if (handler.nameIndex >= module.strings.size()) {
+                    return invalid(concat("handler ", h, " of object '", name, "' refers to a missing name"));
+                }
+                const std::string& handlerName = module.strings[handler.nameIndex];
+                if (!handlerNames.insert(handlerName).second) {
+                    return invalid(concat("duplicate handler '", handlerName, "' in object '", name, "'"));
+                }
+                if (handler.function >= module.functions.size()) {
+                    return invalid(concat("handler '", name, ".", handlerName, "' refers to missing function ", handler.function));
+                }
+                if (owner[handler.function] != noOwner) {
+                    return invalid(concat("function ", handler.function, " is the handler of more than one event"));
+                }
+                const Function& function = module.functions[handler.function];
+                if (function.parameters.empty() || function.parameters[0] != ScriptType::Object) {
+                    return invalid(concat("handler '", name, ".", handlerName,
+                                          "' must take the object (self) as its first parameter"));
+                }
+                owner[handler.function] = static_cast<std::uint32_t>(o);
+            }
+        }
+        return {};
+    }
+
+    Status run()
     {
         for (std::size_t i = 0; i < module.strings.size(); ++i) {
             if (!isValidUtf8(module.strings[i])) {
@@ -251,14 +309,30 @@ struct Validator {
         if (module.functions.size() > 0x10000 || module.imports.size() > 0x10000) {
             return invalid("more than 65536 functions or imports");
         }
+        if (auto status = checkObjects(); !status) {
+            return status;
+        }
+        if (!hasObjects()) {
+            for (const NativeImport& import : module.imports) {
+                if (usesObjectType(import.parameters, import.returnType)) {
+                    return invalid(concat("native import '", module.strings[import.nameIndex],
+                                          "' uses type object, which requires bytecode format 1.", format::objectsMinorVersion));
+                }
+            }
+        }
         names.clear();
         for (std::size_t i = 0; i < module.functions.size(); ++i) {
             const Function& function = module.functions[i];
             if (function.nameIndex >= module.strings.size()) {
                 return invalid(concat("function ", i, " refers to a missing name"));
             }
-            if (!names.insert(module.strings[function.nameIndex]).second) {
+            // Room-level function names are unique; a handler's name is unique within its object.
+            if (owner[i] == noOwner && !names.insert(module.strings[function.nameIndex]).second) {
                 return invalid(concat("duplicate function '", module.strings[function.nameIndex], "'"));
+            }
+            if (!hasObjects() && usesObjectType(function.parameters, function.returnType)) {
+                return invalid(concat("function '", functionName(i), "' uses type object, which requires bytecode format 1.",
+                                      format::objectsMinorVersion));
             }
             if (auto status = checkSignature(function.parameters, function.returnType, false); !status) {
                 return invalid(concat("function '", functionName(i), "': ", status.error().message));
@@ -347,6 +421,9 @@ struct Validator {
     {
         const Instruction& instruction = function.code[ip];
         const OpcodeInfo& info = opcodeInfo(instruction.opcode);
+        if (!hasObjects() && (instruction.opcode == Opcode::EqObject || instruction.opcode == Opcode::NeObject)) {
+            return bad(concat("opcode requires bytecode format 1.", format::objectsMinorVersion));
+        }
         if (auto s = checkOperand(function, info.a, instruction.a, "a"); !s) return s;
         if (info.b == OperandKind::Target) {
             if (instruction.target() >= function.code.size()) {
@@ -394,7 +471,8 @@ struct Validator {
 
 Status validateModule(const Module& module)
 {
-    return Validator{module}.run();
+    Validator validator{module};
+    return validator.run();
 }
 
 Result<Module> readBytecode(std::span<const std::byte> data)
@@ -413,6 +491,7 @@ Result<Module> readBytecode(std::span<const std::byte> data)
                                                         ".0 to ", bytecodeFormatMajor, ".", bytecodeFormatMinor, ")"));
     }
     Module module;
+    module.formatMinor = formatMinor;
     module.languageMajor = loadU16(data, 8);
     module.languageMinor = loadU16(data, 10);
     if (module.languageMajor != languageVersionMajor || module.languageMinor > languageVersionMinor) {
@@ -428,8 +507,10 @@ Result<Module> readBytecode(std::span<const std::byte> data)
         return invalid(concat("header declares ", fileSize, " bytes but the file has ", data.size()));
     }
     const std::uint32_t sectionCount = loadU32(data, 24);
-    if (sectionCount != format::sectionCount) {
-        return invalid(concat("expected ", format::sectionCount, " sections, header declares ", sectionCount));
+    const bool hasObjects = formatMinor >= format::objectsMinorVersion;
+    const std::uint32_t expectedSections = hasObjects ? format::sectionCount : format::sectionCountVersion10;
+    if (sectionCount != expectedSections) {
+        return invalid(concat("expected ", expectedSections, " sections, header declares ", sectionCount));
     }
     const std::size_t tableEnd = format::headerSize + std::size_t{sectionCount} * format::sectionEntrySize;
     if (tableEnd > data.size()) {
@@ -446,7 +527,7 @@ Result<Module> readBytecode(std::span<const std::byte> data)
         const std::uint32_t id = loadU32(data, entry);
         const std::uint32_t offset = loadU32(data, entry + 4);
         const std::uint32_t size = loadU32(data, entry + 8);
-        if (id == 0 || id > format::sectionCount) {
+        if (id == 0 || id > expectedSections) {
             return invalid(concat("unknown section id ", id, " at offset ", entry));
         }
         if (sections[id].present) {
@@ -554,6 +635,23 @@ Result<Module> readBytecode(std::span<const std::byte> data)
             }
         }
         if (auto s = checkEnd(r, "function"); !s) return std::unexpected(s.error());
+    }
+    if (hasObjects) {   // Objects
+        ByteReader r = reader(format::SectionId::Objects);
+        std::uint32_t count = 0;
+        if (!r.u32(count) || !plausibleCount(r, count, 8)) return truncated(r, "object table");
+        module.objects.resize(count);
+        for (ObjectEntry& object : module.objects) {
+            std::uint32_t handlers = 0;
+            if (!r.u32(object.nameIndex) || !r.u32(handlers) || !plausibleCount(r, handlers, 8)) {
+                return truncated(r, "object");
+            }
+            object.handlers.resize(handlers);
+            for (HandlerEntry& handler : object.handlers) {
+                if (!r.u32(handler.nameIndex) || !r.u32(handler.function)) return truncated(r, "handler");
+            }
+        }
+        if (auto s = checkEnd(r, "object"); !s) return std::unexpected(s.error());
     }
     std::vector<Instruction> code;
     {   // Code

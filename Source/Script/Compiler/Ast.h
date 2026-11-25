@@ -22,6 +22,7 @@ enum class ExprKind : std::uint8_t {
     BoolLiteral,
     NoneLiteral,
     Name,
+    Self, // "self" inside an object handler: the object the handler runs for.
     Unary,
     Binary,
     Call,
@@ -102,12 +103,24 @@ struct FunctionDecl {
     Type returnType = Type::None;
     SourceRange returnTypeRange;
     bool isExtern = false;        // "extern func": a native function implemented by the engine.
+    bool isHandler = false;       // Declared inside an "object" block (see ObjectDecl).
     std::unique_ptr<Block> body;  // Null for extern declarations.
+};
+
+// "object name:" followed by an indented list of handler functions. A named scope, not a class:
+// it creates no runtime object. The name identifies an object of the room resource; the engine
+// invokes a handler by object name and handler (event) name, passing the object as "self".
+struct ObjectDecl {
+    SourceRange range;
+    std::string name;
+    SourceRange nameRange;
+    std::vector<std::unique_ptr<FunctionDecl>> handlers; // isHandler is set on each.
 };
 
 // The root: one source file.
 struct SourceUnit {
-    std::vector<std::unique_ptr<FunctionDecl>> functions;
+    std::vector<std::unique_ptr<FunctionDecl>> functions; // Room-level functions and extern declarations.
+    std::vector<std::unique_ptr<ObjectDecl>> objects;     // In declaration order.
 };
 
 } // namespace schuimm::script

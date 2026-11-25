@@ -13,10 +13,12 @@ namespace schuimm::script {
 // *language* version describes the source language the compiler accepts. They change
 // independently (see Bytecode.md).
 inline constexpr std::uint16_t bytecodeFormatMajor = 1;
-inline constexpr std::uint16_t bytecodeFormatMinor = 0;
+// Format 1.1 added the Objects section, the object type and EqObject/NeObject; language 1.1 added
+// object declarations and self.
+inline constexpr std::uint16_t bytecodeFormatMinor = 1;
 inline constexpr std::uint16_t languageVersionMajor = 1;
-inline constexpr std::uint16_t languageVersionMinor = 0;
-inline constexpr std::uint32_t compilerVersion = 0x000100; // 0.1.0 as (major << 16 | minor << 8 | patch)
+inline constexpr std::uint16_t languageVersionMinor = 1;
+inline constexpr std::uint32_t compilerVersion = 0x000200; // 0.2.0 as (major << 16 | minor << 8 | patch)
 
 struct Instruction {
     Opcode opcode = Opcode::Nop;
@@ -67,9 +69,27 @@ struct Function {
     std::vector<SourcePosition> positions; // One per instruction (debug information).
 };
 
+// A handler of an object declaration: the event name and the function implementing it. The
+// function's parameter 0 is the hidden "self" (ScriptType::Object).
+struct HandlerEntry {
+    std::uint32_t nameIndex = 0;
+    std::uint32_t function = 0; // Index into Module::functions.
+};
+
+// An object declaration of the script: the object identifier (as used by the room resource)
+// and its handlers. Not a runtime object; only a lookup table for dispatch.
+struct ObjectEntry {
+    std::uint32_t nameIndex = 0;
+    std::vector<HandlerEntry> handlers;
+};
+
 // In-memory form of a compiled script. Produced by the compiler, serialised by
 // BytecodeWriter, re-created and validated by BytecodeReader.
 struct Module {
+    // The format minor version the module was read with (BytecodeReader) or targets. A 1.0
+    // module may not use features of 1.1 (validateModule checks). Written files are always the
+    // current version.
+    std::uint16_t formatMinor = bytecodeFormatMinor;
     std::uint16_t languageMajor = languageVersionMajor;
     std::uint16_t languageMinor = languageVersionMinor;
     std::uint32_t compilerVersion = script::compilerVersion;
@@ -78,6 +98,7 @@ struct Module {
     std::vector<Constant> constants;
     std::vector<NativeImport> imports;
     std::vector<Function> functions;
+    std::vector<ObjectEntry> objects; // Format 1.1+.
 
     [[nodiscard]] const std::string& string(std::uint32_t index) const { return strings[index]; }
     [[nodiscard]] const std::string& sourceName() const { return strings[sourceNameIndex]; }

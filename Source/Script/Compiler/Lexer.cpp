@@ -21,7 +21,7 @@ const std::unordered_map<std::string_view, TokenKind>& keywords()
         {"for", TokenKind::KwFor},       {"in", TokenKind::KwIn},         {"return", TokenKind::KwReturn},
         {"pass", TokenKind::KwPass},     {"and", TokenKind::KwAnd},       {"or", TokenKind::KwOr},
         {"not", TokenKind::KwNot},       {"True", TokenKind::KwTrue},     {"False", TokenKind::KwFalse},
-        {"None", TokenKind::KwNone},
+        {"None", TokenKind::KwNone},     {"object", TokenKind::KwObject}, {"self", TokenKind::KwSelf},
     };
     return table;
 }

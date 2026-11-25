@@ -142,7 +142,7 @@ SCHUIMM_TEST(Bytecode_VersionChecks)
 {
     std::vector<std::byte> bytes = sampleBytes();
     putU16(bytes, 4, bytecodeFormatMajor + 1);
-    CHECK(failsWith(bytes, "format 2.0 is not supported", ErrorCode::Unsupported));
+    CHECK(failsWith(bytes, "format 2." + std::to_string(bytecodeFormatMinor) + " is not supported", ErrorCode::Unsupported));
     bytes = sampleBytes();
     putU16(bytes, 6, bytecodeFormatMinor + 1);
     CHECK(failsWith(bytes, "not supported", ErrorCode::Unsupported));
@@ -392,4 +392,276 @@ SCHUIMM_TEST(Bytecode_ValidateModuleForInMemoryModules)
     Module noCode = empty;
     noCode.functions.push_back({});
     CHECK(!validateModule(noCode).has_value());
+}
+
+// --- Format 1.1: objects -------------------------------------------------------------------------
+
+namespace {
+
+const char* objectSource =
+    "func helper(n: int) -> int:\n"
+    "\treturn n * 2\n"
+    "func use():\n"
+    "\tprint(\"room use\")\n"
+    "object blender:\n"
+    "\tfunc look_at():\n"
+    "\t\tprint(helper(21))\n"
+    "\tfunc use(other: object) -> bool:\n"
+    "\t\treturn self == other\n"
+    "object cupboard:\n"
+    "\tfunc look_at():\n"
+    "\t\tprint(self)\n";
+
+Module objectModule()
+{
+    const Compiled c = compileSource(objectSource);
+    if (!c.result.success) std::fprintf(stderr, "%s", c.diagnostics().c_str());
+    REQUIRE(c.result.success);
+    return c.result.module;
+}
+
+// Rewrites a 1.1 file without objects as a format 1.0 file (6 sections, no Objects section).
+std::vector<std::byte> downgradeToVersion10(const std::vector<std::byte>& bytes)
+{
+    std::vector<std::byte> out(bytes.begin(), bytes.begin() + format::headerSize);
+    putU16(out, 6, 0);
+    putU16(out, 10, 0);
+    putU32(out, 24, format::sectionCountVersion10);
+    out.resize(format::headerSize + format::sectionCountVersion10 * format::sectionEntrySize);
+    for (std::uint32_t id = 1; id <= format::sectionCountVersion10; ++id) {
+        const std::size_t entry = sectionEntry(static_cast<format::SectionId>(id));
+        const std::uint32_t offset = getU32(bytes, entry + 4);
+        const std::uint32_t size = getU32(bytes, entry + 8);
+        putU32(out, entry, id);
+        putU32(out, entry + 4, static_cast<std::uint32_t>(out.size()));
+        putU32(out, entry + 8, size);
+        out.insert(out.end(), bytes.begin() + offset, bytes.begin() + offset + size);
+    }
+    putU32(out, 20, static_cast<std::uint32_t>(out.size()));
+    fixCrc(out);
+    return out;
+}
+
+std::vector<std::byte> encodeModule(const Module& module)
+{
+    auto bytes = writeBytecode(module);
+    REQUIRE(bytes.has_value());
+    return *bytes;
+}
+
+bool invalidModule(const Module& module, std::string_view text)
+{
+    const Status status = validateModule(module);
+    if (status.has_value()) {
+        std::fprintf(stderr, "  module accepted, expected \"%.*s\"\n", static_cast<int>(text.size()), text.data());
+        return false;
+    }
+    if (status.error().message.find(text) == std::string::npos) {
+        std::fprintf(stderr, "  got: %s\n", status.error().message.c_str());
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+SCHUIMM_TEST(Bytecode_ObjectsRoundTrip)
+{
+    const Module original = objectModule();
+    REQUIRE(original.objects.size() == 2);
+    const std::vector<std::byte> bytes = encodeModule(original);
+    CHECK_EQ(getU32(bytes, 24), format::sectionCount);
+    CHECK(static_cast<int>(bytes[6]) == format::objectsMinorVersion);
+    auto read = readBytecode(bytes);
+    REQUIRE(read.has_value());
+    CHECK_EQ(read->formatMinor, bytecodeFormatMinor);
+    REQUIRE(read->objects.size() == 2);
+    for (std::size_t o = 0; o < 2; ++o) {
+        CHECK_EQ(read->objects[o].nameIndex, original.objects[o].nameIndex);
+        REQUIRE(read->objects[o].handlers.size() == original.objects[o].handlers.size());
+        for (std::size_t h = 0; h < original.objects[o].handlers.size(); ++h) {
+            CHECK_EQ(read->objects[o].handlers[h].nameIndex, original.objects[o].handlers[h].nameIndex);
+            CHECK_EQ(read->objects[o].handlers[h].function, original.objects[o].handlers[h].function);
+        }
+    }
+    CHECK(encodeModule(*read) == bytes);
+    const std::string listing = disassemble(*read);
+    CHECK(listing.find("; SCHUIMM bytecode 1.1, language 1.1") != std::string::npos);
+    CHECK(listing.find("  blender: look_at -> f2 use -> f3\n  cupboard: look_at -> f4\n") != std::string::npos);
+    CHECK(listing.find("function f3 blender.use(object, object) -> bool") != std::string::npos);
+    CHECK(listing.find("EqObject") != std::string::npos);
+    // Room-level "use" and the handler "blender.use" coexist; lookup keeps them apart.
+    NativeRegistry natives;
+    REQUIRE(registerStandardNatives(natives, {}).has_value());
+    auto program = Program::load(bytes, natives);
+    REQUIRE(program.has_value());
+    CHECK_EQ((*program)->findFunction("use"), std::optional<std::uint32_t>(1));
+    CHECK_EQ((*program)->findHandler("blender", "use"), std::optional<std::uint32_t>(3));
+    CHECK_EQ((*program)->findHandler("cupboard", "look_at"), std::optional<std::uint32_t>(4));
+    CHECK(!(*program)->findFunction("look_at").has_value());
+    CHECK_EQ((*program)->functionDisplayName(3), std::string("blender.use"));
+    CHECK_EQ((*program)->functionDisplayName(1), std::string("use"));
+}
+
+SCHUIMM_TEST(Bytecode_Version10FilesStillLoad)
+{
+    const std::vector<std::byte> old = downgradeToVersion10(sampleBytes());
+    auto module = readBytecode(old);
+    if (!module) std::fprintf(stderr, "  %s\n", module.error().message.c_str());
+    REQUIRE(module.has_value());
+    CHECK_EQ(module->formatMinor, std::uint16_t{0});
+    CHECK(module->objects.empty());
+    // It runs as before.
+    NativeRegistry natives;
+    std::vector<std::string> output;
+    REQUIRE(registerStandardNatives(natives, [&](std::string_view, std::string_view text) { output.emplace_back(text); })
+                .has_value());
+    REQUIRE(natives.add({"give", {ScriptType::String, ScriptType::Int}, ScriptType::Bool,
+                         [](NativeContext&, std::span<const Value>) { return NativeResult::returnValue(Value::fromBool(true)); },
+                         {}})
+                .has_value());
+    auto program = Program::load(old, natives);
+    REQUIRE(program.has_value());
+    ScriptScheduler scheduler;
+    REQUIRE(scheduler.start(*program, "main").has_value());
+    for (int i = 0; i < 4; ++i) scheduler.update(0.5);
+    CHECK_EQ(output.size(), std::size_t{3});
+    // A 1.0 header with 7 sections, or a 1.1 header with 6, is malformed.
+    std::vector<std::byte> mixed = old;
+    putU16(mixed, 6, 1);
+    fixCrc(mixed);
+    CHECK(failsWith(mixed, "expected 7 sections"));
+    std::vector<std::byte> current = sampleBytes();
+    putU16(current, 6, 0);
+    fixCrc(current);
+    CHECK(failsWith(current, "expected 6 sections"));
+}
+
+SCHUIMM_TEST(Bytecode_Version10CannotUseObjects)
+{
+    // The object type in a signature.
+    const Compiled typed = compileSource("extern func touch(o: object)\nfunc f(o: object):\n\ttouch(o)\n");
+    REQUIRE(typed.result.success);
+    CHECK(failsWith(downgradeToVersion10(encodeModule(typed.result.module)), "requires bytecode format 1.1"));
+    Module module = typed.result.module;
+    module.formatMinor = 0;
+    CHECK(invalidModule(module, "native import 'touch' uses type object"));
+    module.imports.clear();
+    module.functions[0].code = {{Opcode::Return, noRegister, 0, 0}};
+    module.functions[0].positions = {{}};
+    CHECK(invalidModule(module, "function 'f' uses type object"));
+    // The object opcodes.
+    const Compiled compare = compileSource("func f(a: int, b: int) -> bool:\n\treturn a == b\n");
+    REQUIRE(compare.result.success);
+    Module opcodes = compare.result.module;
+    bool replaced = false;
+    for (Instruction& instruction : opcodes.functions[0].code) {
+        if (instruction.opcode == Opcode::EqInt) {
+            instruction.opcode = Opcode::EqObject;
+            replaced = true;
+        }
+    }
+    REQUIRE(replaced);
+    CHECK(validateModule(opcodes).has_value()); // 1.1: valid (register types are checked when run).
+    opcodes.formatMinor = 0;
+    CHECK(invalidModule(opcodes, "opcode requires bytecode format 1.1"));
+    // Objects.
+    Module objects = objectModule();
+    objects.formatMinor = 0;
+    CHECK(invalidModule(objects, "object declarations require bytecode format 1.1"));
+}
+
+SCHUIMM_TEST(Bytecode_ObjectTableValidation)
+{
+    const Module good = objectModule();
+    REQUIRE(validateModule(good).has_value());
+    Module m = good;
+    m.objects.push_back(m.objects[0]);
+    CHECK(invalidModule(m, "duplicate object 'blender'"));
+    m = good;
+    m.objects[0].handlers.push_back(m.objects[0].handlers[0]);
+    CHECK(invalidModule(m, "duplicate handler 'look_at' in object 'blender'"));
+    m = good;
+    m.objects[0].handlers[0].function = 99;
+    CHECK(invalidModule(m, "refers to missing function 99"));
+    m = good;
+    m.objects[1].handlers[0].function = m.objects[0].handlers[0].function;
+    CHECK(invalidModule(m, "is the handler of more than one event"));
+    m = good;
+    m.objects[0].handlers[0].function = 0; // helper(int): no self parameter.
+    CHECK(invalidModule(m, "must take the object (self) as its first parameter"));
+    m = good;
+    m.objects[0].nameIndex = 9999;
+    CHECK(invalidModule(m, "object 0 refers to a missing name"));
+    m = good;
+    m.objects[0].handlers[1].nameIndex = 9999;
+    CHECK(invalidModule(m, "handler 1 of object 'blender' refers to a missing name"));
+    // Handler names need only be unique within their object, room functions among themselves.
+    m = good;
+    m.functions[1].nameIndex = m.functions[0].nameIndex;
+    CHECK(invalidModule(m, "duplicate function 'helper'"));
+    // A truncated objects section.
+    std::vector<std::byte> bytes = encodeModule(good);
+    const std::size_t objects = sectionOffset(bytes, format::SectionId::Objects);
+    putU32(bytes, objects, 1000);
+    fixCrc(bytes);
+    CHECK(failsWith(bytes, "truncated object table"));
+}
+
+SCHUIMM_TEST(Bytecode_RandomCorruptionOfObjectsNeverCrashes)
+{
+    // As Bytecode_RandomCorruptionNeverCrashes, for a file with objects: whatever validates is
+    // started through every room function and dispatched through every handler.
+    const std::vector<std::byte> good = encodeModule(objectModule());
+    NativeRegistry natives;
+    REQUIRE(registerStandardNatives(natives, {}).has_value());
+    std::uint32_t seed = 54321;
+    int accepted = 0;
+    int rejected = 0;
+    const auto argumentFor = [](ScriptType type) {
+        switch (type) {
+        case ScriptType::Int: return Value::fromInt(2);
+        case ScriptType::Float: return Value::fromFloat(1.5);
+        case ScriptType::Bool: return Value::fromBool(true);
+        case ScriptType::Object: return Value::fromObject(ObjectRef{3});
+        default: return Value::fromString("s");
+        }
+    };
+    for (std::size_t position = format::headerSize; position < good.size(); ++position) {
+        for (int round = 0; round < 3; ++round) {
+            seed = seed * 1664525u + 1013904223u;
+            std::vector<std::byte> bytes = good;
+            bytes[position] ^= static_cast<std::byte>(((seed >> 24) & 0xFF) | 1);
+            fixCrc(bytes);
+            auto program = Program::load(bytes, natives);
+            if (!program) {
+                ++rejected;
+                continue;
+            }
+            ++accepted;
+            SchedulerSettings settings;
+            settings.instructionBudget = 2000;
+            ScriptScheduler scheduler(settings);
+            const Module& module = (*program)->module();
+            for (std::size_t f = 0; f < module.functions.size(); ++f) {
+                std::vector<Value> arguments;
+                for (const ScriptType type : module.functions[f].parameters) arguments.push_back(argumentFor(type));
+                (void)scheduler.start(*program, (*program)->functionName(f), arguments);
+            }
+            for (const ObjectEntry& object : module.objects) {
+                for (const HandlerEntry& handler : object.handlers) {
+                    const Function& function = module.functions[handler.function];
+                    std::vector<Value> arguments;
+                    for (std::size_t p = 1; p < function.parameters.size(); ++p) {
+                        arguments.push_back(argumentFor(function.parameters[p]));
+                    }
+                    (void)scheduler.dispatch(*program, module.string(object.nameIndex), module.string(handler.nameIndex),
+                                             ObjectRef{9}, std::move(arguments));
+                }
+            }
+            for (int update = 0; update < 4; ++update) scheduler.update(0.25);
+        }
+    }
+    CHECK(rejected > 0);
+    CHECK(accepted > 0);
 }

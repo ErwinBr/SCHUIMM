@@ -40,6 +40,17 @@ struct CoroutineEvent {
     const ScriptError* error = nullptr; // Failed and BudgetWarning.
 };
 
+// Result of ScriptScheduler::dispatch.
+struct DispatchResult {
+    // False: the script declares no handler for this object and event. That is a normal
+    // condition (the event simply has no script behaviour), not an error.
+    bool handled = false;
+    // handled: the coroutine running the handler. It is Ready and runs at the next update (like
+    // start()); its outcome is observed as for any coroutine: state(), result(), error() and
+    // the event callback (a runtime error in the handler is a Failed coroutine).
+    CoroutineHandle handle;
+};
+
 // Cooperative scheduler for script coroutines, driven by the game loop (no threads).
 //
 //   * update(dt) runs, in start order, every coroutine that is Ready or whose wait deadline has
@@ -69,6 +80,16 @@ public:
     // Creates a Ready coroutine running `function(arguments...)` of `program`.
     [[nodiscard]] Result<CoroutineHandle> start(std::shared_ptr<const Program> program, std::string_view function,
                                                 std::vector<Value> arguments = {});
+
+    // Invokes the handler `event` of the object declaration `object` ("object blender:" ...
+    // "func look_at():") as a new coroutine, with `self` as the handler's object context and
+    // `arguments` for its declared parameters. Event names are arbitrary; nothing is hardcoded.
+    //   * no such object or handler: {handled = false}, no coroutine, no error;
+    //   * arguments that do not match the handler's parameters: InvalidArgument;
+    //   * otherwise {handled = true, handle}.
+    [[nodiscard]] Result<DispatchResult> dispatch(std::shared_ptr<const Program> program, std::string_view object,
+                                                  std::string_view event, ObjectRef self,
+                                                  std::vector<Value> arguments = {});
 
     // Stops a coroutine that has not ended and releases its frames. Returns false if the handle
     // is unknown or the coroutine has already ended. Not allowed on the running coroutine.
@@ -115,6 +136,7 @@ private:
     class UpdateGuard;
     friend class UpdateGuard;
 
+    CoroutineHandle add(std::unique_ptr<Coroutine> coroutine);
     Slot* find(CoroutineHandle handle);
     const Slot* find(CoroutineHandle handle) const;
     void finish(Slot& slot, CoroutineHandle handle, CoroutineState state);

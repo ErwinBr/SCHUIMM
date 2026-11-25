@@ -22,8 +22,8 @@ dumps and tests. Each stage is also a separate function with its own header and 
 | Stage | Files | Output |
 |---|---|---|
 | Lexer | `Lexer.h`, `Token.h` | `std::vector<Token>` with `INDENT`/`DEDENT`/`NEWLINE`, decoded literals and a `SourceRange` (file id, offset, line, column, end) per token |
-| Parser | `Parser.h`, `Ast.h` | `SourceUnit`: functions, statements and expressions with source ranges. Purely syntactic |
-| Semantic analysis | `TypeChecker.h`, `Types.h` | `SemanticModel`: per expression its type, implicit widening, resolved variable or call target; per function its variables; the native signatures |
+| Parser | `Parser.h`, `Ast.h` | `SourceUnit`: functions, object declarations, statements and expressions with source ranges. Purely syntactic |
+| Semantic analysis | `TypeChecker.h`, `Types.h` | `SemanticModel`: per expression its type, implicit widening, resolved variable or call target; per function its variables and owning object; the objects and their handlers; the native signatures |
 | IR builder | `IrBuilder.h`, `Ir.h` | `IrModule` |
 | Optimizer | `Optimizer.h` | `IrModule` (optional) |
 | Code generator | `CodeGen.h` | `Module` |
@@ -45,7 +45,8 @@ Comparisons are parsed non-associatively.
 **Error recovery:** a failed statement reports one error (further errors in the same statement
 are suppressed as likely consequences), then the parser skips to the end of the logical line,
 including an indented block that belongs to it, and continues with the next statement. At the
-top level it resynchronises at the next `func`/`extern`. One run therefore reports independent
+top level it resynchronises at the next `func`/`extern`/`object`; inside an object body, at the
+next `func`. One run therefore reports independent
 syntax errors throughout the file. Semantic analysis runs only on syntactically correct files
 (on a recovered tree it would report confusing follow-up errors).
 
@@ -55,9 +56,17 @@ A separate pass over the AST, never mixed into parsing:
 
 1. Collect all function and `extern` signatures (functions may be called before their
    declaration). Duplicate and reserved names are reported here.
-2. Check every function body with a stack of block scopes: declarations, lookups, assignment
+2. Collect the object declarations ([Language.md §8](Language.md#8-objects-and-handlers)): object
+   names (unique, not clashing with functions, natives or reserved names) and per object its
+   handlers (unique within the object). Handlers are appended to the function list after the
+   room-level functions, each with the index of its object; handler names are kept in the
+   object's scope only, never in the room scope used to resolve calls.
+3. Check every function body with a stack of block scopes: declarations, lookups, assignment
    compatibility, operator typing, call arity and argument types, `bool` conditions, return types
    and "every path returns" (a function with a result whose body can fall off the end).
+
+In a handler, variable 0 is the hidden parameter `self` (type `object`); the `self` expression
+resolves to it, and is an error in room-level functions.
 
 Types of the form *Error* mark expressions whose type is unknown after an error; they are
 compatible with everything, so one mistake produces one diagnostic, not a cascade.
@@ -113,6 +122,11 @@ bb1:
 
 `verifyIr()` checks the structural rules (used after building and in tests).
 
+Object declarations are an `IrModule::objects` table (object name, handler name → function
+index). A handler is an ordinary `IrFunction` whose `object` field names its owner and whose
+`r0` is `self`; `dumpIr` prints it as `func blender.use(r0: object) -> None`. The relationship is
+data, not a concatenated name: `object.handler` is only produced when formatting.
+
 ## Optimizer
 
 `Optimizer.h`. Optional (`CompileOptions::optimize`, `schuimmc -O0`), run per function until
@@ -154,6 +168,8 @@ transformations, common subexpression elimination.
 * Constants and strings are deduplicated. Only natives that are actually called become imports.
 * Every instruction gets its source line and column as debug information.
 * Format limits (65 535 registers per function, 65 536 constants) are reported as diagnostics.
+* The objects table becomes the bytecode's Objects section; handler functions keep their plain
+  names in the function table.
 
 ## Command-line compiler: `schuimmc`
 

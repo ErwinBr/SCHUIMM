@@ -49,6 +49,13 @@ public:
 
     [[nodiscard]] Result<CoroutineHandle> start(std::shared_ptr<const Program> program, std::string_view function = "main",
                                                 std::vector<Value> arguments = {});
+    // Invokes an object handler (see ScriptScheduler::dispatch). This is the integration point
+    // for the adventure runtime: `object` is the object's identifier in the room resource,
+    // `event` an arbitrary event name, `self` the engine's handle of that object. A missing
+    // handler is {handled = false} and is not logged as an error.
+    [[nodiscard]] Result<DispatchResult> dispatch(std::shared_ptr<const Program> program, std::string_view object,
+                                                  std::string_view event, ObjectRef self,
+                                                  std::vector<Value> arguments = {});
     bool cancel(CoroutineHandle handle) { return scheduler_.cancel(handle); }
     [[nodiscard]] std::optional<CoroutineState> state(CoroutineHandle handle) const { return scheduler_.state(handle); }
 

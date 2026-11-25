@@ -76,6 +76,8 @@ inline constexpr VReg noVReg = 0xFFFFFFFFu;
     X(FloatToString, 1, true, false)                                                                \
     X(BoolToString, 1, true, false)                                                                 \
     X(CheckRangeStep, 1, false, true)                                                               \
+    X(EqObject, 2, true, false)                                                                     \
+    X(NeObject, 2, true, false)                                                                     \
     X(Call, -1, false, true)                                                                        \
     X(CallNative, -1, false, true)
 
@@ -128,9 +130,13 @@ struct IrBlock {
     Terminator terminator;
 };
 
-// A function. Block 0 is the entry; a block's id is its index. Parameters are r0..rn-1.
+inline constexpr std::uint32_t noObject = 0xFFFFFFFFu;
+
+// A function. Block 0 is the entry; a block's id is its index. Parameters are r0..rn-1; for a
+// handler r0 is the hidden "self" parameter (type object), followed by the declared parameters.
 struct IrFunction {
     std::string name;
+    std::uint32_t object = noObject; // Handlers: index into IrModule::objects.
     std::vector<Type> parameters;
     Type returnType = Type::None;
     std::vector<Type> registerTypes; // Static type of each virtual register.
@@ -146,11 +152,26 @@ struct IrNative {
     bool pure = false;
 };
 
+// An object declaration: handler (event) names mapped to the functions implementing them.
+struct IrHandler {
+    std::string name;
+    std::uint32_t function = 0; // Index into IrModule::functions.
+};
+
+struct IrObject {
+    std::string name;
+    std::vector<IrHandler> handlers;
+};
+
 struct IrModule {
     std::string sourceName;
     std::vector<IrFunction> functions;
     std::vector<IrNative> natives;
+    std::vector<IrObject> objects;
 };
+
+// "blender.look_at" for a handler, the plain name otherwise (dumps and messages only).
+[[nodiscard]] std::string displayName(const IrFunction& function, const IrModule& module);
 
 // Successor blocks of a terminator (0, 1 or 2 entries).
 [[nodiscard]] std::vector<BlockId> successors(const Terminator& terminator);

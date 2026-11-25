@@ -48,7 +48,26 @@ struct VariableInfo {
 
 struct FunctionSemantics {
     const FunctionDecl* declaration = nullptr;
+    // Handlers: index of the owning object in SemanticModel::objects(); invalidIndex for
+    // room-level functions. A handler's variable 0 is the hidden parameter "self" (type object),
+    // followed by the declared parameters.
+    std::uint32_t object = invalidIndex;
     std::vector<VariableInfo> variables; // Parameters first, in order.
+
+    [[nodiscard]] bool isHandler() const noexcept { return object != invalidIndex; }
+};
+
+// A handler of an object declaration: the event name and the function implementing it.
+struct HandlerSemantics {
+    std::string name;
+    std::uint32_t function = invalidIndex; // Index into SemanticModel::functions().
+};
+
+// An "object" declaration: a named scope of handlers. Handler names live in this scope only,
+// never in the room scope of functions and natives.
+struct ObjectSemantics {
+    const ObjectDecl* declaration = nullptr;
+    std::vector<HandlerSemantics> handlers; // In declaration order.
 };
 
 struct StatementInfo {
@@ -63,8 +82,11 @@ public:
     [[nodiscard]] const ExprInfo* findExpression(const Expr& expression) const;
     [[nodiscard]] const StatementInfo& statement(const Stmt& statement) const;
 
-    // User functions in declaration order (extern declarations excluded).
+    // User functions: room-level functions in declaration order (extern declarations excluded),
+    // followed by the handlers of every object in declaration order.
     [[nodiscard]] const std::vector<FunctionSemantics>& functions() const noexcept { return functions_; }
+    // Object declarations in declaration order.
+    [[nodiscard]] const std::vector<ObjectSemantics>& objects() const noexcept { return objects_; }
     // Prelude natives followed by extern declarations.
     [[nodiscard]] const std::vector<NativeSignature>& natives() const noexcept { return natives_; }
 
@@ -73,6 +95,7 @@ private:
     std::unordered_map<const Expr*, ExprInfo> expressions_;
     std::unordered_map<const Stmt*, StatementInfo> statements_;
     std::vector<FunctionSemantics> functions_;
+    std::vector<ObjectSemantics> objects_;
     std::vector<NativeSignature> natives_;
 };
 

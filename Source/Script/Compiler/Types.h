@@ -11,13 +11,13 @@ namespace schuimm::script {
 // Static types as the compiler sees them. Error marks an expression whose type could not be
 // determined because of an earlier error; it is compatible with everything, so one mistake
 // does not cascade into many diagnostics.
-enum class Type : std::uint8_t { Error, None, Bool, Int, Float, String, Any };
+enum class Type : std::uint8_t { Error, None, Bool, Int, Float, String, Any, Object };
 
 [[nodiscard]] const char* toString(Type type) noexcept;
 [[nodiscard]] ScriptType toScriptType(Type type) noexcept;
 [[nodiscard]] Type fromScriptType(ScriptType type) noexcept;
 
-// Type names usable in annotations: int, float, bool, string (None is a keyword).
+// Type names usable in annotations: int, float, bool, string (None and object are keywords).
 [[nodiscard]] std::optional<Type> typeFromName(std::string_view name) noexcept;
 
 [[nodiscard]] inline bool isNumeric(Type type) noexcept { return type == Type::Int || type == Type::Float; }
