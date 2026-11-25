@@ -39,7 +39,7 @@ bool parseDispatch(std::string_view text, DispatchRequest& request)
         const std::string id(text.substr(equals + 1));
         char* end = nullptr;
         request.id = std::strtoull(id.c_str(), &end, 10);
-        if (id.empty() || end == nullptr || *end != '\0') return false;
+        if (id.empty() || end == nullptr || *end != '\0' || request.id == 0) return false;
         text = text.substr(0, equals);
     }
     const std::size_t dot = text.find('.');
@@ -56,7 +56,7 @@ constexpr const char* usage =
     "  --entry NAME     Function to start (default: main); may be repeated for concurrent coroutines\n"
     "  --dispatch OBJECT.EVENT[=ID]\n"
     "                   Invoke the handler EVENT of object OBJECT (without arguments) with object id\n"
-    "                   ID as self (default 1); may be repeated. With --dispatch, main is only\n"
+    "                   ID (nonzero) as self (default 1); may be repeated. With --dispatch, main is only\n"
     "                   started if given with --entry. A missing handler is reported and skipped.\n"
     "  --dt SECONDS     Simulated frame time (default: 0.016)\n"
     "  --frames N       Stop after N frames (default: 100000)\n"
@@ -99,7 +99,7 @@ int main(int argc, char** argv)
             DispatchRequest request;
             const char* text = value();
             if (!parseDispatch(text, request)) {
-                std::fprintf(stderr, "Invalid --dispatch '%s': expected OBJECT.EVENT or OBJECT.EVENT=ID\n", text);
+                std::fprintf(stderr, "Invalid --dispatch '%s': expected OBJECT.EVENT or OBJECT.EVENT=ID with ID > 0\n", text);
                 return 2;
             }
             dispatches.push_back(std::move(request));

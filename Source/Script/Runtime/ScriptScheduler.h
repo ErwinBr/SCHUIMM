@@ -84,6 +84,7 @@ public:
     // Invokes the handler `event` of the object declaration `object` ("object blender:" ...
     // "func look_at():") as a new coroutine, with `self` as the handler's object context and
     // `arguments` for its declared parameters. Event names are arbitrary; nothing is hardcoded.
+    //   * a null `self` (id 0): InvalidArgument, checked first (a host error, never a no-op);
     //   * no such object or handler: {handled = false}, no coroutine, no error;
     //   * arguments that do not match the handler's parameters: InvalidArgument;
     //   * otherwise {handled = true, handle}.

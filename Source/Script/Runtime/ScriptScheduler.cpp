@@ -92,6 +92,9 @@ Result<DispatchResult> ScriptScheduler::dispatch(std::shared_ptr<const Program> 
     if (!program) {
         return makeError(ErrorCode::InvalidArgument, "No program");
     }
+    if (self.isNull()) {
+        return makeError(ErrorCode::InvalidArgument, "Dispatch requires a non-null object handle");
+    }
     if (!program->hasHandler(object, event)) {
         return DispatchResult{};
     }

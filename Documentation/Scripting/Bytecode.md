@@ -138,16 +138,22 @@ checked too. Validation never trusts a size or index:
   native parameters, never as a return type), at most 255 parameters, at least as many registers
   as parameters, code and debug ranges (overflow-checked) inside their sections, at least one
   instruction;
-* objects: names exist, object names are unique, handler names are unique per object, every
-  handler refers to an existing function, no function is the handler of two events, and a
-  handler's parameter 0 has type `object`;
+* objects: names exist, object names are unique and differ from every room-level function and
+  native import name, every object has at least one handler, handler names are unique per
+  object, every handler refers to an existing function with the same name, no function is the
+  handler of two events, and a handler's parameter 0 has type `object`;
 * format 1.0 files: no Objects section, no type `object`, no `EqObject`/`NeObject`;
 * every instruction: known opcode, reserved byte 0, unused operands 0, register operands below
   the function's register count, constant/function/import indices exist, branch targets inside the
   function, argument windows (`c + parameter count`) inside the register file, result and return
-  operands consistent with the callee's or function's return type;
+  operands consistent with the callee's or function's return type, and no `Call` of a handler
+  function (handlers are started only by dispatch);
 * the last instruction of every function is a terminator (`Jump`, `Return`, `Unreachable`), so
   execution cannot run past the end.
+
+The validator guarantees memory and execution safety plus the structural and namespace rules
+above, which the runtime relies on. Purely lexical rules of the source language — identifier
+syntax, reserved names such as `int`, `str` or `range` — are the compiler's and are not checked here.
 
 Errors are `ErrorCode::InvalidData` (malformed) or `ErrorCode::Unsupported` (newer version) with
 a message naming the problem and, where it applies, the byte offset or function and instruction:

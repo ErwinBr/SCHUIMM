@@ -10,6 +10,7 @@
 #include "Script/Runtime/ScriptHost.h"
 
 #include <map>
+#include <set>
 
 using namespace schuimm;
 using namespace schuimm::script;
@@ -36,6 +37,7 @@ struct Room {
     std::vector<std::string> output;
     std::vector<std::string> sounds;
     std::map<std::uint64_t, std::map<std::string, bool>> flags;
+    std::set<std::uint64_t> destroyed; // Ids are never reused: a destroyed id stays stale.
     ScriptScheduler scheduler;
     std::vector<ScriptError> errors;
 
@@ -52,6 +54,7 @@ struct Room {
              {}});
         add({"get_flag", {ScriptType::Object, ScriptType::String}, ScriptType::Bool,
              [this](NativeContext&, std::span<const Value> arguments) {
+                 if (destroyed.contains(arguments[0].asObject().id)) return NativeResult::error("stale object handle");
                  const auto& object = flags[arguments[0].asObject().id];
                  const auto found = object.find(std::string(arguments[1].asString()));
                  return NativeResult::returnValue(Value::fromBool(found != object.end() && found->second));
@@ -59,6 +62,7 @@ struct Room {
              {}});
         add({"set_flag", {ScriptType::Object, ScriptType::String, ScriptType::Bool}, ScriptType::None,
              [this](NativeContext&, std::span<const Value> arguments) {
+                 if (destroyed.contains(arguments[0].asObject().id)) return NativeResult::error("stale object handle");
                  flags[arguments[0].asObject().id][std::string(arguments[1].asString())] = arguments[2].asBool();
                  return NativeResult::returnValue();
              },
@@ -412,6 +416,36 @@ SCHUIMM_TEST(Objects_SelfSurvivesSuspension)
     CHECK_EQ(room.flags.count(0), std::size_t{0});
     CHECK_EQ(room.joined(), std::string("It's already running.\nThe blender stops.\n"));
     CHECK(room.errors.empty());
+}
+
+SCHUIMM_TEST(Objects_StaleHandleAfterSuspensionIsARuntimeError)
+{
+    // The engine destroys the blender while its handler waits. Ids are never reused, so on
+    // resumption self is a stale handle (not another object), and the native reports it.
+    Room room;
+    const auto program = room.load(kitchenSource());
+    const DispatchResult result = room.dispatch(program, "blender", "use", ObjectRef{42});
+    room.scheduler.update(0.0);
+    REQUIRE(room.scheduler.state(result.handle) == CoroutineState::Waiting);
+    room.destroyed.insert(42);
+    room.runUntilIdle();
+    CHECK(room.scheduler.state(result.handle) == CoroutineState::Failed);
+    REQUIRE(room.errors.size() == 1);
+    CHECK(room.errors[0].message.find("stale object handle") != std::string::npos);
+    CHECK(describe(room.errors[0]).find("blender.use") != std::string::npos);
+    CHECK_EQ(room.joined(), std::string()); // "The blender stops." never ran.
+}
+
+SCHUIMM_TEST(Objects_DispatchRejectsTheNullHandle)
+{
+    Room room;
+    const auto program = room.load(twoObjects);
+    auto result = room.scheduler.dispatch(program, "blender", "look_at", ObjectRef{});
+    REQUIRE(!result.has_value());
+    CHECK(result.error().code == ErrorCode::InvalidArgument);
+    // Checked before the lookup: a null handle is a host error even for a missing handler.
+    CHECK(!room.scheduler.dispatch(program, "blender", "dance", ObjectRef{0}).has_value());
+    CHECK_EQ(room.scheduler.activeCount(), std::size_t{0});
 }
 
 SCHUIMM_TEST(Objects_SelfSurvivesSuspensionInNestedCalls)

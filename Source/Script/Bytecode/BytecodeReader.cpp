@@ -225,8 +225,9 @@ struct Validator {
                std::find(parameters.begin(), parameters.end(), ScriptType::Object) != parameters.end();
     }
 
-    // The Objects table: unique object names, unique handler names per object, existing
-    // functions, each function a handler at most once, and "self" (object) as parameter 0.
+    // The Objects table: unique object names that clash with no room-level function or native,
+    // at least one handler per object, unique handler names per object, existing functions named
+    // like their handler, each function a handler at most once, and "self" (object) as parameter 0.
     Status checkObjects()
     {
         owner.assign(module.functions.size(), noOwner);
@@ -242,6 +243,14 @@ struct Validator {
             const std::string& name = module.strings[object.nameIndex];
             if (!objectNames.insert(name).second) {
                 return invalid(concat("duplicate object '", name, "'"));
+            }
+            if (object.handlers.empty()) {
+                return invalid(concat("object '", name, "' has no handlers"));
+            }
+            for (const NativeImport& import : module.imports) {
+                if (module.strings[import.nameIndex] == name) {
+                    return invalid(concat("object '", name, "' has the same name as a native import"));
+                }
             }
             std::set<std::string_view> handlerNames;
             for (std::size_t h = 0; h < object.handlers.size(); ++h) {
@@ -260,11 +269,23 @@ struct Validator {
                     return invalid(concat("function ", handler.function, " is the handler of more than one event"));
                 }
                 const Function& function = module.functions[handler.function];
+                if (function.nameIndex >= module.strings.size() || module.strings[function.nameIndex] != handlerName) {
+                    return invalid(concat("handler '", name, ".", handlerName, "' refers to function ", handler.function,
+                                          ", which has a different name"));
+                }
                 if (function.parameters.empty() || function.parameters[0] != ScriptType::Object) {
                     return invalid(concat("handler '", name, ".", handlerName,
                                           "' must take the object (self) as its first parameter"));
                 }
                 owner[handler.function] = static_cast<std::uint32_t>(o);
+            }
+        }
+        for (std::size_t i = 0; i < module.functions.size(); ++i) {
+            const Function& function = module.functions[i];
+            if (owner[i] == noOwner && function.nameIndex < module.strings.size() &&
+                objectNames.contains(module.strings[function.nameIndex])) {
+                return invalid(concat("object '", module.strings[function.nameIndex],
+                                      "' has the same name as a room-level function"));
             }
         }
         return {};
@@ -439,6 +460,10 @@ struct Validator {
         case Opcode::Call:
         case Opcode::CallNative: {
             const bool native = instruction.opcode == Opcode::CallNative;
+            if (!native && owner[instruction.b] != noOwner) {
+                return bad(concat("calls handler '", functionName(instruction.b),
+                                  "'; handlers are only started by event dispatch"));
+            }
             const std::vector<ScriptType>& parameters =
                 native ? module.imports[instruction.b].parameters : module.functions[instruction.b].parameters;
             const ScriptType returnType =

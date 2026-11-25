@@ -5,6 +5,7 @@
 #include "Script/Bytecode/Disassembler.h"
 #include "Script/Runtime/ScriptScheduler.h"
 
+#include <algorithm>
 #include <cstring>
 
 using namespace schuimm;
@@ -588,7 +589,8 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
     m.objects[1].handlers[0].function = m.objects[0].handlers[0].function;
     CHECK(invalidModule(m, "is the handler of more than one event"));
     m = good;
-    m.objects[0].handlers[0].function = 0; // helper(int): no self parameter.
+    m.objects[0].handlers[0].function = 0; // helper(int), renamed look_at: no self parameter.
+    m.functions[0].nameIndex = m.objects[0].handlers[0].nameIndex;
     CHECK(invalidModule(m, "must take the object (self) as its first parameter"));
     m = good;
     m.objects[0].nameIndex = 9999;
@@ -600,6 +602,37 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
     m = good;
     m.functions[1].nameIndex = m.functions[0].nameIndex;
     CHECK(invalidModule(m, "duplicate function 'helper'"));
+    // Namespace and shape rules the compiler enforces hold for the format as well.
+    const auto stringIndex = [&](std::string_view text) {
+        const auto found = std::find(good.strings.begin(), good.strings.end(), text);
+        REQUIRE(found != good.strings.end());
+        return static_cast<std::uint32_t>(found - good.strings.begin());
+    };
+    m = good;
+    m.objects[1].handlers.clear();
+    CHECK(invalidModule(m, "object 'cupboard' has no handlers"));
+    m = good;
+    m.objects[0].nameIndex = stringIndex("helper");
+    CHECK(invalidModule(m, "object 'helper' has the same name as a room-level function"));
+    m = good;
+    m.objects[0].nameIndex = stringIndex("print");
+    CHECK(invalidModule(m, "object 'print' has the same name as a native import"));
+    m = good;
+    m.functions[m.objects[0].handlers[0].function].nameIndex = stringIndex("helper");
+    CHECK(invalidModule(m, "which has a different name"));
+    // Handlers are started by dispatch only, never by Call (blender.look_at calls helper).
+    m = good;
+    bool patched = false;
+    for (Function& function : m.functions) {
+        for (Instruction& instruction : function.code) {
+            if (instruction.opcode == Opcode::Call && !patched) {
+                instruction.b = static_cast<std::uint16_t>(m.objects[1].handlers[0].function);
+                patched = true;
+            }
+        }
+    }
+    REQUIRE(patched);
+    CHECK(invalidModule(m, "calls handler 'cupboard.look_at'; handlers are only started by event dispatch"));
     // A truncated objects section.
     std::vector<std::byte> bytes = encodeModule(good);
     const std::size_t objects = sectionOffset(bytes, format::SectionId::Objects);

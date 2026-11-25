@@ -156,7 +156,8 @@ if (!result) {
   running anything. Event names are arbitrary strings; nothing in the compiler or VM knows
   `look_at` or `use`.
 * `ScriptScheduler::dispatch` (and `ScriptHost::dispatch`, which adds logging) returns
-  `Result<DispatchResult>`: an error only for invalid arguments (or no program);
+  `Result<DispatchResult>`: an error only for invalid arguments, a null `self` (id 0, checked
+  first) or no program;
   `handled == false` for a missing object or handler, without creating a coroutine; otherwise the
   coroutine's handle. Its outcome is observed as for every coroutine: `state()`, `result()`,
   `error()` and the event callback. A runtime error inside the handler is a `Failed` coroutine
@@ -177,12 +178,25 @@ functions without `self`.
 
 **Integration boundary.** The script side ends at the `ObjectRef`. The engine:
 
-* owns the room objects and their state, and assigns the ids — two instances of the same room
-  script must use different ids for their objects, so no state is shared between them;
+* owns the room objects and their state, and assigns the ids. **An id is never reused during the
+  process lifetime**, so two instances of the same room script never share an id (or state), and
+  a handle stays bound to the object it was issued for. Id 0 is the null handle and never refers
+  to an object (dispatch rejects it). A monotonic 64-bit counter satisfies this, and so does
+  `{index:32, generation:32}` packed into the id, if the engine wants to reuse slots;
+* fails natives given a stale or unknown handle with an error (`NativeResult::error`), which is a
+  runtime error of the calling coroutine — never acts on whatever object holds that slot now;
 * provides natives taking `object` for whatever state scripts may read or change (for now
   `get_flag(o: object, name: string) -> bool` and similar, as in
   [Examples/kitchen.sch](Examples/kitchen.sch); the tests implement them with a map);
 * decides which handler to dispatch for an interaction (no fallback or reverse dispatch here).
+
+**Stale handles.** A handler can keep a handle while it is suspended — `self`, or an `object`
+it got from a native. If the engine destroys that object meanwhile (the room is left, the item
+is consumed) and later creates another one, the new object gets a new id, so the resumed handler
+cannot reach it through the old handle: its next native call with the old handle fails with a
+runtime error naming the handler and line. Equality of handles is equality of ids, which under
+this contract is exactly object identity. Bytecode has no `object` constants, so scripts can only
+hold handles the engine issued.
 
 Room resources (JSON), the adventure runtime and `self.property` syntax are later milestones.
 

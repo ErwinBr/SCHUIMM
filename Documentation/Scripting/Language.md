@@ -407,7 +407,9 @@ The engine API is `ScriptHost::dispatch` ([Runtime.md](Runtime.md#object-handler
   of a room — have different handles, so handlers never share `self`.
 * `self` is available only in handlers ("'self' is only available inside object handlers"
   elsewhere). It cannot be assigned, declared or used as a parameter name.
-* `self` stays valid for the whole run of the handler, also across `wait()` and `yield()`.
+* `self` stays valid for the whole run of the handler, also across `wait()` and `yield()`. If the
+  engine destroys the object meanwhile, the handle does not move to another object: the next
+  native call with it is a runtime error.
 * `object` is also the name of the type in annotations, parameters and native signatures:
   `func use_with(item: object):`, `extern func get_flag(o: object, name: string) -> bool`.
 * Object values can be stored in variables, passed and returned, and compared with `==`/`!=`.

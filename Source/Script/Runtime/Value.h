@@ -37,10 +37,17 @@ private:
 
 // Opaque handle of an engine object (e.g. an object of the current room), the value of "self" in
 // object handlers and of the script type "object". The engine chooses the ids and owns the
-// objects and their state; scripts only compare handles and pass them to natives. Two instances
-// of the same room script must get different ids for their objects.
+// objects and their state; scripts only compare handles and pass them to natives (bytecode has no
+// object constants, so scripts cannot make handles up). The engine's contract:
+//   * an id is never reused during the process lifetime: a handle stays bound to the object it
+//     was issued for, and becomes stale (never refers to another object) when it is destroyed;
+//     a monotonic counter, or {index, generation} packed into the 64 bits, both satisfy this;
+//   * id 0 is the null handle and never refers to an object;
+//   * natives given a stale or unknown handle fail with an error (a runtime error of the script).
+// Under this contract equality of ids is equality of object identity.
 struct ObjectRef {
     std::uint64_t id = 0;
+    [[nodiscard]] constexpr bool isNull() const noexcept { return id == 0; }
     friend bool operator==(const ObjectRef&, const ObjectRef&) = default;
 };
 
