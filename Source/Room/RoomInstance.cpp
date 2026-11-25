@@ -2,23 +2,15 @@
 
 #include "Core/Common/Assert.h"
 #include "Core/Common/StringBuilder.h"
+#include "Room/ObjectHandles.h"
 #include "Room/RoomScript.h"
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 
 namespace schuimm::room {
 
 namespace {
-
-// Process-wide, so handles are unique across instances, rooms and libraries; 64 bits never wrap
-// in practice, so an id is never reused. 0 stays the null handle.
-script::ObjectRef allocateObjectRef() noexcept
-{
-    static std::atomic<std::uint64_t> next{1};
-    return script::ObjectRef{next.fetch_add(1, std::memory_order_relaxed)};
-}
 
 bool isAlive(const script::ScriptHost& host, script::CoroutineHandle handle)
 {
@@ -34,16 +26,32 @@ Result<std::unique_ptr<RoomInstance>> RoomInstance::create(LoadedRoom room, scri
     if (auto status = validateRoomScript(*room.resource, room.script.get()); !status) {
         return std::unexpected(status.error());
     }
-    return std::unique_ptr<RoomInstance>(new RoomInstance(std::move(room), host));
+    if (auto status = validateRoomActors(room); !status) {
+        return makeError(status.error().code, concat("room '", room.resource->id, "': ", status.error().message));
+    }
+    // Every actor is created before the instance exists: a failure publishes nothing.
+    const auto& placements = room.resource->actors;
+    std::vector<ActorInstance> actors;
+    actors.reserve(placements.size());
+    for (std::size_t i = 0; i < placements.size(); ++i) {
+        auto actor = ActorInstance::create(placements[i].id, room.actors[i],
+                                           placementConfiguration(placements[i], *room.actors[i]));
+        if (!actor) {
+            return makeError(actor.error().code, concat("room '", room.resource->id, "': ", actor.error().message));
+        }
+        actors.push_back(std::move(*actor));
+    }
+    return std::unique_ptr<RoomInstance>(new RoomInstance(std::move(room), host, std::move(actors)));
 }
 
-RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host)
+RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<ActorInstance> actors)
     : room_(std::move(room))
     , host_(host)
+    , actors_(std::move(actors))
 {
     objects_.reserve(room_.resource->objects.size());
     for (const RoomObjectDefinition& definition : room_.resource->objects) {
-        objects_.push_back(RoomObject(definition, allocateObjectRef()));
+        objects_.push_back(RoomObject(definition, detail::allocateObjectHandle()));
     }
 }
 
@@ -79,6 +87,52 @@ RoomObject* RoomInstance::object(script::ObjectRef handle) noexcept
 const RoomObject* RoomInstance::object(script::ObjectRef handle) const noexcept
 {
     return const_cast<RoomInstance*>(this)->object(handle);
+}
+
+ActorInstance* RoomInstance::actor(std::string_view id) noexcept
+{
+    const auto found = std::find_if(actors_.begin(), actors_.end(), [id](const ActorInstance& a) { return a.id() == id; });
+    return found == actors_.end() ? nullptr : &*found;
+}
+
+const ActorInstance* RoomInstance::actor(std::string_view id) const noexcept
+{
+    return const_cast<RoomInstance*>(this)->actor(id);
+}
+
+ActorInstance* RoomInstance::actor(script::ObjectRef handle) noexcept
+{
+    if (handle.isNull()) return nullptr;
+    const auto found =
+        std::find_if(actors_.begin(), actors_.end(), [handle](const ActorInstance& a) { return a.handle() == handle; });
+    return found == actors_.end() ? nullptr : &*found;
+}
+
+const ActorInstance* RoomInstance::actor(script::ObjectRef handle) const noexcept
+{
+    return const_cast<RoomInstance*>(this)->actor(handle);
+}
+
+void RoomInstance::update(double deltaSeconds)
+{
+    const std::uint64_t ticks = clock_.advance(deltaSeconds);
+    if (ticks == 0) return;
+    for (ActorInstance& actor : actors_) actor.update(ticks);
+}
+
+RoomDrawList RoomInstance::drawList() const
+{
+    RoomDrawList list;
+    list.reserve(actors_.size());
+    for (std::size_t i = 0; i < actors_.size(); ++i) {
+        const ActorInstance& actor = actors_[i];
+        if (!actor.visible()) continue;
+        list.push_back(RoomDrawItem{actor.position().y, i, actor.renderState()});
+    }
+    std::sort(list.begin(), list.end(), [](const RoomDrawItem& a, const RoomDrawItem& b) {
+        return a.depth != b.depth ? a.depth < b.depth : a.sequence < b.sequence;
+    });
+    return list;
 }
 
 Result<script::DispatchResult> RoomInstance::dispatch(std::string_view objectId, std::string_view event,

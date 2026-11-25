@@ -1,13 +1,15 @@
-# Backend-independent graphics code and the texture cache: camera, CPU-side sprite batching
-# and resources on top of a fake renderer. Headless: no window, no OpenGL context.
+# Backend-independent graphics code and the texture cache: camera, CPU-side sprite batching,
+# resources and room drawing on top of a fake renderer. Headless: no window, no OpenGL context.
 schuimm_add_test(GraphicsTests
     SOURCES
         CameraTests.cpp
+        RoomGraphicsTests.cpp
         SpriteBatcherTests.cpp
         TextTests.cpp
         TextureValidationTests.cpp
         TextureCacheTests.cpp
-    LIBRARIES Schuimm::GraphicsResources
+    # RoomGraphics brings GraphicsResources (listing both duplicates it on the link line).
+    LIBRARIES Schuimm::RoomGraphics
     LABELS unit)
 target_include_directories(GraphicsTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/Tests/Resource")
 target_compile_definitions(GraphicsTests PRIVATE

@@ -142,7 +142,17 @@ and `ResourceCache<FontFace>` with `loadFontFace`.
 ```cpp
 Result<Image> decodeImage(std::span<const std::byte> data, std::string_view sourceName);
 Result<Image> loadImage(const AssetLocator&, const AssetPath&);  // readBytes + decodeImage
+
+// Metadata only: the format and size from the header; no pixel data is decompressed.
+Result<ImageInfo> readImageInfo(std::span<const std::byte> data, std::string_view sourceName);
+Result<ImageInfo> loadImageInfo(const AssetLocator&, const AssetPath&);
 ```
+
+* `readImageInfo` uses libpng's own header reader (`png_image_begin_read_from_memory`, which
+  runs `png_read_info`). It applies the same checks and errors as `decodeImage` for headers,
+  including the size limit. Animation resources use it, through a `ResourceCache<ImageInfo>`, to
+  check source rectangles without a graphics context ([Animation.md](Animation.md)). The file
+  is read whole, because `AssetLocator` has no partial read, but its pixel data is not inflated.
 
 * The format is detected from its signature bytes, not from the file extension. PNG is the only
   supported format.
@@ -161,6 +171,21 @@ Result<Image> loadImage(const AssetLocator&, const AssetPath&);  // readBytes + 
 
 Adding a format means adding a signature to `detectImageFileFormat` and a decoder file next to
 `PngDecoder.cpp`. Callers do not change.
+
+## JSON resource formats (`Resource/Json`)
+
+Rooms, animations and actors are JSON files decoded with one set of helpers
+(`Resource/Json/JsonDecoder.h`, internal library `schuimm_resource_json` over the vendored
+nlohmann/json). The helpers provide:
+- strict parsing, with line and column on syntax errors and duplicate keys reported;
+- the version check;
+- typed readers for strings, identifiers, integers, finite numbers, floats checked after
+  conversion, coordinates, points and asset paths;
+- error messages of the form `"<source>: <property path>: <reason>"`.
+
+The shared rules: unknown properties are errors, optional properties may be `null`, and
+identifiers are `[A-Za-z_][A-Za-z0-9_]*`. Libraries link the helpers privately and include them
+only from `.cpp` files, so nlohmann/json never appears in a public header.
 
 ## CPU-side image representation (`Core/Image/Image.h`)
 

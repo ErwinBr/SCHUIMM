@@ -41,7 +41,7 @@ add_subdirectory(ThirdParty)
 add_subdirectory(Source)
 
 if(SCHUIMM_BUILD_TOOLS OR SCHUIMM_BUILD_DEMO)
-    # The demo compiles its scripts with schuimmc at build time.
+    # The demos compile their scripts with schuimmc at build time.
     add_subdirectory(Applications/ScriptCompiler)
 endif()
 if(SCHUIMM_BUILD_TOOLS)
@@ -50,6 +50,7 @@ endif()
 
 if(SCHUIMM_BUILD_DEMO)
     add_subdirectory(Applications/EngineDemo)
+    add_subdirectory(Applications/ActorDemo)
 endif()
 
 if(SCHUIMM_BUILD_TESTS)

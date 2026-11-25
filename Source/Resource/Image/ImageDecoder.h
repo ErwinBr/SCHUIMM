@@ -5,6 +5,7 @@
 // graphics layer.
 
 #include "Core/Common/Error.h"
+#include "Core/Common/Geometry.h"
 #include "Core/Image/Image.h"
 
 #include <cstddef>
@@ -30,5 +31,19 @@ enum class ImageFileFormat {
 // Errors: InvalidData for unrecognised, corrupt or truncated data and for images larger than
 // Image::maxDimension; `sourceName` (an asset path or file name) is included in messages.
 [[nodiscard]] Result<Image> decodeImage(std::span<const std::byte> data, std::string_view sourceName);
+
+// Image metadata: what the header says, without decoding pixel data.
+struct ImageInfo {
+    ImageFileFormat format = ImageFileFormat::Unknown;
+    Extent2D size;
+
+    friend bool operator==(const ImageInfo&, const ImageInfo&) = default;
+};
+
+// Reads and validates the header of an encoded image file: the format, and the size, checked
+// against Image::maxDimension like decodeImage(). Pixel data is not decompressed. The errors are
+// those of decodeImage() for unrecognised, corrupt or truncated headers (a file whose pixel data
+// is corrupt can still have a valid header).
+[[nodiscard]] Result<ImageInfo> readImageInfo(std::span<const std::byte> data, std::string_view sourceName);
 
 } // namespace schuimm

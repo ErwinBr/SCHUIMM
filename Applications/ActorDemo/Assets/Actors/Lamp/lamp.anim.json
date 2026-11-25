@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "clips": {
+    "flicker": {
+      "loop": true,
+      "frames": [
+        { "image": "Actors/Lamp/lamp_on.png", "pivot": [8, 48], "duration": 50 },
+        { "image": "Actors/Lamp/lamp_dim.png", "pivot": [8, 48], "duration": 4 },
+        { "image": "Actors/Lamp/lamp_on.png", "pivot": [8, 48], "duration": 6 },
+        { "image": "Actors/Lamp/lamp_dim.png", "pivot": [8, 48], "duration": 3 }
+      ]
+    }
+  }
+}

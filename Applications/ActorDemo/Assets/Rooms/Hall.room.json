@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "id": "hall",
+  "size": { "width": 640, "height": 360 },
+  "actors": [
+    { "id": "hero", "actor": "Actors/Walker/walker.actor.json", "position": [320, 300], "facing": "south" },
+    { "id": "guard_01", "actor": "Actors/Walker/walker.actor.json", "position": [180, 230], "facing": "east",
+      "scale": 1.5 },
+    { "id": "guard_02", "actor": "Actors/Walker/walker.actor.json", "position": [470, 230], "facing": "west",
+      "scale": 1.5 },
+    { "id": "lamp_left", "actor": "Actors/Lamp/lamp.actor.json", "position": [90, 200], "scale": 2.0 },
+    { "id": "lamp_right", "actor": "Actors/Lamp/lamp.actor.json", "position": [560, 200], "scale": 2.0 }
+  ]
+}

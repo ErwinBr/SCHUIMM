@@ -31,4 +31,14 @@ struct RectF {
     friend constexpr bool operator==(const RectF&, const RectF&) noexcept = default;
 };
 
+// Integer rectangle, e.g. a region of an image in pixels (origin top-left).
+struct RectI {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+
+    friend constexpr bool operator==(const RectI&, const RectI&) noexcept = default;
+};
+
 } // namespace schuimm

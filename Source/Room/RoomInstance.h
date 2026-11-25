@@ -1,15 +1,30 @@
 #pragma once
 
-// A live room: the runtime objects created from a RoomResource's object definitions, their
-// handles and mutable state, and the association with the room's compiled script.
+// A live room: the runtime objects created from a RoomResource's object definitions, the actors
+// created from its actor placements, their handles and mutable state, and the association with
+// the room's compiled script.
 //
 // Immutable data (RoomResource, Program) is shared between all instances of a room; everything
 // mutable lives here, so instances are independent and the resource never changes.
 //
-// Object handles: every runtime object gets a script::ObjectRef from a process-wide counter, so
-// ids are unique across all instances and never reused (the ObjectRef contract in
-// Script/Runtime/Value.h). After an instance is destroyed its handles are stale: they never
-// refer to another object.
+// Object handles: every room object and every actor gets a script::ObjectRef from one
+// process-wide counter (ObjectHandles.h), so handles are unique across objects, actors and all
+// instances and never reused (the ObjectRef contract in Script/Runtime/Value.h). After an
+// instance is destroyed its handles are stale: they never refer to another object or actor, not
+// even to the "same" actor of a new instance of the room.
+//
+// Actors: created from the room's placements every time the room is instantiated (there is no
+// memory of earlier instances: a revisit starts from the authored placements). They live and die
+// with the instance. Room objects and actors are separate kinds: object() never finds an actor,
+// actor() never an object, and the room script's object declarations refer to objects only.
+//
+// Lifetime of views: the object and actor collections are fixed when the instance is created, so
+// spans, pointers and references from objects(), actors(), object() and actor() stay valid until
+// the instance is destroyed.
+//
+// Updating: update(deltaSeconds) converts engine time to animation ticks (one AnimationClock per
+// instance, so every actor advances by the same ticks) and advances all actors, visible or not.
+// drawList() only reads: drawing never advances anything.
 //
 // Coroutines: the instance remembers the coroutines it started (dispatch(), start()) and cancels
 // those still alive when it is destroyed, so no handler of a destroyed room keeps running. An
@@ -20,6 +35,9 @@
 
 #include "Core/Common/Error.h"
 #include "Core/Common/Geometry.h"
+#include "Animation/AnimationClock.h"
+#include "Room/ActorInstance.h"
+#include "Room/ActorRenderState.h"
 #include "Room/RoomLibrary.h"
 #include "Room/RoomResource.h"
 #include "Script/Runtime/Program.h"
@@ -76,8 +94,9 @@ private:
 
 class RoomInstance {
 public:
-    // Creates the runtime objects of `room`. Checks the script's object declarations against
-    // the resource again (validateRoomScript), so an instance never has a mismatched script.
+    // Creates the runtime objects and actors of `room`. Checks the script's object declarations
+    // (validateRoomScript) and the actors (validateRoomActors) again, so an instance never has a
+    // mismatched script. All or nothing: if any actor cannot be created, no instance is returned.
     [[nodiscard]] static Result<std::unique_ptr<RoomInstance>> create(LoadedRoom room, script::ScriptHost& host);
 
     ~RoomInstance();
@@ -98,6 +117,20 @@ public:
     [[nodiscard]] RoomObject* object(script::ObjectRef handle) noexcept;
     [[nodiscard]] const RoomObject* object(script::ObjectRef handle) const noexcept;
 
+    // In the order of the resource's actor placements.
+    [[nodiscard]] std::span<ActorInstance> actors() noexcept { return actors_; }
+    [[nodiscard]] std::span<const ActorInstance> actors() const noexcept { return actors_; }
+    // nullptr if there is no such actor (in this instance).
+    [[nodiscard]] ActorInstance* actor(std::string_view id) noexcept;
+    [[nodiscard]] const ActorInstance* actor(std::string_view id) const noexcept;
+    [[nodiscard]] ActorInstance* actor(script::ObjectRef handle) noexcept;
+    [[nodiscard]] const ActorInstance* actor(script::ObjectRef handle) const noexcept;
+
+    // Advances every actor's animation by `deltaSeconds` of engine time.
+    void update(double deltaSeconds);
+    // The visible actors' current frames, back to front (RoomDrawList).
+    [[nodiscard]] RoomDrawList drawList() const;
+
     // The integration point for event dispatch: invokes the handler `event` of the object with
     // identifier `objectId`, with that object's handle as self (ScriptHost::dispatch).
     //   * NotFound: the room has no object `objectId`;
@@ -113,13 +146,15 @@ public:
     [[nodiscard]] std::size_t activeCoroutineCount() const;
 
 private:
-    RoomInstance(LoadedRoom room, script::ScriptHost& host);
+    RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<ActorInstance> actors);
     void track(script::CoroutineHandle handle);
     void prune();
 
     LoadedRoom room_;
     script::ScriptHost& host_;
     std::vector<RoomObject> objects_;
+    std::vector<ActorInstance> actors_;
+    animation::AnimationClock clock_;
     std::vector<script::CoroutineHandle> coroutines_;
 };
 

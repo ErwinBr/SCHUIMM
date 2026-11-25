@@ -270,16 +270,17 @@ SCHUIMM_TEST(Room_OptionalPropertiesMayBeNull)
 
 SCHUIMM_TEST(Room_VersionAndRequiredFields)
 {
-    CHECK_ERROR(mutated([](Json& j) { j["version"] = 2; }),
-                "Kitchen.room.json: version: unsupported room resource version 2 (this engine reads version 1)");
+    CHECK_ERROR(mutated([](Json& j) { j["version"] = 3; }),
+                "Kitchen.room.json: version: unsupported room resource version 3 (this engine reads versions 1 to 2)");
+    CHECK_ERROR(mutated([](Json& j) { j["version"] = 0; }), "unsupported room resource version 0");
     CHECK_ERROR(mutated([](Json& j) { j["version"] = "1"; }), "version: expected an integer, found a string");
     CHECK_ERROR(mutated([](Json& j) { j["version"] = 1.0; }), "version: expected an integer, found the number 1.0");
     // The version is checked before anything else, so a future file reports its version.
     CHECK_ERROR(mutated([](Json& j) {
-                    j["version"] = 3;
+                    j["version"] = 4;
                     j["foreground"] = Json::object();
                 }),
-                "unsupported room resource version 3");
+                "unsupported room resource version 4");
     CHECK_ERROR(mutated([](Json& j) { j.erase("version"); }), "version: missing required property");
     CHECK_ERROR(mutated([](Json& j) { j.erase("id"); }), "Kitchen.room.json: id: missing required property");
     CHECK_ERROR(mutated([](Json& j) { j.erase("size"); }), "size: missing required property");
@@ -578,7 +579,7 @@ SCHUIMM_TEST(Room_ScriptObjectWithoutRoomObjectIsAnError)
     REQUIRE(resource.has_value());
     auto program = fixture.host.load(compileToBytecode("object fridge:\n\tfunc open():\n\t\tsay(\"cold\")\n"), "fridge.schb");
     REQUIRE(program.has_value());
-    auto instance = RoomInstance::create(LoadedRoom{std::make_shared<const RoomResource>(std::move(*resource)), *program},
+    auto instance = RoomInstance::create(LoadedRoom{std::make_shared<const RoomResource>(std::move(*resource)), *program, {}},
                                          fixture.host);
     REQUIRE(!instance.has_value());
     CHECK(contains(instance.error().message, "declares object 'fridge', which room 'kitchen' does not define"));

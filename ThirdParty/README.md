@@ -11,7 +11,7 @@ files are unmodified except where noted.
 | libpng | 1.6.59 | `Source/Resource/Image/PngDecoder.cpp` | PNG Reference Library License v2 ([`libpng/LICENSE`](libpng/LICENSE)) | [`v1.6.59` tag archive](https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.59.tar.gz) (`2540302a1844ad2b2b501977abecfa850f265f97b78f065a712ab4074a89f5b5`, computed on download; no digest is published for tag archives) |
 | FreeType | 2.15.0 | `Source/Resource/Font/FontFace.cpp` | FreeType License (FTL, BSD-style with an attribution clause; FreeType is dual-licensed FTL/GPLv2 and SCHUIMM uses it under the FTL) ([`freetype/LICENSE.TXT`](freetype/LICENSE.TXT), [`freetype/FTL.TXT`](freetype/FTL.TXT)) | [`freetype-2.15.0.tar.xz`](https://download.savannah.gnu.org/releases/freetype/freetype-2.15.0.tar.xz) (`93cd47eb719c325107f2d3cf087d06299e944c3b48a40b55537302304dea1dd5`, computed on download; the `.sig` was downloaded but not verified because no GnuPG was available) |
 | miniaudio | 0.11.26 | `Source/Audio/Miniaudio/MiniaudioAudioDevice.cpp` | public domain (Unlicense) or MIT No Attribution, at the user's choice ([`miniaudio/LICENSE`](miniaudio/LICENSE)) | [`miniaudio.h` at tag `0.11.26`](https://raw.githubusercontent.com/mackron/miniaudio/0.11.26/miniaudio.h) (`6b376c7fbb1352ba1e0e432ab66069b335ea9405e45cb6c30b97ef0f3c9c3e0e`) and `LICENSE` (`457f1b500e0adf6bc059edddfa78a2f62012e7c3bb43476c20e0bd23b25ba0eb`), computed on download |
-| nlohmann/json | 3.12.0 | `Source/Room/RoomResourceLoader.cpp` | MIT ([`nlohmann/LICENSE.MIT`](nlohmann/LICENSE.MIT)) | [`json.hpp` from the v3.12.0 release](https://github.com/nlohmann/json/releases/download/v3.12.0/json.hpp) (`aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63`) and [`LICENSE.MIT` at tag `v3.12.0`](https://raw.githubusercontent.com/nlohmann/json/v3.12.0/LICENSE.MIT) (`46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603`), computed on download |
+| nlohmann/json | 3.12.0 | `Source/Resource/Json/JsonDecoder.h` (used by the room, animation and actor loaders) | MIT ([`nlohmann/LICENSE.MIT`](nlohmann/LICENSE.MIT)) | [`json.hpp` from the v3.12.0 release](https://github.com/nlohmann/json/releases/download/v3.12.0/json.hpp) (`aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63`) and [`LICENSE.MIT` at tag `v3.12.0`](https://raw.githubusercontent.com/nlohmann/json/v3.12.0/LICENSE.MIT) (`46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603`), computed on download |
 
 Demo asset (not compiled; shipped with the EngineDemo and used by the font tests):
 
@@ -74,7 +74,7 @@ build. miniaudio's CoreAudio backend links CoreFoundation, CoreAudio and AudioTo
   are disabled with `PNG_*_OPT=0`: they need additional per-architecture sources, and decoding
   small game assets does not need them.
 * Each library is linked privately by one engine library (libpng/zlib and FreeType by the
-  resource layer, miniaudio by `schuimm_audio_miniaudio`, nlohmann/json by `schuimm_room`):
+  resource layer, miniaudio by `schuimm_audio_miniaudio`, nlohmann/json by `schuimm_resource_json`, linked privately by `schuimm_animation` and `schuimm_room`):
   engine headers never include their headers. nlohmann/json is compiled as part of the engine's
   own C++23 code, so its include directory is a SYSTEM include (no engine warnings are reported
   for it) and the 10.13 availability check applies to it like to engine code.

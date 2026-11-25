@@ -18,4 +18,7 @@ target_compile_definitions(FileSystemTests PRIVATE SCHUIMM_TEST_OUTPUT_DIR="${CM
 if(SCHUIMM_BUILD_DEMO)
     add_test(NAME EngineDemoSmoke COMMAND EngineDemo --frames 30)
     set_tests_properties(EngineDemoSmoke PROPERTIES LABELS integration TIMEOUT 60)
+    # Runs every scripted interaction, including leaving and re-entering rooms.
+    add_test(NAME ActorDemoSmoke COMMAND ActorDemo --auto --frames 300)
+    set_tests_properties(ActorDemoSmoke PROPERTIES LABELS integration TIMEOUT 60)
 endif()

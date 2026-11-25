@@ -54,6 +54,28 @@ Start `EngineDemo` normally and check:
 | 17 | Close | window close button, Alt+F4 (Windows), ⌘Q (macOS): log ends with `Audio device stopped`, `Clean shutdown, exit code 0` |
 | 18 | HiDPI | on a scaled display the scene is sharp (nearest scaling) and the framebuffer size in the title is the pixel size |
 
+## ActorDemo
+
+`ActorDemo` exercises actors and animation ([Actors.md](Actors.md)). `ActorDemoSmoke` (`ctest -L
+integration`) runs `ActorDemo --auto --frames 300`, a timed sequence of the actions below that
+also leaves and re-enters rooms. The log names every actor with its handle, so fresh handles
+after each room change are visible.
+
+| Key | Action | What to check |
+|---|---|---|
+| **Tab** | next room | The log says "Leaving room" before "Entered room". The new room's actors have new handles. |
+| **R** | re-enter the current room | Every change made during the visit (facing, scale, visibility, animation) is gone, and the actors stand at their authored placements. |
+| **1**–**9** | select an actor | The yellow marker moves to its ground point. |
+| **arrows** (two at once for diagonals) | facing | `west`/`north`/`south` switch clips. `east` mirrors the west clip and continues playback ("same clip"). Facings without artwork use the fallback (south). The feet stay on the marker. |
+| **W** / **I** | wave / idle | Wave plays once and holds its last frame. Its taller frames do not move the feet. Facing changes during the wave keep it running. |
+| **Space** | pause / resume | The actor freezes and continues where it was. |
+| **V** | visibility | The actor disappears, but keeps animating: make it visible again and it is mid-cycle. |
+| **−** / **=** | scale | The figure scales around its feet. |
+| **Esc** | quit | |
+
+The lamps flicker (a whole-image clip with no source rectangles) and share one texture per image
+with each other and across rooms.
+
 ## Verification record (Milestone 2.5)
 
 Robustness pass: audio control state instead of a command queue, strict WAV decoding, and

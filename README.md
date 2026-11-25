@@ -159,6 +159,28 @@ See `EngineDemo --help`. Scripts: the demo runs `Applications/EngineDemo/Scripts
 [Documentation/Scripting/README.md](Documentation/Scripting/README.md#quick-start). The assets are regenerated with
 `python3 Applications/EngineDemo/Tools/generate_demo_assets.py`; the font is Noto Sans (SIL OFL).
 
+### ActorDemo
+
+```bash
+./Build/macos-clang/bin/Debug/ActorDemo.app/Contents/MacOS/ActorDemo   # macOS
+./Build/linux-gcc/bin/Debug/ActorDemo                                  # Linux
+```
+
+Two rooms (a hall and a garden) with actors that share one walker resource and one lamp
+resource. It shows:
+- directional animation and mirroring;
+- frames of different sizes and pivots;
+- looping and non-looping clips, visibility and scale;
+- that leaving a room destroys its actors and entering it again starts from the authored
+  placements.
+
+The keys are in
+[ManualTesting.md](Documentation/Architecture/ManualTesting.md#actordemo). `--auto` runs a timed
+sequence of the same actions, and `--frames N` quits after N frames. Regenerate the art with
+`python3 Applications/ActorDemo/Tools/generate_actor_demo_assets.py`. Formats and architecture:
+[Actors.md](Documentation/Architecture/Actors.md) and
+[Animation.md](Documentation/Architecture/Animation.md).
+
 ## Verification status
 
 Verified by building and running on real machines (Milestone 2; see

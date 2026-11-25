@@ -30,4 +30,21 @@ Result<Image> decodeImage(std::span<const std::byte> data, std::string_view sour
                      concat("cannot decode image '", sourceName, "': unrecognised file format (supported: PNG)"));
 }
 
+Result<ImageInfo> readImageInfo(std::span<const std::byte> data, std::string_view sourceName)
+{
+    if (data.empty()) {
+        return makeError(ErrorCode::InvalidData, concat("cannot read image '", sourceName, "': the data is empty"));
+    }
+    switch (detectImageFileFormat(data)) {
+    case ImageFileFormat::Png: {
+        auto size = detail::readPngSize(data, sourceName);
+        if (!size) return std::unexpected(size.error());
+        return ImageInfo{ImageFileFormat::Png, *size};
+    }
+    case ImageFileFormat::Unknown: break;
+    }
+    return makeError(ErrorCode::InvalidData,
+                     concat("cannot read image '", sourceName, "': unrecognised file format (supported: PNG)"));
+}
+
 } // namespace schuimm

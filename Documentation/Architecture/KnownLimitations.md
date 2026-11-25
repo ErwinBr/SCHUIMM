@@ -86,8 +86,9 @@ Deliberate scope limits (as of Milestone 2) and known platform caveats.
 ## Rooms
 
 See [Rooms.md](Rooms.md).
-* Room resources are parsed, validated and instantiated only: nothing draws a room, and there
-  is no interaction detection, movement, scaling, pathfinding or room transition yet.
+* Rooms are parsed, validated and instantiated. Of their contents only actors are drawn: there
+  is no background, prop or object rendering, no interaction detection, movement, automatic
+  scale-map scaling, pathfinding or room transition yet.
 * Polygons are not checked for self-intersection; walkable areas and regions are not checked
   against the room bounds (scale-map points are).
 * Loading reports the first error only, not every error in the file.
@@ -97,6 +98,20 @@ See [Rooms.md](Rooms.md).
   in every build; violating it stops the program). Coroutines it did not start are not cancelled when it is destroyed; their handles
   just become stale.
 * Room ids are not checked for uniqueness across a game (a single file cannot know the others).
+
+## Actors and animation
+
+See [Actors.md](Actors.md) and [Animation.md](Animation.md).
+* Actor scripts are referenced and checked to exist, but not loaded or executed; there are no
+  script-facing actor functions.
+* Actors do not move, and the room's scale map is not applied to them automatically.
+* Changing to a different directional clip restarts it (the phase is not carried over).
+* The draw list holds actors only; room objects and props will join it for unified depth
+  sorting. Depth is the ground y; there are no occlusion masks or foreground layers.
+* No animation events, blending, state machines, multiple tracks or skeletal animation.
+* Actor state is not saved or restored yet.
+* Image sizes for animation frames come from the PNG header, but `AssetLocator` reads whole
+  files, so the file is still read (not decompressed) to find its size.
 
 ## Scripting
 

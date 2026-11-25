@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "id": "lamp",
+  "animation_resources": {
+    "lamp": "Actors/Lamp/lamp.anim.json"
+  },
+  "animations": {
+    "flicker": { "any": { "resource": "lamp", "clip": "flicker" } }
+  },
+  "default_animation": "flicker",
+  "default_facing": "south"
+}

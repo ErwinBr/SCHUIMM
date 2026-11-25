@@ -11,6 +11,7 @@
 
 #include "Core/Common/Geometry.h"
 #include "Resource/AssetPath.h"
+#include "Room/Facing.h"
 
 #include <optional>
 #include <string>
@@ -19,8 +20,9 @@
 
 namespace schuimm::room {
 
-// The room resource format version this engine reads.
-inline constexpr int roomResourceVersion = 1;
+// The newest room resource format version; this engine reads versions 1 to this one. Version 2
+// added actor placements.
+inline constexpr int roomResourceVersion = 2;
 
 // A non-interactive image placed in the room. `position` is where `pivot` (in sprite pixels,
 // from the sprite's top-left corner) lands in room space.
@@ -80,6 +82,22 @@ struct RoomRegion {
     friend bool operator==(const RoomRegion&, const RoomRegion&) = default;
 };
 
+// Where and how an actor appears in this room: the initial state of the room's actor instance,
+// applied every time the room is instantiated. `id` is room-local (another room may use the same
+// one); `actor` names the reusable actor resource. Unset values come from the actor resource's
+// defaults (visible: true).
+struct ActorPlacement {
+    std::string id;
+    AssetPath actor;
+    Vec2 position; // Ground point.
+    std::optional<Facing> facing;
+    std::optional<std::string> animation;
+    std::optional<float> scale;
+    std::optional<bool> visible;
+
+    friend bool operator==(const ActorPlacement&, const ActorPlacement&) = default;
+};
+
 struct RoomResource {
     std::string id;
     Extent2D size;
@@ -90,6 +108,7 @@ struct RoomResource {
     std::optional<ScaleMap> scaleMap;
     std::vector<WalkableArea> walkableAreas;
     std::vector<RoomRegion> regions;
+    std::vector<ActorPlacement> actors; // Version 2.
 
     [[nodiscard]] const RoomObjectDefinition* findObject(std::string_view objectId) const noexcept
     {

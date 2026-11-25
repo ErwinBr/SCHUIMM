@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "id": "garden",
+  "size": { "width": 640, "height": 360 },
+  "actors": [
+    { "id": "hero", "actor": "Actors/Walker/walker.actor.json", "position": [140, 320], "facing": "east",
+      "scale": 2.5 },
+    { "id": "gardener", "actor": "Actors/Walker/walker.actor.json", "position": [460, 260], "facing": "north",
+      "animation": "idle", "scale": 1.25 },
+    { "id": "lamp", "actor": "Actors/Lamp/lamp.actor.json", "position": [600, 330], "scale": 1.5, "visible": false }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "clips": {
+    "idle_south": {
+      "loop": true,
+      "frames": [
+        { "image": "Actors/Walker/walker.png", "source": [0, 8, 24, 40], "pivot": [12, 40], "duration": 30 },
+        { "image": "Actors/Walker/walker.png", "source": [32, 6, 24, 42], "pivot": [12, 42], "duration": 20 }
+      ]
+    },
+    "idle_north": {
+      "loop": true,
+      "frames": [
+        { "image": "Actors/Walker/walker.png", "source": [64, 8, 24, 40], "pivot": [12, 40], "duration": 30 },
+        { "image": "Actors/Walker/walker.png", "source": [96, 6, 24, 42], "pivot": [12, 42], "duration": 20 }
+      ]
+    },
+    "idle_west": {
+      "loop": true,
+      "frames": [
+        { "image": "Actors/Walker/walker.png", "source": [128, 8, 24, 40], "pivot": [12, 40], "duration": 30 },
+        { "image": "Actors/Walker/walker.png", "source": [160, 6, 24, 42], "pivot": [12, 42], "duration": 20 }
+      ]
+    },
+    "wave_south": {
+      "loop": false,
+      "frames": [
+        { "image": "Actors/Walker/walker.png", "source": [0, 56, 32, 40], "pivot": [12, 40], "duration": 8 },
+        { "image": "Actors/Walker/walker.png", "source": [32, 52, 32, 44], "pivot": [12, 44], "duration": 8 },
+        { "image": "Actors/Walker/walker.png", "source": [64, 52, 32, 44], "pivot": [12, 44], "duration": 8 },
+        { "image": "Actors/Walker/walker.png", "source": [32, 52, 32, 44], "pivot": [12, 44], "duration": 8 },
+        { "image": "Actors/Walker/walker.png", "source": [64, 52, 32, 44], "pivot": [12, 44], "duration": 24 }
+      ]
+    }
+  }
+}

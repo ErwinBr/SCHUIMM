@@ -3,9 +3,13 @@
 #include "Resource/Image/ImageDecoder.h"
 #include "Resource/Image/ImageLoader.h"
 #include "TestAssets.h"
+#include "TestPng.h"
 
 #include <array>
+#include <cstdint>
 #include <cstdlib>
+#include <span>
+#include <vector>
 
 using namespace schuimm;
 using namespace schuimm::test;
@@ -189,4 +193,62 @@ SCHUIMM_TEST(ImageDecoder_MissingAsset)
     const auto image = decodeAsset("does_not_exist.png");
     REQUIRE(!image.has_value());
     CHECK(image.error().code == ErrorCode::NotFound);
+}
+
+// --- Metadata (readImageInfo / loadImageInfo) ---
+
+SCHUIMM_TEST(ImageInfo_MatchesDecodedSize)
+{
+    for (const char* file : {"rgba_4x2.png", "rgb_3x1.png", "palette_trns_2x2.png", "gray1_8x1.png",
+                             "gray_alpha_2x1.png", "rgba16_2x1.png", "interlaced_rgba_5x5.png"}) {
+        const AssetPath asset = assetPath(concat("Images/", file));
+        const auto info = loadImageInfo(testAssetLocator(), asset);
+        const auto image = loadImage(testAssetLocator(), asset);
+        REQUIRE(info.has_value());
+        REQUIRE(image.has_value());
+        CHECK(info->format == ImageFileFormat::Png);
+        if (info->size != image->size()) {
+            SCHUIMM_TEST_FAIL_(concat(file, ": header size differs from the decoded size"), false);
+        }
+    }
+}
+
+SCHUIMM_TEST(ImageInfo_DoesNotNeedPixelData)
+{
+    // A complete header with garbage pixel data: the size is known, decoding fails.
+    const auto header = pngHeader(640, 480);
+    const auto info = readImageInfo(header, "header-only");
+    REQUIRE(info.has_value());
+    CHECK(info->size == (Extent2D{640, 480}));
+    CHECK(!decodeImage(header, "header-only").has_value());
+}
+
+SCHUIMM_TEST(ImageInfo_InvalidHeaders)
+{
+    const auto checkInvalid = [](std::span<const std::byte> data, std::string_view name) {
+        const auto info = readImageInfo(data, name);
+        if (info.has_value()) {
+            SCHUIMM_TEST_FAIL_(concat(name, " was accepted"), false);
+            return;
+        }
+        CHECK(info.error().code == ErrorCode::InvalidData);
+        CHECK(info.error().message.find(name) != std::string::npos);
+    };
+    checkInvalid({}, "empty");
+    const auto notImage = testAssetLocator().readBytes(assetPath("Images/not_an_image.png"));
+    REQUIRE(notImage.has_value());
+    checkInvalid(*notImage, "not-an-image");
+
+    const auto valid = pngHeader(4, 4);
+    checkInvalid(std::span(valid).first(20), "truncated-header");
+    auto badCrc = valid;
+    badCrc[20] ^= std::byte{0x01};
+    checkInvalid(badCrc, "bad-crc");
+    checkInvalid(pngHeader(0, 4), "zero-width");
+    const auto oversized = pngHeader(static_cast<std::uint32_t>(Image::maxDimension) + 1, 4);
+    checkInvalid(oversized, "oversized");
+
+    const auto missing = loadImageInfo(testAssetLocator(), assetPath("Images/does_not_exist.png"));
+    REQUIRE(!missing.has_value());
+    CHECK(missing.error().code == ErrorCode::NotFound);
 }

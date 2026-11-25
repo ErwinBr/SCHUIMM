@@ -7,6 +7,7 @@
 | `schuimm_graphics` (`Source/Graphics/Interface`, `Source/Graphics/Common`) | `GraphicsDevice`, `Renderer2D`, `Texture`, `RenderTarget`, `Sprite`, presentation maths; `Camera2D`, `SpriteBatcher`, `ShelfPacker`, `TextLayout`. No graphics API. | Core |
 | `schuimm_graphics_opengl` (`Source/Graphics/OpenGL`) | The OpenGL 3.3 core backend: device, batched renderer, textures, render targets. | graphics, platform interface |
 | `schuimm_graphics_resources` (`Source/GraphicsResources`) | `TextureCache` (image assets → textures), `Font` (font faces → glyph atlases). Uses only `Renderer2D`. | graphics, resource |
+| `schuimm_room_graphics` (`Source/RoomGraphics`) | `RoomTextures` (a room's actor images → textures through `TextureCache`), `drawRoom` (a room's draw list → sprites). See [Actors.md](Actors.md#rendering). | room, graphics resources |
 
 The generic resource layer never depends on graphics, and the renderer never depends on the
 resource layer: `schuimm_graphics_resources` is the only bridge. Public interfaces expose no

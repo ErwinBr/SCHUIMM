@@ -54,11 +54,15 @@ native APIs.
 | `Source/Script/Bytecode` | `schuimm_script_bytecode` | bytecode `Module`, opcodes, shared arithmetic semantics, reader/validator, writer, disassembler ([Bytecode.md](../Scripting/Bytecode.md)) |
 | `Source/Script/Compiler` | `schuimm_script_compiler` | lexer, parser, type checker, IR, optimizer, code generator ([Compiler.md](../Scripting/Compiler.md)); tools and tests only |
 | `Source/Script/Runtime` | `schuimm_script_runtime` | `Value`, `Program`, `NativeRegistry`, VM, `ScriptScheduler`, `ScriptHost` ([Runtime.md](../Scripting/Runtime.md)) |
-| `Source/Room` | `schuimm_room` | `RoomResource`, room resource loader (JSON), `RoomLibrary`, `RoomInstance` ([Rooms.md](Rooms.md)) |
+| `Source/Resource/Json` | `schuimm_resource_json` (internal) | shared JSON decoding helpers for the engine's resource formats ([Resources.md](Resources.md#json-resource-formats-resourcejson)) |
+| `Source/Animation` | `schuimm_animation` | `AnimationResource` (JSON), `AnimationPlayer`, `AnimationClock` ([Animation.md](Animation.md)) |
+| `Source/Room` | `schuimm_room` | `RoomResource`, room resource loader (JSON), `RoomLibrary`, `RoomInstance`; `ActorResource`, `ActorLibrary`, `ActorInstance` ([Rooms.md](Rooms.md), [Actors.md](Actors.md)) |
+| `Source/RoomGraphics` | `schuimm_room_graphics` | `RoomTextures`, `drawRoom`: a room's actors → textures and sprites through `Renderer2D` |
 | `Source/Core/Application` | `schuimm_application` | `Application`, `ApplicationListener`, lifecycle |
 | `Source/Platform/<OS>` | `schuimm_platform` | exactly one native backend, chosen at configure time |
 | `Source/Graphics/OpenGL` | `schuimm_graphics_opengl` | OpenGL 3.3 core `GraphicsDevice`, batched `Renderer2D`, render targets |
 | `Applications/EngineDemo` | `EngineDemo` | composition root, demo scene and assets, demo scripts, self-test |
+| `Applications/ActorDemo` | `ActorDemo` | two rooms with actors: animation, facing, mirroring, scale, room lifetime |
 | `Applications/ScriptCompiler` | `schuimmc` | command-line script compiler with debug dumps |
 | `Applications/ScriptRunner` | `schuimm-run` | headless bytecode runner (runtime only) |
 | `ThirdParty` | `schuimm_zlib`, `schuimm_png`, `schuimm_freetype`, `schuimm_miniaudio`, `schuimm_json` | vendored libraries (the C libraries and the header-only nlohmann/json), each used privately by one engine library ([README](../../ThirdParty/README.md)) |
@@ -96,9 +100,13 @@ on the platform, graphics and audio *interfaces*, which in turn depend on `schui
 * The resource layer depends neither on windowing, graphics nor audio.
 * The script libraries depend on `schuimm_core` only. The compiler is used by the `schuimmc`
   tool and the tests; the game links the runtime and loads precompiled bytecode.
-* `schuimm_room` depends on `schuimm_resource` and `schuimm_script_runtime` (not on the
-  compiler, graphics or audio): room resources are parsed and validated headlessly, and images
-  are only checked for existence; textures come later through `TextureCache`.
+* `schuimm_animation` depends on `schuimm_resource` only. `schuimm_room` depends on
+  `schuimm_resource`, `schuimm_animation` and `schuimm_script_runtime`, but not on the compiler,
+  graphics or audio. Rooms, actors and animations are parsed, validated and played headlessly:
+  images are checked for existence or read for their header size.
+* `schuimm_room_graphics` (room + graphics resources) is the one place where rooms meet the
+  renderer. It turns a room's actor images into textures through `TextureCache` and its draw list
+  into sprites.
 * The graphics and audio layers do not depend on the resource layer or on each other. They meet
   the resource layer only in Core's data types (`Image`, `SoundData`), and in
   `schuimm_graphics_resources`, the one bridge that turns image and font assets into GPU
@@ -114,7 +122,9 @@ Rules enforced by this layout:
 * Each third-party library is included by exactly one engine file: `png.h` by
   `Source/Resource/Image/PngDecoder.cpp`, FreeType by `Source/Resource/Font/FontFace.cpp`,
   `miniaudio.h` by `Source/Audio/Miniaudio/MiniaudioAudioDevice.cpp`, nlohmann/json by
-  `Source/Room/RoomResourceLoader.cpp` (the room tests use it as well, to build test documents).
+  `Source/Resource/Json/JsonDecoder.h`. Only the room, animation and actor loaders include that
+  header, all from `.cpp` files; the room tests use nlohmann/json as well, to build test
+  documents.
 * `Application` and all game code see interfaces only. The single place that names concrete
   backends is the composition root (`Applications/EngineDemo/main.cpp`).
 

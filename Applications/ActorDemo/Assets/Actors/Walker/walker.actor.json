@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "id": "walker",
+  "script": "Actors/Walker/walker.schb",
+  "animation_resources": {
+    "main": "Actors/Walker/walker.anim.json"
+  },
+  "animations": {
+    "idle": {
+      "south": { "resource": "main", "clip": "idle_south" },
+      "north": { "resource": "main", "clip": "idle_north" },
+      "west": { "resource": "main", "clip": "idle_west" },
+      "east": { "resource": "main", "clip": "idle_west", "flip_x": true },
+      "north_west": { "resource": "main", "clip": "idle_north" },
+      "north_east": { "resource": "main", "clip": "idle_north" },
+      "fallback": "south"
+    },
+    "wave": {
+      "south": { "resource": "main", "clip": "wave_south" },
+      "fallback": "south"
+    }
+  },
+  "default_animation": "idle",
+  "default_facing": "south",
+  "default_scale": 2.0
+}
