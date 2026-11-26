@@ -69,7 +69,7 @@ native APIs.
 | `Source/Platform/<OS>` | `schuimm_platform` | exactly one native backend, chosen at configure time |
 | `Source/Graphics/OpenGL` | `schuimm_graphics_opengl` | OpenGL 3.3 core `GraphicsDevice`, batched `Renderer2D`, render targets |
 | `Applications/EngineDemo` | `EngineDemo` | composition root, demo scene and assets, demo scripts, self-test |
-| `Applications/ActorDemo` | `ActorDemo` | rooms with actors: click-to-walk navigation, perspective, animation, facing, mirroring, room lifetime |
+| `Applications/ActorDemo` | `ActorDemo` | rooms with actors: click-to-walk navigation, perspective, animation, facing, mirroring, room lifetime, an animated object, and a room script driving the adventure API |
 | `Applications/ScriptCompiler` | `schuimmc` | command-line script compiler with debug dumps |
 | `Applications/ScriptRunner` | `schuimm-run` | headless bytecode runner (runtime only) |
 | `ThirdParty` | `schuimm_zlib`, `schuimm_png`, `schuimm_freetype`, `schuimm_miniaudio`, `schuimm_json` | vendored libraries (the C libraries and the header-only nlohmann/json), each used privately by one engine library ([README](../../ThirdParty/README.md)) |

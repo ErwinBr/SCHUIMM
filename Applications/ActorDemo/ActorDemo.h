@@ -2,12 +2,18 @@
 
 // ActorDemo: rooms with actors, to see actors, animation, navigation and movement at work. The
 // courtyard has click-to-walk navigation (walkable areas, an island, a disconnected balcony, a
-// perspective scale map) and a debug overlay; the hall and garden show actors and animation.
+// perspective scale map), a debug overlay, an animated fan, and a room script
+// (Assets/Rooms/Courtyard/Courtyard.sch) that drives the gardener's rounds and a demonstration
+// of the adventure API (P); the hall and garden show actors and animation.
+//
+// Frame order (Adventure.md): input -> room update -> adventure publish -> (Application) scripts
+// -> render.
 //
 // Rooms are entered the way a game will: the current room instance is destroyed first, then the
 // next one is created from its (cached, immutable) resources, so its actors start from their
 // authored placements every time. See Documentation/Architecture/ManualTesting.md for the keys.
 
+#include "Adventure/AdventureContext.h"
 #include "Core/Application/ApplicationListener.h"
 #include "Core/Image/Image.h"
 #include "Graphics/Common/Camera2D.h"
@@ -68,7 +74,8 @@ private:
     void updateTitle(Application& app);
     void handleMouse(Application& app);
     void walkHero(Application& app, Vec2 destination);
-    void patrol(Application& app);
+    void demonstrate(Application& app);
+    void useFan(Application& app);
     void drawDebug(Renderer2D& renderer);
     [[nodiscard]] room::ActorInstance* selected();
 
@@ -85,9 +92,15 @@ private:
     std::unique_ptr<room::RoomInstance> room_;
 
     Camera2D camera_;
+    // The adventure API's view of the game: the active room and the camera (bound to the
+    // ScriptHost's natives in onInitialize, before any room script is loaded).
+    adventure::AdventureContext adventure_;
+    script::CoroutineHandle demonstration_;
     bool debug_ = false;
-    std::size_t patrolIndex_ = 0;
 
+    // --auto: first the scripted demonstration, then the timed sequence of key actions.
+    bool automaticScripted_ = true;
+    std::uint64_t automaticSequenceStart_ = 0;
     std::size_t automaticStep_ = 0;
     bool captureRequested_ = false;
     bool captured_ = false;

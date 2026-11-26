@@ -70,9 +70,6 @@ std::string describePoint(Vec2 p)
     return concat("(", std::lround(p.x), ", ", std::lround(p.y), ")");
 }
 
-// The gardener's rounds in the courtyard (it walks to the next point when it arrives).
-constexpr std::array<Vec2, 4> patrolPoints = {Vec2{820, 300}, Vec2{120, 260}, Vec2{140, 500}, Vec2{880, 490}};
-
 std::string describeActor(const ActorInstance& actor)
 {
     return concat("'", actor.id(), "' (", actor.resource().id, ", handle ", actor.handle().id, ")");
@@ -93,6 +90,9 @@ ActorDemoListener::~ActorDemoListener() = default;
 Status ActorDemoListener::onInitialize(Application& app)
 {
     if (app.scripts() == nullptr) return makeError(ErrorCode::InvalidArgument, "ActorDemo needs a ScriptHost");
+    // The adventure natives first: room scripts are linked against them when rooms load.
+    if (auto status = adventure_.bind(app.scripts()->natives()); !status) return status;
+    adventure_.setCamera(&camera_);
     library_ = std::make_unique<room::RoomLibrary>(assets_, *app.scripts());
     images_ = std::make_unique<ResourceCache<Image>>(assets_, loadImage);
     textures_ = std::make_unique<TextureCache>(app.graphics().renderer(), *images_);
@@ -102,7 +102,7 @@ Status ActorDemoListener::onInitialize(Application& app)
     if (!room_) return makeError(ErrorCode::InvalidData, "the first room could not be entered (see the log)");
     app.logger().info(category, "Click: walk   Right-click/S: stop   G: debug overlay   Tab: next room   R: re-enter   "
                                 "1-9: select actor   arrows: facing   W: wave   I: idle   Space: pause   V: visible   "
-                                "-/=: scale   Esc: quit");
+                                "-/=: scale   P: scripted demonstration   F: use the fan   Esc: quit");
     return {};
 }
 
@@ -111,6 +111,10 @@ void ActorDemoListener::enterRoom(Application& app, std::size_t index)
     // Leave the current room first: its actors (and their handles) are gone before the next room
     // exists. Room destruction happens here, in onUpdate, never while scripts run.
     if (room_) app.logger().info(category, concat("Leaving room '", room_->resource().id, "'"));
+    // The adventure API lets go of the room first (its pending walks and animations are
+    // cancelled), then the room cancels its coroutines.
+    adventure_.setActiveRoom(nullptr);
+    demonstration_ = {};
     room_.reset();
     roomTextures_ = {};
 
@@ -137,8 +141,13 @@ void ActorDemoListener::enterRoom(Application& app, std::size_t index)
     }
     roomTextures_ = std::move(*textures);
     room_ = std::move(*instance);
+    adventure_.setActiveRoom(room_.get());
     selected_ = 0;
-    patrolIndex_ = 0;
+    // A room script with an "enter" function sets the room up (the courtyard starts the
+    // gardener's rounds); it runs in the next script update.
+    if (room_->script() && room_->script()->findFunction("enter")) {
+        if (auto started = room_->start("enter"); !started) app.logger().error(category, describe(started.error()));
+    }
     const Extent2D size = room_->resource().size;
     camera_.setBounds(RectF{0, 0, static_cast<float>(size.width), static_cast<float>(size.height)});
     const ActorInstance* hero = room_->actor("hero");
@@ -230,6 +239,8 @@ void ActorDemoListener::handleKeys(Application& app)
                                                hero->movement().request, " cancelled)"));
         }
     }
+    if (input.wasPressed(Key::P)) demonstrate(app);
+    if (input.wasPressed(Key::F)) useFan(app);
     if (input.wasPressed(Key::Tab)) perform(app, Action::NextRoom);
     if (input.wasPressed(Key::R)) perform(app, Action::ReenterRoom);
     if (input.wasPressed(Key::W)) perform(app, Action::Wave);
@@ -263,9 +274,24 @@ void ActorDemoListener::handleKeys(Application& app)
 
 void ActorDemoListener::runAutomaticStep(Application& app)
 {
+    // First 240 frames of the courtyard script: the demonstration (P) starts, and the fan is
+    // switched (F) twice while it runs. Counted in frames, like the sequence, so the run does not
+    // depend on the frame rate. The sequence then leaves the room, which cancels the rest of the
+    // demonstration (press P to watch it to the end).
+    if (automaticScripted_) {
+        const std::uint64_t frame = app.frameIndex();
+        if (frame == 1) demonstrate(app);
+        if (frame == 60 || frame == 120) useFan(app);
+        if (frame >= 240) {
+            automaticScripted_ = false;
+            automaticSequenceStart_ = frame;
+        }
+        return;
+    }
     // One step every 20 frames: every interaction of the manual controls, including leaving
     // and re-entering rooms.
-    if (app.frameIndex() == 0 || app.frameIndex() % 20 != 0) return;
+    const std::uint64_t frame = app.frameIndex() - automaticSequenceStart_;
+    if (frame == 0 || frame % 20 != 0) return;
     switch (automaticStep_++ % 21) {
     // The courtyard: walking, around the fountain, replacement, stopping, an unreachable click.
     case 0: debug_ = true; walkHero(app, {880, 300}); break;
@@ -326,13 +352,29 @@ void ActorDemoListener::handleMouse(Application& app)
     walkHero(app, camera_.screenToWorld(screen));
 }
 
-void ActorDemoListener::patrol(Application& app)
+void ActorDemoListener::demonstrate(Application& app)
 {
-    ActorInstance* gardener = room_ ? room_->actor("gardener") : nullptr;
-    if (gardener == nullptr || !gardener->canWalk() || gardener->isWalking()) return;
-    const Vec2 next = patrolPoints[patrolIndex_++ % patrolPoints.size()];
-    if (auto request = room_->walkTo(*gardener, next); !request) {
-        app.logger().warning(category, concat("gardener: ", request.error().message));
+    if (!room_ || !room_->script() || !room_->script()->findFunction("demonstrate")) {
+        app.logger().info(category, "P: this room's script has no demonstration (Tab to the courtyard)");
+        return;
+    }
+    // One demonstration at a time: a running one is cancelled (and stops where it is).
+    if (demonstration_.isValid()) app.scripts()->cancel(demonstration_);
+    auto started = room_->start("demonstrate");
+    if (!started) {
+        app.logger().error(category, describe(started.error()));
+        return;
+    }
+    demonstration_ = *started;
+    app.logger().info(category, "Started the scripted demonstration (clicking walks the hero and interrupts it)");
+}
+
+void ActorDemoListener::useFan(Application& app)
+{
+    if (!room_ || room_->object("fan") == nullptr) return;
+    // The fan's "use" handler of the room script, with the fan as self.
+    if (auto result = room_->dispatch("fan", "use"); !result) {
+        app.logger().error(category, describe(result.error()));
     }
 }
 
@@ -341,10 +383,12 @@ void ActorDemoListener::onUpdate(Application& app, double deltaSeconds)
     handleKeys(app);
     handleMouse(app);
     if (options_.automatic) runAutomaticStep(app);
-    if (room_ && room_->resource().id == "courtyard") patrol(app);
-    // Movement and animation advance here, before the ScriptHost update; drawing only reads.
+    // Movement and animation advance here; then the adventure API publishes finished and
+    // cancelled walks and animations, which the ScriptHost update (after onUpdate) resumes.
+    // Drawing only reads.
     if (room_) {
         room_->update(deltaSeconds);
+        adventure_.publish();
         if (const ActorInstance* hero = room_->actor("hero")) camera_.follow(hero->position(), deltaSeconds, 4.0f);
     }
     if (captureRequested_) {
@@ -451,9 +495,12 @@ void ActorDemoListener::updateTitle(Application& app)
     app.window().setTitle(title);
 }
 
-void ActorDemoListener::onShutdown(Application&)
+void ActorDemoListener::onShutdown(Application& app)
 {
-    // Textures before the graphics device; the room before the ScriptHost.
+    // Scripts stop before the adventure context their natives use goes away; textures before the
+    // graphics device; the room before the ScriptHost.
+    if (app.scripts() != nullptr) app.scripts()->stopAll();
+    adventure_.setActiveRoom(nullptr);
     room_.reset();
     roomTextures_ = {};
     textures_.reset();

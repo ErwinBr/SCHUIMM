@@ -2,7 +2,8 @@
   "version": 1,
   "id": "mover",
   "animation_resources": {
-    "main": "Actors/Mover/mover.anim.json"
+    "main": "Actors/Mover/mover.anim.json",
+    "actions": "Actors/Mover/mover_actions.anim.json"
   },
   "animations": {
     "idle": {
@@ -24,6 +25,11 @@
       "south_east": { "resource": "main", "clip": "walk_east" },
       "north_west": { "resource": "main", "clip": "walk_east", "flip_x": true },
       "south_west": { "resource": "main", "clip": "walk_east", "flip_x": true }
+    },
+    "press_button": {
+      "east": { "resource": "actions", "clip": "press_button" },
+      "west": { "resource": "actions", "clip": "press_button", "flip_x": true },
+      "fallback": "east"
     }
   },
   "default_animation": "idle",

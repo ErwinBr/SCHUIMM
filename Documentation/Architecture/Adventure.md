@@ -175,6 +175,56 @@ resulting **playback**. It does not suspend.
 These are the actor contract of [Actors.md](Actors.md#movement), unchanged. The adventure layer
 only reports the outcomes.
 
+## Example
+
+The ActorDemo courtyard's room script,
+[`Courtyard.sch`](../../Applications/ActorDemo/Assets/Rooms/Courtyard/Courtyard.sch), in short:
+
+```python
+func patrol(gardener: actor):
+	while True:
+		walk_to(gardener, vec2(820, 300))     # waits until the gardener arrives
+		set_direction(gardener, Direction.SOUTH)
+		wait(1.5)
+		walk_to(gardener, vec2(120, 260))
+
+func demonstrate():
+	var hero: actor = get_actor("hero")
+	var gardener: actor = get_actor("gardener")
+	var fan: object = get_object("fan")
+	var patrol_task: coroutine = spawn patrol(gardener)   # runs alongside
+	walk_to(hero, vec2(800, 150))          # the balcony: walks to the nearest reachable point
+	walk_to(hero, get_position(fan) + vec2(-36, 24))
+	set_direction(hero, Direction.EAST)
+	wait(play_animation(hero, "press_button"))   # a non-looping animation
+	play_animation(fan, "spinning")              # loops on its own; never waited for
+	spawn walk_to(hero, vec2(320, 480))          # a native, spawned directly
+	cancel(patrol_task)                          # the gardener stops where it is
+	set_position(gardener, get_position(hero) + vec2(70, 0))
+
+object fan:
+	func use():
+		if get_animation(self) == "spinning":
+			play_animation(self, "idle")
+		else:
+			play_animation(self, "spinning")
+```
+
+ActorDemo calls the room's functions and handlers from C++:
+- `room.start("enter")` when the room is entered;
+- `room.start("demonstrate")` on P;
+- `room.dispatch("fan", "use")` on F.
+
+There is no mouse-driven interaction dispatch yet. A headless test runs this script to the end
+on the demo's own assets (`Adventure_TheDemoCourtyardScriptRunsToTheEnd`).
+
+## Not in this milestone (Part II and later)
+
+Script modules and global variables, cross-script calls, actor scripts and actor-local or
+object-local state, room transitions, joining coroutines, dialogue, inventory, verbs and mouse
+interaction, forced (direct) movement and smooth camera movement are planned. None of them exist
+yet; scripts are one file per room, and all state lives in the engine.
+
 ## Tests
 
 `Tests/Adventure/AdventureTests.cpp` (headless, real `ScriptHost`, scripts compiled with the
@@ -200,4 +250,5 @@ interface) covers:
   - locomotion replacing a playback;
   - outcomes retained after later playbacks;
 - the camera;
-- leaving the room cancelling its operations, with every token reclaimed.
+- leaving the room cancelling its operations, with every token reclaimed;
+- the ActorDemo courtyard script running to its end on the demo's assets.

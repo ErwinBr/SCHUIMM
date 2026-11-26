@@ -56,11 +56,18 @@ Start `EngineDemo` normally and check:
 
 ## ActorDemo
 
-`ActorDemo` exercises actors, animation, navigation and movement ([Actors.md](Actors.md),
-[Navigation.md](Navigation.md)).
-- **Automatic sequence:** `ActorDemoSmoke` (`ctest -L integration`) runs
-  `ActorDemo --auto --frames 300`, a timed sequence of the actions below. It walks, replaces and
-  redirects walks, clicks an unreachable spot, and leaves and re-enters rooms.
+`ActorDemo` exercises actors, animation, navigation, movement and script-driven adventure
+behaviour ([Actors.md](Actors.md), [Navigation.md](Navigation.md), [Adventure.md](Adventure.md)).
+- **Automatic run:** `ActorDemoSmoke` (`ctest -L integration`) runs
+  `ActorDemo --auto --frames 560`.
+  - For 240 frames it runs the courtyard script: it starts the demonstration (P) and uses the fan
+    (F) twice.
+  - Then it runs a timed sequence of the actions below: it walks (which interrupts the
+    demonstration), replaces and redirects walks, clicks an unreachable spot, and leaves and
+    re-enters rooms.
+
+  The whole demonstration runs headlessly in `Adventure_TheDemoCourtyardScriptRunsToTheEnd`; press
+  P to watch it.
 - **Handles:** the log names every actor with its handle, so fresh handles after each room change
   are visible.
 - **Screenshot:** `--screenshot FILE.ppm` (with `--frames`) saves the last frame.
@@ -70,14 +77,19 @@ Start `EngineDemo` normally and check:
 - a fountain inside an unwalkable island;
 - a separate balcony;
 - a scale map;
-- a patrolling gardener.
+- an animated fan (a room object with animations);
+- a room script, `Assets/Rooms/Courtyard/Courtyard.sch`, which the build compiles with the
+  adventure interface. On entering, `enter()` sends the gardener on its rounds in a script
+  coroutine (`patrol`).
 
 | Input | Action | What to check |
 |---|---|---|
 | **click** | walk the hero there | It walks around the fountain, turns at each corner and idles on arrival. A click on a flower bed or the balcony walks to the nearest reachable point; the log shows the requested and resolved points. A click while walking replaces the walk from where the hero is. Clicks on the letterbox bars do nothing. |
 | **right-click** / **S** | stop walking | The hero stops where it is and idles, facing the way it walked. |
 | **G** | debug overlay | Walkable polygons (green), corner nodes (yellow), visibility edges (blue), current paths (orange), requested (red cross) and resolved (green square) destinations, ground points (white). |
-| (watch) | perspective | Actors get smaller and slower towards the wall, larger and faster towards the bottom, and are drawn in front of or behind the columns, crates and fountain according to their feet. The gardener walks its rounds by itself. |
+| (watch) | perspective | Actors get smaller and slower towards the wall, larger and faster towards the bottom, and are drawn in front of or behind the columns, crates and fountain according to their feet. The gardener walks its rounds (the script's `patrol`), pausing and turning at two corners. |
+| **P** | scripted demonstration | The log shows `[Script]` lines as `demonstrate()` runs: a second patrol takes over the gardener, which cancels the first one; the hero walks towards the balcony and stops at the nearest reachable point; it walks to the fan, turns east, presses the button and only then does the fan spin; it walks off while the camera zooms in and back; the patrol is cancelled and the gardener appears beside the hero, facing west; then the gardener resumes its rounds. Pressing P again restarts the demonstration. A click during it walks the hero elsewhere and ends the demonstration without the rest of its sequence. |
+| **F** | use the fan | Dispatches the fan's `use` handler: it toggles between spinning (looping) and idle, and logs "fan: on" / "fan: off". |
 
 If `Applications/ActorDemo/LocalAssets` exists (it is not in git; see its README), its files replace
 the repository's generated walker art when the demo is built.

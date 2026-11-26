@@ -169,8 +169,11 @@ Build\windows-msvc\bin\ActorDemo\Debug\ActorDemo.exe                  # Windows
 
 Three rooms with actors:
 - **The courtyard:** click-to-walk through walkable areas around an island, with a separate
-  balcony. It also shows perspective scaling and speed, depth sorting with props and objects, a
-  second actor walking on its own, and a debug overlay (G).
+  balcony. It also shows perspective scaling and speed, depth sorting with props and objects, an
+  animated fan, and a debug overlay (G). Its room script
+  ([Courtyard.sch](Applications/ActorDemo/Assets/Rooms/Courtyard/Courtyard.sch)) drives the
+  gardener's rounds. With P it runs a demonstration of the adventure API (spawned and cancelled
+  coroutines, implicitly awaited walks, animation operations, camera), and F uses the fan.
 - **The hall and the garden:** they share one walker resource and one lamp resource.
 
 It shows:

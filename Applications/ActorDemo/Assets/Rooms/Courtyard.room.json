@@ -2,6 +2,7 @@
   "version": 1,
   "id": "courtyard",
   "size": { "width": 960, "height": 540 },
+  "script": "Rooms/Courtyard/Courtyard.schb",
   "background": { "image": "Rooms/Courtyard/background.png" },
   "props": [
     { "id": "column_left", "sprite": "Rooms/Courtyard/column.png", "position": [640, 262], "pivot": [14, 128] },
@@ -12,7 +13,11 @@
   ],
   "objects": [
     { "id": "chest", "sprite": "Rooms/Courtyard/chest.png", "position": [860, 505], "pivot": [18, 26] },
-    { "id": "window", "position": [365, 105] }
+    { "id": "window", "position": [365, 105] },
+    { "id": "fan", "position": [560, 322],
+      "animation_resources": { "main": "Rooms/Courtyard/fan.anim.json" },
+      "animations": { "idle": { "resource": "main", "clip": "idle" }, "spinning": { "resource": "main", "clip": "spinning" } },
+      "default_animation": "idle" }
   ],
   "scale_map": {
     "type": "linear",

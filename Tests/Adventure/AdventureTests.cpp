@@ -637,3 +637,99 @@ SCHUIMM_TEST(Adventure_UnobservedPlaybacksAreForgotten)
     CHECK(f.errors.empty());
     CHECK_EQ(f.adventure.pendingPlaybacks(), std::size_t{0}); // No history of discarded operations.
 }
+
+// --- The ActorDemo courtyard script ------------------------------------------------------------------
+
+namespace {
+
+void copyTree(const std::string& from, const std::string& to)
+{
+    REQUIRE(fs::createDirectories(to).has_value());
+    const auto entries = fs::listDirectory(from);
+    REQUIRE(entries.has_value());
+    for (const fs::DirectoryEntry& entry : *entries) {
+        const std::string source = path::join(from, entry.name);
+        const std::string target = path::join(to, entry.name);
+        if (entry.type == fs::FileType::Directory) {
+            copyTree(source, target);
+        } else if (entry.type == fs::FileType::Regular) {
+            const auto bytes = fs::readFile(source);
+            REQUIRE(bytes.has_value());
+            REQUIRE(fs::writeFile(target, *bytes).has_value());
+        }
+    }
+}
+
+} // namespace
+
+SCHUIMM_TEST(Adventure_TheDemoCourtyardScriptRunsToTheEnd)
+{
+    // The demo's real assets and script, headless: the script is compiled the way the build
+    // compiles it (with the adventure interface) and run frame by frame in the documented order.
+    const std::string root = test::makeScratchDirectory("adventure_demo");
+    copyTree(SCHUIMM_ACTOR_DEMO_ASSET_DIR, root);
+    REQUIRE(fs::writeFile(path::join(root, "Actors/Walker/walker.schb"), bytesOf("stand-in")).has_value());
+    const auto source = fs::readFile(path::join(root, "Rooms/Courtyard/Courtyard.sch"));
+    REQUIRE(source.has_value());
+    const script::test::Compiled compiled = script::test::compileSource(
+        std::string(reinterpret_cast<const char*>(source->data()), source->size()),
+        script::CompileOptions{.optimize = true, .interfaces = {&adventureInterface()}}, "Rooms/Courtyard/Courtyard.sch");
+    if (!compiled.result.success) std::fprintf(stderr, "%s", compiled.diagnostics().c_str());
+    REQUIRE(compiled.result.success);
+    auto bytes = script::writeBytecode(compiled.result.module);
+    REQUIRE(bytes.has_value());
+    REQUIRE(fs::writeFile(path::join(root, "Rooms/Courtyard/Courtyard.schb"), *bytes).has_value());
+
+    Logger logger{LogLevel::Off};
+    script::ScriptHost host{logger};
+    std::vector<std::string> output;
+    std::vector<script::ScriptError> errors;
+    host.setOutputCallback([&](std::string_view, std::string_view text) { output.emplace_back(text); });
+    host.setEventCallback([&](const script::CoroutineEvent& event) {
+        if (event.kind == script::CoroutineEvent::Kind::Failed && event.error != nullptr) errors.push_back(*event.error);
+    });
+    AdventureContext adventure;
+    REQUIRE(adventure.bind(host.natives()).has_value());
+    Camera2D camera{Extent2D{640, 360}};
+    adventure.setCamera(&camera);
+    const AssetLocator locator = AssetLocator::create(root).value();
+    {
+        room::RoomLibrary library(locator, host);
+        auto loaded = library.load(AssetPath::parse("Rooms/Courtyard.room.json").value());
+        if (!loaded) std::fprintf(stderr, "%s\n", loaded.error().message.c_str());
+        REQUIRE(loaded.has_value());
+        auto courtyard = room::RoomInstance::create(*loaded, host).value();
+        adventure.setActiveRoom(courtyard.get());
+        REQUIRE(courtyard->start("enter").has_value());
+        REQUIRE(courtyard->start("demonstrate").has_value());
+        // The ScriptHost forgets ended coroutines after each update: the last line tells when it is done.
+        const auto done = [&output] { return !output.empty() && output.back() == "demonstrate: done"; };
+        const double dt = 1.0 / 60.0;
+        for (int frame = 0; frame < 6000 && !done() && errors.empty(); ++frame) {
+            courtyard->update(dt);
+            adventure.publish();
+            host.update(dt);
+        }
+        for (const script::ScriptError& error : errors) std::fprintf(stderr, "%s\n", script::describe(error).c_str());
+        CHECK(errors.empty());
+        REQUIRE(done());
+        REQUIRE(output.size() >= 7);
+        CHECK_EQ(output.front(), std::string("courtyard: the gardener starts its rounds"));
+        CHECK_EQ(output[1], std::string("demonstrate: start"));
+        CHECK(contains(output[2], "demonstrate: nearest reachable point 800, 240")); // The balcony is out of reach.
+        CHECK_EQ(output[3], std::string("demonstrate: the fan spins (spinning)"));
+        CHECK(contains(output[5], "the gardener came over, facing True"));
+        CHECK_EQ(output.back(), std::string("demonstrate: done"));
+        CHECK_EQ(courtyard->object("fan")->animation(), std::string("spinning"));
+        // The fan's handler toggles it.
+        output.clear();
+        REQUIRE(courtyard->dispatch("fan", "use")->handled);
+        host.update(dt);
+        CHECK_EQ(output, std::vector<std::string>{"fan: off"});
+        CHECK_EQ(courtyard->object("fan")->animation(), std::string("idle"));
+        // The gardener is back on its rounds; leaving the room ends them.
+        CHECK_EQ(courtyard->activeCoroutineCount(), std::size_t{1});
+        host.stopAll();
+        adventure.setActiveRoom(nullptr);
+    }
+}

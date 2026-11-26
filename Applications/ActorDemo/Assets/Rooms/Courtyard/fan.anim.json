@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "clips": {
+    "idle": {
+      "loop": true,
+      "frames": [
+        {
+          "image": "Rooms/Courtyard/fan.png",
+          "source": [
+            0,
+            0,
+            48,
+            56
+          ],
+          "pivot": [
+            24,
+            56
+          ],
+          "duration": 60
+        }
+      ]
+    },
+    "spinning": {
+      "loop": true,
+      "frames": [
+        {
+          "image": "Rooms/Courtyard/fan.png",
+          "source": [
+            48,
+            0,
+            48,
+            56
+          ],
+          "pivot": [
+            24,
+            56
+          ],
+          "duration": 4
+        },
+        {
+          "image": "Rooms/Courtyard/fan.png",
+          "source": [
+            96,
+            0,
+            48,
+            56
+          ],
+          "pivot": [
+            24,
+            56
+          ],
+          "duration": 4
+        },
+        {
+          "image": "Rooms/Courtyard/fan.png",
+          "source": [
+            144,
+            0,
+            48,
+            56
+          ],
+          "pivot": [
+            24,
+            56
+          ],
+          "duration": 4
+        },
+        {
+          "image": "Rooms/Courtyard/fan.png",
+          "source": [
+            192,
+            0,
+            48,
+            56
+          ],
+          "pivot": [
+            24,
+            56
+          ],
+          "duration": 4
+        }
+      ]
+    }
+  }
+}

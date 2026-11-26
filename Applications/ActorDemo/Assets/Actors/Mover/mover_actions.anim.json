@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "clips": {
+    "press_button": {
+      "loop": false,
+      "frames": [
+        {
+          "image": "Actors/Mover/mover_actions.png",
+          "source": [
+            0,
+            0,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover_actions.png",
+          "source": [
+            32,
+            0,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover_actions.png",
+          "source": [
+            64,
+            0,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover_actions.png",
+          "source": [
+            96,
+            0,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover_actions.png",
+          "source": [
+            128,
+            0,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        }
+      ]
+    }
+  }
+}

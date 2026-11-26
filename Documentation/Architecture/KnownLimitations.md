@@ -132,6 +132,8 @@ Language scope (version 2.0, see [Language.md](../Scripting/Language.md#12-limit
 * `str()` does not convert vectors, enums or references (only `print` shows them);
 * object handlers reach object state only through natives (no `self.property` syntax yet);
   nothing dispatches player interactions to handlers yet (the interaction milestone);
+* ActorDemo's camera follows the hero every frame, so a script's `set_camera_position` there lasts
+  only until the next frame (zoom is kept);
 * the adventure API acts on one active room; room transitions, global script modules and actor
   scripts are Part II. The game must call `AdventureContext::setActiveRoom(nullptr)` before
   destroying the active room (it cannot detect it);

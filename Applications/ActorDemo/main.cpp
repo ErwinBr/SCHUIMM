@@ -114,8 +114,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // Room scripts would run here; the demo's rooms have none, and actor scripts are not
-    // executed yet. The host still has to exist: rooms are loaded and instantiated against it.
+    // Runs the room scripts (the courtyard's); the listener binds the adventure API to it.
+    // Actor scripts are not executed yet.
     script::ScriptHost scripts(logger);
 
     int exitCode = 0;

@@ -18,10 +18,18 @@ Lamp (Actors/Lamp/lamp_on.png, lamp_dim.png, 16 x 48 each): whole-image frames.
 Mover (Actors/Mover/mover.png, 160 x 192): a walking figure in 32 x 64 cells; rows north, south,
 east (west is east mirrored by the actor resource), columns idle, then four walking frames.
 
+Mover actions (Actors/Mover/mover_actions.png, 160 x 64): the mover facing east pressing a
+button: reaching forward over three frames, then back (columns 0..4). A separate image and
+animation resource, so a local replacement of mover.png/mover.anim.json leaves it alone.
+
 Courtyard (Rooms/Courtyard/*.png): a 960 x 540 background with a raised balcony, and props
 (column, fountain, crate) and a chest object.
+
+Fan (Rooms/Courtyard/fan.png, 240 x 56): a standing fan in 48 x 56 cells: column 0 at rest,
+columns 1..4 the blades turning by 45 degrees per frame.
 """
 
+import math
 import os
 import struct
 import zlib
@@ -170,6 +178,48 @@ def mover():
     return canvas
 
 
+def mover_actions():
+    canvas = Canvas(160, 64)
+    for column, reach in enumerate([0, 4, 9, 4, 0]):
+        ox = column * 32
+        mover_figure(canvas, ox, 0, "east", None)
+        # The arm reaches forward (east) at shoulder height, then back.
+        canvas.outlined(ox + 16, 64 - 40, 6 + reach, 5, COAT_DARK)
+        canvas.outlined(ox + 20 + reach, 64 - 41, 5, 6, SKIN)
+    return canvas
+
+
+FAN_METAL = (150, 155, 165, 255)
+FAN_BLADE = (200, 215, 230, 255)
+
+
+def fan_frame(canvas, ox, angle):
+    """A standing fan in a 48 x 56 cell; its foot touches the cell's bottom edge."""
+    canvas.outlined(ox + 14, 52, 20, 4, FAN_METAL)  # Foot.
+    canvas.outlined(ox + 22, 26, 4, 27, FAN_METAL)  # Pole.
+    centre_x, centre_y = ox + 24, 18
+    # Four blades: dots along two perpendicular lines at `angle` (multiples of 45 degrees).
+    directions = {0: [(1, 0), (0, 1)], 45: [(1, 1), (1, -1)]}[angle % 90]
+    for dx, dy in directions:
+        for sign in (1, -1):
+            for step in range(3, 15):
+                x = centre_x + sign * dx * step * (10 if dx and dy else 14) // 14
+                y = centre_y + sign * dy * step * (10 if dx and dy else 14) // 14
+                canvas.rect(x - 2, y - 2, 4, 4, FAN_BLADE)
+    canvas.outlined(centre_x - 3, centre_y - 3, 7, 7, (90, 95, 110, 255))  # Hub.
+    # Cage ring.
+    for i in range(48):
+        a = i * 2 * math.pi / 48
+        canvas.rect(int(centre_x + 17 * math.cos(a)) - 1, int(centre_y + 17 * math.sin(a)) - 1, 2, 2, (110, 115, 125, 255))
+
+
+def fan():
+    canvas = Canvas(240, 56)
+    for column, angle in enumerate([0, 0, 45, 90, 135]):
+        fan_frame(canvas, column * 48, angle)
+    return canvas
+
+
 class Random:
     def __init__(self, seed):
         self.state = seed & 0xFFFFFFFF
@@ -279,3 +329,5 @@ if __name__ == "__main__":
     write("../Rooms/Courtyard/fountain.png", fountain())
     write("../Rooms/Courtyard/crate.png", crate())
     write("../Rooms/Courtyard/chest.png", chest())
+    write("Mover/mover_actions.png", mover_actions())
+    write("../Rooms/Courtyard/fan.png", fan())

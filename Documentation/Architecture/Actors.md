@@ -530,7 +530,8 @@ independently of the room an actor is in, and a room script never handles an act
 ## Demo and tests
 
 **ActorDemo** (`Applications/ActorDemo`) shows three rooms:
-- the courtyard, with click-to-walk, perspective and a debug overlay;
+- the courtyard, with click-to-walk, perspective, a debug overlay, an animated fan and a room script
+  that drives the gardener and a demonstration of the adventure API ([Adventure.md](Adventure.md));
 - the hall and the garden, which share the walker and lamp resources. [ManualTesting.md](ManualTesting.md#actordemo) lists its keys. `ActorDemoSmoke` runs
 its automatic sequence.
 
