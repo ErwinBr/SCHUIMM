@@ -130,8 +130,11 @@ Language scope (version 2.0, see [Language.md](../Scripting/Language.md#12-limit
   modules/imports, global variables or exception handling;
 * no joining of coroutines (`wait(coroutine)`), spawned blocks, closures or coroutine groups;
 * `str()` does not convert vectors, enums or references (only `print` shows them);
-* object handlers reach object state only through natives (no `self.property` syntax yet), and
-  the adventure runtime that dispatches events to them is not part of this milestone;
+* object handlers reach object state only through natives (no `self.property` syntax yet);
+  nothing dispatches player interactions to handlers yet (the interaction milestone);
+* the adventure API acts on one active room; room transitions, global script modules and actor
+  scripts are Part II. The game must call `AdventureContext::setActiveRoom(nullptr)` before
+  destroying the active room (it cannot detect it);
 * one source file is one program; natives are linked by exact signature, and engine enums by
   qualified name and members.
 * Format 2.0 does not read 1.x bytecode: scripts are recompiled from source.

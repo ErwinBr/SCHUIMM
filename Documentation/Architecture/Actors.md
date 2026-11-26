@@ -346,16 +346,13 @@ walking.
 - `Completed`: the last request arrived.
 - `Cancelled`: the last request was stopped.
 
-The request id tells a waiter whether "completed" means its own request. Script-level waiting comes
-in Milestone 4.4.
+The request id tells a waiter whether "completed" means its own request.
 
-**Requirement for 4.4:** `MovementState` describes only the latest request. A newer request
-overwrites it, so someone still waiting for an earlier request can see that it is no longer
-current, but not whether it completed or was cancelled first. Before blocking script movement
-functions exist, each request's terminal outcome (completed or cancelled, and when) must reach
-whatever waits for it. That can be a completion token, or a notification to the waiting
-coroutine, kept only while someone waits. There is no movement history. Request ids are the key
-for it.
+**Script waiting.** `MovementState` describes only the latest request. Scripts therefore wait
+through a completion token per request: the adventure layer keys it by the request id and
+resolves it once per frame from this state ([Adventure.md](Adventure.md#walk_to)). A waiter sees
+its own request's outcome even after a newer request has started. Nothing keeps a movement
+history.
 
 **Stopping and taking over** (the walk never fights an explicit request):
 - `stopWalking()` stops where the actor is (`Cancelled`) and selects the idle animation.

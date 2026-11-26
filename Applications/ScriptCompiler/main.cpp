@@ -5,6 +5,7 @@
 // Exit codes: 0 success, 1 compile errors or I/O failure, 2 invalid command line.
 
 #include "Core/Common/StringBuilder.h"
+#include "Adventure/AdventureInterface.h"
 #include "Platform/FileSystem/FileSystem.h"
 #include "Script/Bytecode/BytecodeReader.h"
 #include "Script/Bytecode/BytecodeWriter.h"
@@ -56,6 +57,7 @@ struct KnownInterface {
 
 constexpr KnownInterface knownInterfaces[] = {
     {"core", &coreInterface},
+    {"adventure", &adventure::adventureInterface},
 };
 
 const NativeInterface* findInterface(std::string_view name)

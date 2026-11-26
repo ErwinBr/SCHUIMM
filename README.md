@@ -213,6 +213,7 @@ system was available, so runtime support there is unverified.
 * [Platform layer](Documentation/Architecture/Platform.md): windows, events and OpenGL contexts per OS; file system; adding Wayland
 * [Resources and assets](Documentation/Architecture/Resources.md): asset root and paths, resource IDs, ownership, image, sound and font loading
 * [Rooms](Documentation/Architecture/Rooms.md): the room resource format (JSON), loading and validation, script association, room instances
+* [Adventure scripting API](Documentation/Architecture/Adventure.md): actors, objects, walking, animation operations and the camera for scripts; update order
 * [Graphics](Documentation/Architecture/Graphics.md): coordinate systems, textures and the texture cache, camera, sprite batching, render targets, the OpenGL backend
 * [Text](Documentation/Architecture/Text.md): UTF-8, fonts, glyph atlases, layout
 * [Audio](Documentation/Architecture/Audio.md): architecture, formats, threading, ownership

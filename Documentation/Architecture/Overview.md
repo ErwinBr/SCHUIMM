@@ -30,6 +30,11 @@ A small, native, testable engine core built from one source tree on Windows, mac
 * `RoomInstance`: live objects with their own handles and state, sharing the immutable resource
   and program.
 
+**The adventure API** ([Adventure.md](Adventure.md)) lets scripts drive the game: actors, room
+objects, walking, animation and the camera. It is one native interface, which the compiler reads
+and `AdventureContext` binds. Waiting for walks and animations goes through completion tokens,
+so the VM stays free of adventure concepts.
+
 Later milestones (adventure systems, editor) build on the interfaces described here, never on
 native APIs.
 
@@ -58,6 +63,7 @@ native APIs.
 | `Source/Animation` | `schuimm_animation` | `AnimationResource` (JSON), `AnimationPlayer`, `AnimationClock` ([Animation.md](Animation.md)) |
 | `Source/Navigation` | `schuimm_navigation` | polygon validation, walkable queries, A* paths ([Navigation.md](Navigation.md)) |
 | `Source/Room` | `schuimm_room` | `RoomResource`, room resource loader (JSON), `RoomLibrary`, `RoomInstance`; `ActorResource`, `ActorLibrary`, `ActorInstance` ([Rooms.md](Rooms.md), [Actors.md](Actors.md)) |
+| `Source/Adventure` | `schuimm_adventure_api`, `schuimm_adventure` | the adventure native interface (declarations only) and `AdventureContext` ([Adventure.md](Adventure.md)) |
 | `Source/RoomGraphics` | `schuimm_room_graphics` | `RoomTextures`, `drawRoom`: a room's actors → textures and sprites through `Renderer2D` |
 | `Source/Core/Application` | `schuimm_application` | `Application`, `ApplicationListener`, lifecycle |
 | `Source/Platform/<OS>` | `schuimm_platform` | exactly one native backend, chosen at configure time |
