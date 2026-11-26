@@ -38,7 +38,24 @@
 namespace schuimm::room {
 
 inline constexpr int actorResourceVersion = 1;
+// Base scales (default_scale, placement scale, setBaseScale). With a scale map's [0.001, 1000]
+// the effective scale stays within [1e-6, 1e6]: finite, and never zero.
+inline constexpr double minActorScale = 0.001;
 inline constexpr double maxActorScale = 1000.0;
+// Walking speeds, room pixels per second at perspective scale 1.
+inline constexpr double minWalkSpeed = 0.001;
+inline constexpr double maxWalkSpeed = 100000.0;
+
+// How an actor walks (absent for decorative actors, which then cannot walk). Animation names are
+// the designer's: nothing in the engine knows "walk" or "idle".
+struct ActorMovementConfig {
+    float speed = 100.0f;      // Room pixels per second at perspective scale 1.
+    std::string walkAnimation; // Played while walking, in the walking direction.
+    std::string idleAnimation; // Selected when a walk completes or is cancelled.
+    bool perspectiveSpeed = true; // Speed times the room's perspective scale at the actor's feet.
+
+    friend bool operator==(const ActorMovementConfig&, const ActorMovementConfig&) = default;
+};
 
 struct ActorClipMapping {
     std::string resource; // Name in ActorResource::animationResources.
@@ -72,7 +89,10 @@ struct ActorResource {
     std::map<std::string, ActorAnimation, std::less<>> animations;
     std::string defaultAnimation;
     Facing defaultFacing = Facing::South;
-    float defaultScale = 1.0f;
+    float defaultScale = 1.0f; // Base scale.
+    // Whether the room's scale map scales the actor (its effective scale is base x perspective).
+    bool perspectiveScale = true;
+    std::optional<ActorMovementConfig> movement;
 
     [[nodiscard]] bool hasAnimation(std::string_view name) const { return animations.find(name) != animations.end(); }
 

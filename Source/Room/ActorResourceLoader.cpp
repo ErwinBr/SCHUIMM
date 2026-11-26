@@ -30,7 +30,8 @@ public:
         int version = 0;
         SCHUIMM_JSON_TRY(readVersion(root, "actor resource", 1, actorResourceVersion, version));
         SCHUIMM_JSON_TRY(onlyKnown(root, "", {"version", "id", "script", "animation_resources", "animations",
-                                              "default_animation", "default_facing", "default_scale"}));
+                                              "default_animation", "default_facing", "default_scale",
+                                              "perspective_scale", "movement"}));
         ActorResource actor;
         const Json* value = nullptr;
         SCHUIMM_JSON_TRY(required(root, "", "id", value));
@@ -59,7 +60,15 @@ public:
         SCHUIMM_JSON_TRY(required(root, "", "default_facing", value));
         SCHUIMM_JSON_TRY(readFacing(*value, "default_facing", actor.defaultFacing));
         if (const Json* scale = optional(root, "default_scale")) {
-            SCHUIMM_JSON_TRY(readPositiveFloat(*scale, "default_scale", maxActorScale, actor.defaultScale));
+            SCHUIMM_JSON_TRY(readFloatInRange(*scale, "default_scale", minActorScale, maxActorScale, actor.defaultScale));
+        }
+        if (const Json* perspective = optional(root, "perspective_scale")) {
+            SCHUIMM_JSON_TRY(readBool(*perspective, "perspective_scale", actor.perspectiveScale));
+        }
+        if (const Json* movement = optional(root, "movement")) {
+            ActorMovementConfig config;
+            SCHUIMM_JSON_TRY(readMovement(*movement, "movement", actor, config));
+            actor.movement = std::move(config);
         }
         if (auto resolved = actor.resolve(actor.defaultAnimation, actor.defaultFacing); !resolved) {
             return fail("default_facing", concat("the default animation does not resolve: ", resolved.error().message));
@@ -81,6 +90,29 @@ public:
     }
 
 private:
+    Status readMovement(const Json& value, const std::string& path, const ActorResource& actor,
+                        ActorMovementConfig& out) const
+    {
+        SCHUIMM_JSON_TRY(readJsonObject(value, path));
+        SCHUIMM_JSON_TRY(onlyKnown(value, path, {"speed", "walk_animation", "idle_animation", "perspective_speed"}));
+        const Json* field = nullptr;
+        SCHUIMM_JSON_TRY(required(value, path, "speed", field));
+        SCHUIMM_JSON_TRY(readFloatInRange(*field, member(path, "speed"), minWalkSpeed, maxWalkSpeed, out.speed));
+        const auto readAnimationName = [&](const char* key, std::string& name) -> Status {
+            const Json* animation = nullptr;
+            SCHUIMM_JSON_TRY(required(value, path, key, animation));
+            SCHUIMM_JSON_TRY(readIdentifier(*animation, member(path, key), name));
+            if (!actor.hasAnimation(name)) return fail(member(path, key), concat("no animation '", name, "'"));
+            return {};
+        };
+        SCHUIMM_JSON_TRY(readAnimationName("walk_animation", out.walkAnimation));
+        SCHUIMM_JSON_TRY(readAnimationName("idle_animation", out.idleAnimation));
+        if (const Json* perspective = optional(value, "perspective_speed")) {
+            SCHUIMM_JSON_TRY(readBool(*perspective, member(path, "perspective_speed"), out.perspectiveSpeed));
+        }
+        return {};
+    }
+
     Status readAnimationResources(const Json& value, const std::string& path, ActorResource& actor) const
     {
         SCHUIMM_JSON_TRY(readJsonObject(value, path));

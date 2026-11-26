@@ -18,8 +18,6 @@
 #include "Core/Common/Geometry.h"
 #include "Resource/AssetPath.h"
 
-#include <cstddef>
-#include <vector>
 
 namespace schuimm::room {
 
@@ -35,16 +33,5 @@ struct ActorRenderState {
 
 [[nodiscard]] ActorRenderState makeActorRenderState(const animation::AnimationFrame& frame, Vec2 position, float scale,
                                                     bool flipX);
-
-// One entry of a room's draw list. Only actors today; room objects and props will join the same
-// list so that everything is sorted together.
-struct RoomDrawItem {
-    float depth = 0.0f;       // Ground y: lower on screen is in front.
-    std::size_t sequence = 0; // Tie-breaker: the order in the room resource.
-    ActorRenderState sprite;
-};
-
-// Sorted back to front: by depth, then sequence.
-using RoomDrawList = std::vector<RoomDrawItem>;
 
 } // namespace schuimm::room

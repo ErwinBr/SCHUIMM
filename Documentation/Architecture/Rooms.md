@@ -2,19 +2,20 @@
 
 A room is the place an adventure scene happens: a background, decoration, interactive objects,
 walkable floor, named areas and, optionally, a compiled script that says what the objects do.
-This document describes the room resource file format (versions 1 and 2) and how rooms are
-loaded, validated, shared and instantiated (`Source/Room`, library `schuimm_room`). Actors and
-their placements in rooms (version 2) are described in [Actors.md](Actors.md).
+This document describes the room resource file format and how rooms are loaded, validated, shared
+and instantiated (`Source/Room`, library `schuimm_room`). Actors and their placements in rooms are
+described in [Actors.md](Actors.md).
 
 Room resources are written by hand for now. A future Development Kit will author rooms visually
 and generate these files. The format belongs to the runtime, not to the editor: the
 Development Kit is one producer of it, and the engine does not depend on it.
 
+Rooms are drawn (background, props, objects and actors in one depth order, see
+[Actors.md](Actors.md#rendering)). Actors walk through the walkable areas
+([Navigation.md](Navigation.md)) and are scaled by the scale map ([Actors.md](Actors.md#perspective)).
+
 **Not implemented yet:**
-- rendering backgrounds, props and objects (only actors are drawn, see
-  [Actors.md](Actors.md#rendering));
 - interaction detection;
-- movement and automatic scaling, pathfinding;
 - inventory, dialogue, room transitions;
 - saving game state.
 
@@ -75,7 +76,7 @@ property may be left out or set to `null` (the two mean the same).
 
 | Property | Type | Rules |
 |---|---|---|
-| `version` | integer, **required** | `1` or `2`; checked before anything else |
+| `version` | integer, **required** | must be `1`; checked before anything else |
 | `id` | identifier, **required** | the room's name in the game |
 | `size` | `{ "width", "height" }`, **required** | integers from 1 to 65536: the room's size in pixels |
 | `script` | asset path | the compiled room script; must end in `.schb` |
@@ -85,7 +86,7 @@ property may be left out or set to `null` (the two mean the same).
 | `scale_map` | scale map | character scale by ground position (see below) |
 | `navigation` | `{ "walkable_areas": [...] }` | walkable polygons (see below) |
 | `regions` | array of regions | named geometry (see below) |
-| `actors` | array of actor placements | version 2 only: where and how actors appear ([Actors.md](Actors.md#placements-room-format-version-2)) |
+| `actors` | array of actor placements | where and how actors appear ([Actors.md](Actors.md#placements)) |
 
 **Props** (`props[]`): `{ "id", "sprite", "position", "pivot" }`.
 - `id`: identifier, required.
@@ -103,25 +104,26 @@ property may be left out or set to `null` (the two mean the same).
 - `linear` is the only type.
 - At least two points.
 - `y` is a number within the room (0 to `size.height`) and strictly increasing from point to point.
-- `scale` is a finite number greater than 0.
-- The future runtime will interpolate linearly between the points using a character's ground position (the y of its feet). This milestone only stores the points.
+- `scale` is a number from 0.001 to 1000.
+- Actors are scaled by linear interpolation between the points at their ground y, with the first or last point's scale beyond them ([Actors.md](Actors.md#perspective)). With `perspective_speed`, it also scales their walking speed.
 
 **Walkable areas** (`navigation.walkable_areas[]`): `{ "id", "points" }`.
 - `id`: identifier, required.
-- `points`: a polygon, required.
+- `points`: a polygon, required, lying inside the room (`[0, width] × [0, height]`).
+- They may overlap and touch; together they form the walkable domain ([Navigation.md](Navigation.md)).
+- At most 32 walkable areas and 256 points in all.
 
 **Regions** (`regions[]`): named areas whose behaviour scripts and future systems decide. The format declares none.
 - `{ "id", "type": "rectangle", "position", "size" }`: `position` is the top-left corner, and `size` is `[width, height]` with both greater than 0.
 - `{ "id", "type": "polygon", "points" }`.
 
-**Polygons**:
-- an array of at least 3 points;
-- no point equal to the previous one;
-- the last point not equal to the first: polygons close implicitly;
-- an area that is not zero, so not all points lie on one line;
-- either winding order is accepted.
+**Polygons** must be simple ([Navigation.md](Navigation.md#polygon-validation-navigationpolygonh)):
+- 3 to 128 points;
+- no point repeated (within 10⁻³ px), and the last point not repeating the first: polygons close implicitly;
+- a non-zero area;
+- no edges that fold back over each other, and no edges that intersect, touch or overlap.
 
-Self-intersection is not checked in version 1.
+Either winding order is accepted, as are concave polygons and collinear points that do not fold back. The checks use the coordinates as stored.
 
 **Value types**:
 - **Identifier**: a string matching `[A-Za-z_][A-Za-z0-9_]*`, the script identifier rule, so an object id can be named in `object <id>:`.
@@ -160,11 +162,9 @@ Paths are validated while parsing. Whether the files exist is checked in a separ
 
 ### Versioning
 
-`version` is the format version, and this engine reads versions 1 and 2.
-- **Version 2** added `actors`. Everything else is unchanged, and version 1 files load exactly as before. A version 1 file with `actors` is rejected, as an unknown property.
-- A file with any other version is rejected with a message naming the version.
-- Adding a property, a region type or a scale-map type means a new version. Older engines then reject newer files clearly instead of misreading them.
-- Newer versions keep reading older files.
+`version` is the format version, and this engine reads version 1, the only one. A file with any other version is rejected with a message naming the version.
+
+Before release, formats are provisional: schema changes change version 1 in place, and every file in the repository is updated with them. There are no compatibility branches. See [ResourceFormats.md](ResourceFormats.md).
 
 Planned additions include:
 - foreground layers;
@@ -179,7 +179,7 @@ Loading stops at the first error. The message names the file and the property pa
 
 ```text
 InvalidData: Rooms/Kitchen/Kitchen.room.json: objects[1].id: duplicate identifier 'blender' (first used by objects[0])
-InvalidData: Rooms/Kitchen/Kitchen.room.json: version: unsupported room resource version 3 (this engine reads versions 1 to 2)
+InvalidData: Rooms/Kitchen/Kitchen.room.json: version: unsupported room resource version 2 (this engine reads version 1)
 InvalidData: Rooms/Kitchen/Kitchen.room.json: navigation.walkable_areas[0].points[3]: repeats the first point (...)
 InvalidData: Rooms/Kitchen/Kitchen.room.json: invalid JSON at line 3, column 11: syntax error while parsing value - ...
 NotFound: Rooms/Kitchen/Kitchen.room.json: objects[0].sprite: asset 'Rooms/Kitchen/Assets/blender.png' not found (...)

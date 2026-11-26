@@ -39,6 +39,7 @@
 #include "Animation/AnimationClock.h"
 #include "Room/ActorInstance.h"
 #include "Room/ActorRenderState.h"
+#include "Room/RoomDrawList.h"
 #include "Room/RoomLibrary.h"
 #include "Room/RoomResource.h"
 #include "Script/Runtime/Program.h"
@@ -140,6 +141,14 @@ private:
     std::size_t size_;
 };
 
+// An accepted walk request.
+struct MovementRequest {
+    MovementRequestId id = 0;
+    Vec2 requested;
+    Vec2 resolved;
+    bool completed = false; // Already at the destination: no walking needed.
+};
+
 class RoomInstance {
 public:
     // Creates the runtime objects and actors of `room`. Checks the script's object declarations
@@ -174,9 +183,25 @@ public:
     [[nodiscard]] ActorInstance* actor(script::ObjectRef handle) noexcept;
     [[nodiscard]] const ActorInstance* actor(script::ObjectRef handle) const noexcept;
 
-    // Advances every actor's animation by `deltaSeconds` of engine time.
+    // Advances the room by `deltaSeconds` of engine time: first every walking actor along its path
+    // (position, facing, walk/idle animation), then every actor's animation playback.
     void update(double deltaSeconds);
-    // The visible actors' current frames, back to front (RoomDrawList).
+
+    // Walks `actor` (one of this room's) towards `destination` (room coordinates) along a path
+    // through the walkable areas, replacing any walk in progress from where the actor stands. With
+    // NearestReachable a destination outside the walkable area, or in an area that cannot be
+    // reached, becomes the nearest reachable point. Transactional: on failure nothing changes.
+    //   * InvalidArgument: not this room's actor, or a non-finite destination;
+    //   * InvalidState: the actor has no movement configuration, or the room no walkable areas;
+    //   * NotFound: the actor stands outside the walkable area, the destination is unreachable
+    //     (Strict), or the walk or idle animation has no clip for a facing the path needs.
+    // A destination the actor is already at completes immediately (MovementRequest::completed).
+    [[nodiscard]] Result<MovementRequest> walkTo(ActorInstance& actor, Vec2 destination,
+                                                 navigation::DestinationPolicy policy =
+                                                     navigation::DestinationPolicy::NearestReachable);
+    // The room's navigation (null if it has no walkable areas).
+    [[nodiscard]] const navigation::NavigationMap* navigation() const noexcept { return room_.navigation.get(); }
+    // The background, props, visible objects and visible actors, in drawing order (RoomDrawList.h).
     [[nodiscard]] RoomDrawList drawList() const;
 
     // The integration point for event dispatch: invokes the handler `event` of the object with

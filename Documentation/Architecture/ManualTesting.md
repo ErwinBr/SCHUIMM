@@ -56,10 +56,33 @@ Start `EngineDemo` normally and check:
 
 ## ActorDemo
 
-`ActorDemo` exercises actors and animation ([Actors.md](Actors.md)). `ActorDemoSmoke` (`ctest -L
-integration`) runs `ActorDemo --auto --frames 300`, a timed sequence of the actions below that
-also leaves and re-enters rooms. The log names every actor with its handle, so fresh handles
-after each room change are visible.
+`ActorDemo` exercises actors, animation, navigation and movement ([Actors.md](Actors.md),
+[Navigation.md](Navigation.md)).
+- **Automatic sequence:** `ActorDemoSmoke` (`ctest -L integration`) runs
+  `ActorDemo --auto --frames 300`, a timed sequence of the actions below. It walks, replaces and
+  redirects walks, clicks an unreachable spot, and leaves and re-enters rooms.
+- **Handles:** the log names every actor with its handle, so fresh handles after each room change
+  are visible.
+- **Screenshot:** `--screenshot FILE.ppm` (with `--frames`) saves the last frame.
+
+**The courtyard** (the first room) has:
+- a background, columns, crates and a chest object;
+- a fountain inside an unwalkable island;
+- a separate balcony;
+- a scale map;
+- a patrolling gardener.
+
+| Input | Action | What to check |
+|---|---|---|
+| **click** | walk the hero there | It walks around the fountain, turns at each corner and idles on arrival. A click on a flower bed or the balcony walks to the nearest reachable point; the log shows the requested and resolved points. A click while walking replaces the walk from where the hero is. Clicks on the letterbox bars do nothing. |
+| **right-click** / **S** | stop walking | The hero stops where it is and idles, facing the way it walked. |
+| **G** | debug overlay | Walkable polygons (green), corner nodes (yellow), visibility edges (blue), current paths (orange), requested (red cross) and resolved (green square) destinations, ground points (white). |
+| (watch) | perspective | Actors get smaller and slower towards the wall, larger and faster towards the bottom, and are drawn in front of or behind the columns, crates and fountain according to their feet. The gardener walks its rounds by itself. |
+
+If `Applications/ActorDemo/LocalAssets` exists (it is not in git; see its README), its files replace
+the repository's generated walker art when the demo is built.
+
+**All rooms:**
 
 | Key | Action | What to check |
 |---|---|---|

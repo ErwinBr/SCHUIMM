@@ -300,7 +300,8 @@ SCHUIMM_TEST(Actor_DefaultScale)
         CHECK(contains(result.error().message, "default_scale: "));
     }
     CHECK_ACTOR_ERROR(actorWith(R"("default_scale": 1e-50)"), ErrorCode::InvalidData,
-                      "default_scale: must remain positive when stored as a float");
+                      "default_scale: must be a number from 0.001 to 1000, found 1e-50");
+    CHECK(decodeActor(actorWith(R"("default_scale": 0.001)")).has_value());
 }
 
 // --- Actor instances ---
@@ -329,7 +330,7 @@ SCHUIMM_TEST(Actor_CreatedFromTheResourceDefaults)
     CHECK(actor.position() == (Vec2{100, 200}));
     CHECK(actor.facing() == Facing::South);
     CHECK(actor.visible());
-    CHECK(actor.scale() == 1.0f);
+    CHECK(actor.baseScale() == 1.0f);
     CHECK(actor.animation() == "idle");
     CHECK(clipName(actor) == "idle_south");
     CHECK(actor.playbackStatus() == PlaybackStatus::Playing);
@@ -348,7 +349,7 @@ SCHUIMM_TEST(Actor_CreationValidatesTheConfiguration)
     CHECK(ActorInstance::create("guard", resource, configuration).has_value());
 
     configuration = defaultActorConfiguration(*resource, {0, 0});
-    configuration.scale = 0.0f;
+    configuration.baseScale = 0.0f;
     CHECK(!ActorInstance::create("guard", resource, configuration).has_value());
     configuration = defaultActorConfiguration(*resource, {std::nanf(""), 0});
     CHECK(!ActorInstance::create("guard", resource, configuration).has_value());
@@ -367,13 +368,13 @@ SCHUIMM_TEST(Actor_InstancesSharingAResourceAreIndependent)
     REQUIRE(a.setFacing(Facing::West).has_value());
     REQUIRE(a.setPosition({50, 60}).has_value());
     a.setVisible(false);
-    REQUIRE(a.setScale(2.0f).has_value());
+    REQUIRE(a.setBaseScale(2.0f).has_value());
     a.update(15);
     b.update(3);
     CHECK(b.facing() == Facing::South);
     CHECK(b.position() == (Vec2{20, 20}));
     CHECK(b.visible());
-    CHECK(b.scale() == 1.0f);
+    CHECK(b.baseScale() == 1.0f);
     CHECK(clipName(a) == "idle_west");
     CHECK(clipName(b) == "idle_south");
     CHECK_EQ(a.player().elapsedTicks(), std::uint64_t{15});
@@ -459,11 +460,11 @@ SCHUIMM_TEST(Actor_FailedChangesPreserveTheState)
     CHECK(actor.setPosition({std::numeric_limits<float>::infinity(), 0}).error().code == ErrorCode::InvalidArgument);
     CHECK(!actor.setPosition({0, 2e6f}).has_value());
     CHECK(actor.position() == position);
-    CHECK(!actor.setScale(0.0f).has_value());
-    CHECK(!actor.setScale(-1.0f).has_value());
-    CHECK(!actor.setScale(std::nanf("")).has_value());
-    CHECK(!actor.setScale(2000.0f).has_value());
-    CHECK(actor.scale() == 1.0f);
+    CHECK(!actor.setBaseScale(0.0f).has_value());
+    CHECK(!actor.setBaseScale(-1.0f).has_value());
+    CHECK(!actor.setBaseScale(std::nanf("")).has_value());
+    CHECK(!actor.setBaseScale(2000.0f).has_value());
+    CHECK(actor.baseScale() == 1.0f);
 }
 
 SCHUIMM_TEST(Actor_StopPauseResume)
@@ -587,7 +588,7 @@ SCHUIMM_TEST(Actor_RenderStateMirroringAndScale)
     CHECK(state.flipX);
     CHECK(state.destination == (RectF{80, 140, 30, 64}));
     // Scaled about the ground point.
-    REQUIRE(actor.setScale(2.0f).has_value());
+    REQUIRE(actor.setBaseScale(2.0f).has_value());
     state = actor.renderState();
     CHECK(state.destination == (RectF{60, 80, 60, 128}));
     CHECK(state.destination.x + (30.0f - state.pivot.x) * state.scale == 100.0f);
@@ -624,7 +625,7 @@ const char* const heroWithScript = R"({
   "default_animation": "idle", "default_facing": "south", "default_scale": 0.5 })";
 
 const char* const hallRoom = R"({
-  "version": 2, "id": "hall", "size": { "width": 800, "height": 600 },
+  "version": 1, "id": "hall", "size": { "width": 800, "height": 600 },
   "objects": [ { "id": "door", "position": [700, 300] } ],
   "actors": [
     { "id": "hero", "actor": "Actors/Hero/hero.actor.json", "position": [400, 500] },
@@ -635,7 +636,7 @@ const char* const hallRoom = R"({
     { "id": "door", "actor": "Actors/Hero/hero.actor.json", "position": [700, 300], "animation": "glow" } ] })";
 
 const char* const gardenRoom = R"({
-  "version": 2, "id": "garden", "size": { "width": 800, "height": 600 },
+  "version": 1, "id": "garden", "size": { "width": 800, "height": 600 },
   "actors": [ { "id": "hero", "actor": "Actors/Hero/hero.actor.json", "position": [120, 550], "facing": "west" } ] })";
 
 struct ActorRoomFixture {
@@ -707,20 +708,19 @@ SCHUIMM_TEST(RoomActors_RoomsWithoutActorsAreUnchanged)
         bytesOf(R"({ "version": 1, "id": "empty", "size": { "width": 10, "height": 10 } })"), "Empty.room.json");
     REQUIRE(version1.has_value());
     CHECK(version1->actors.empty());
-    // Actors are a version 2 property.
-    const auto actorsInVersion1 = decodeRoomResource(
+    const auto emptyActors = decodeRoomResource(
         bytesOf(R"({ "version": 1, "id": "empty", "size": { "width": 10, "height": 10 }, "actors": [] })"),
         "Empty.room.json");
-    REQUIRE(!actorsInVersion1.has_value());
-    CHECK(contains(actorsInVersion1.error().message, "Empty.room.json: actors: unknown property"));
+    REQUIRE(emptyActors.has_value());
+    CHECK(emptyActors->actors.empty());
 
     ActorRoomFixture fixture;
     const AssetLocator locator = fixture.locator();
     RoomLibrary library(locator, fixture.host);
-    fixture.writeText("Rooms/Empty.room.json", R"({ "version": 2, "id": "empty", "size": { "width": 10, "height": 10 } })");
+    fixture.writeText("Rooms/Empty.room.json", R"({ "version": 1, "id": "empty", "size": { "width": 10, "height": 10 } })");
     const auto instance = instantiate(library, fixture.host, "Rooms/Empty.room.json");
     CHECK(instance->actors().empty());
-    CHECK(instance->drawList().empty());
+    CHECK(instance->drawList().items.empty());
     instance->update(1.0);
 }
 
@@ -750,13 +750,13 @@ SCHUIMM_TEST(RoomActors_PlacementsAndDefaults)
     const ActorInstance& hero = room->actors()[0];
     CHECK(hero.id() == "hero");
     CHECK(hero.facing() == Facing::South);   // Resource default.
-    CHECK(hero.scale() == 0.5f);              // Resource default.
+    CHECK(hero.baseScale() == 0.5f);              // Resource default.
     CHECK(hero.animation() == "idle");        // Resource default.
     CHECK(hero.visible());                    // Runtime default.
     const ActorInstance& guard = room->actors()[1];
     CHECK(guard.facing() == Facing::East);
     CHECK(guard.flipX());
-    CHECK(guard.scale() == 0.85f);
+    CHECK(guard.baseScale() == 0.85f);
     CHECK(!room->actors()[2].visible());
     CHECK(room->actors()[3].animation() == "glow");
 }
@@ -768,7 +768,7 @@ SCHUIMM_TEST(RoomActors_InvalidPlacements)
     RoomLibrary library(locator, fixture.host);
     const auto errorOf = [&](std::string_view actors) {
         const std::string text =
-            concat(R"({ "version": 2, "id": "test", "size": { "width": 100, "height": 100 }, "actors": [ )", actors, " ] }");
+            concat(R"({ "version": 1, "id": "test", "size": { "width": 100, "height": 100 }, "actors": [ )", actors, " ] }");
         const auto result = loadRoomText(fixture, library, text);
         CHECK(!result.has_value());
         return result.has_value() ? std::string("<valid>") : result.error().message;
@@ -783,9 +783,9 @@ SCHUIMM_TEST(RoomActors_InvalidPlacements)
     CHECK(contains(errorOf(R"({ "id": "a", "actor": "Actors/Hero/hero.actor.json", "position": [1e9, 2] })"),
                    "actors[0].position[0]: coordinate 1000000000.0 is out of range"));
     CHECK(contains(errorOf(concat(R"({ "id": "a", )", hero, R"(, "facing": "up" })")), "actors[0].facing: unknown facing 'up'"));
-    CHECK(contains(errorOf(concat(R"({ "id": "a", )", hero, R"(, "scale": 0 })")), "actors[0].scale: must be a positive number"));
+    CHECK(contains(errorOf(concat(R"({ "id": "a", )", hero, R"(, "scale": 0 })")), "actors[0].scale: must be a number from 0.001 to 1000, found 0"));
     CHECK(contains(errorOf(concat(R"({ "id": "a", )", hero, R"(, "scale": 1e-50 })")),
-                   "actors[0].scale: must remain positive when stored as a float"));
+                   "actors[0].scale: must be a number from 0.001 to 1000, found 1e-50"));
     CHECK(contains(errorOf(concat(R"({ "id": "a", )", hero, R"(, "visible": "no" })")),
                    "actors[0].visible: expected true or false, found a string"));
     CHECK(contains(errorOf(concat(R"({ "id": "a", )", hero, R"(, "colour": "red" })")), "actors[0].colour: unknown property"));
@@ -799,7 +799,7 @@ SCHUIMM_TEST(RoomActors_InvalidPlacements)
                    "actors[0] ('a'): actor 'hero' animation 'wave' has no clip for facing 'north' and no fallback"));
     // Actors may start outside the room.
     CHECK(loadRoomText(fixture, library,
-                       concat(R"({ "version": 2, "id": "test", "size": { "width": 100, "height": 100 }, "actors": [ { "id": "a", "actor": "Actors/Hero/hero.actor.json", "position": [-500, 9000] } ] })"))
+                       concat(R"({ "version": 1, "id": "test", "size": { "width": 100, "height": 100 }, "actors": [ { "id": "a", "actor": "Actors/Hero/hero.actor.json", "position": [-500, 9000] } ] })"))
               .has_value());
 }
 
@@ -896,7 +896,7 @@ SCHUIMM_TEST(RoomActors_RecreatingARoomStartsFromItsPlacements)
     // Change everything a visit can change.
     REQUIRE(hero->setPosition({1, 1}).has_value());
     REQUIRE(hero->setFacing(Facing::West).has_value());
-    REQUIRE(hero->setScale(3.0f).has_value());
+    REQUIRE(hero->setBaseScale(3.0f).has_value());
     hero->setVisible(false);
     REQUIRE(hero->playAnimation("glow").has_value());
     hall->update(0.5);
@@ -924,7 +924,7 @@ SCHUIMM_TEST(RoomActors_RecreatingARoomStartsFromItsPlacements)
     CHECK(hall->object(oldDoor) == nullptr);
     CHECK(hero->position() == (Vec2{400, 500}));
     CHECK(hero->facing() == Facing::South);
-    CHECK(hero->scale() == 0.5f);
+    CHECK(hero->baseScale() == 0.5f);
     CHECK(hero->visible());
     CHECK(hero->animation() == "idle");
     CHECK_EQ(hero->player().elapsedTicks(), std::uint64_t{0});
@@ -985,7 +985,7 @@ SCHUIMM_TEST(RoomActors_ActorsDoNotSatisfyObjectLinking)
                                                              "\tfunc look_at():\n"
                                                              "\t\tsay(\"me\")\n"));
     fixture.writeText("Rooms/Garden.room.json", R"({
-      "version": 2, "id": "garden", "size": { "width": 800, "height": 600 }, "script": "Rooms/Hall.schb",
+      "version": 1, "id": "garden", "size": { "width": 800, "height": 600 }, "script": "Rooms/Hall.schb",
       "actors": [ { "id": "hero", "actor": "Actors/Hero/hero.actor.json", "position": [120, 550] } ] })");
     REQUIRE(fixture.host.natives()
                 .add({"say", {script::ScriptType::String}, script::ScriptType::None,
@@ -1023,31 +1023,34 @@ SCHUIMM_TEST(RoomActors_DrawListIsSortedAndSkipsInvisibleActors)
     const AssetLocator locator = fixture.locator();
     RoomLibrary library(locator, fixture.host);
     const auto room = instantiate(library, fixture.host, "Rooms/Hall.room.json");
-    // y: hero 500, guard_01 450, guard_02 450 (invisible), door 300.
+    // y: hero 500, guard_01 450, guard_02 450 (invisible), door 300. The door object has no sprite.
     RoomDrawList list = room->drawList();
-    REQUIRE(list.size() == 3);
-    CHECK_EQ(list[0].sequence, std::size_t{3});
-    CHECK_EQ(list[1].sequence, std::size_t{1});
-    CHECK_EQ(list[2].sequence, std::size_t{0});
-    CHECK(list[2].sprite.position == (Vec2{400, 500}));
+    CHECK(!list.background.has_value());
+    auto& items = list.items;
+    REQUIRE(items.size() == 3);
+    for (const RoomDrawItem& item : items) CHECK(item.kind == RoomDrawKind::Actor);
+    CHECK_EQ(items[0].index, std::size_t{3});
+    CHECK_EQ(items[1].index, std::size_t{1});
+    CHECK_EQ(items[2].index, std::size_t{0});
+    CHECK(items[2].depth == 500.0f);
 
     // Equal depths keep placement order.
     room->actors()[2].setVisible(true);
     list = room->drawList();
-    REQUIRE(list.size() == 4);
-    CHECK_EQ(list[1].sequence, std::size_t{1});
-    CHECK_EQ(list[2].sequence, std::size_t{2});
+    REQUIRE(items.size() == 4);
+    CHECK_EQ(items[1].index, std::size_t{1});
+    CHECK_EQ(items[2].index, std::size_t{2});
 
     // Moving an actor changes the order; drawing twice changes nothing.
     REQUIRE(room->actors()[3].setPosition({700, 599}).has_value());
     const RoomDrawList first = room->drawList();
     const RoomDrawList second = room->drawList();
-    CHECK_EQ(first.back().sequence, std::size_t{3});
-    REQUIRE(first.size() == second.size());
-    for (std::size_t i = 0; i < first.size(); ++i) {
-        CHECK_EQ(first[i].sequence, second[i].sequence);
-        CHECK(first[i].sprite.source == second[i].sprite.source);
-        CHECK(first[i].sprite.destination == second[i].sprite.destination);
+    CHECK_EQ(first.items.back().index, std::size_t{3});
+    REQUIRE(first.items.size() == second.items.size());
+    for (std::size_t i = 0; i < first.items.size(); ++i) {
+        CHECK_EQ(first.items[i].sequence, second.items[i].sequence);
+        CHECK(first.items[i].sprite.source == second.items[i].sprite.source);
+        CHECK(first.items[i].sprite.destination == second.items[i].sprite.destination);
     }
     CHECK_EQ(room->actors()[0].player().elapsedTicks(), std::uint64_t{0});
 }

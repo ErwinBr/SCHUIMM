@@ -64,14 +64,16 @@ its clips and images are in the same folder.
 
 | Property | Type | Rules |
 |---|---|---|
-| `version` | integer, **required** | must be `1` |
+| `version` | integer, **required** | must be `1` (formats are provisional before release: [ResourceFormats.md](ResourceFormats.md)) |
 | `id` | identifier, **required** | names the actor *definition*, not an instance |
 | `script` | asset path | a compiled script (`.schb`); it must exist. See [Scripts](#scripts). |
 | `animation_resources` | object, **required** | at least one; a local name (identifier) maps to an `*.anim.json` asset |
 | `animations` | object, **required** | at least one; logical animation name (identifier) to its facing mappings |
 | `default_animation` | identifier, **required** | must be one of `animations` |
 | `default_facing` | facing, **required** | the default animation must resolve with it |
-| `default_scale` | number | default 1. Positive and at most 1000; it must still be positive after conversion to float. |
+| `default_scale` | number | the base scale: default 1, from 0.001 to 1000 |
+| `perspective_scale` | boolean | default `true`: the room's scale map scales the actor ([Perspective](#perspective)) |
+| `movement` | object | how the actor walks ([Movement](#movement)); leave it out for decorative actors |
 
 **Animations:**
 - A **mapping** is `{ "resource": <local name>, "clip": <clip name>, "flip_x": <boolean, default false> }`.
@@ -147,7 +149,7 @@ south clip:
   it lives in the instance; the resources never change.
 - **Validation:** changes are validated, and a failed one leaves the actor exactly as it was.
   - `setPosition` requires finite coordinates within 2^20.
-  - `setScale` requires a positive, finite value of at most 1000.
+  - `setBaseScale` requires a value from 0.001 to 1000.
   - `setFacing` and `playAnimation` require a clip that resolves.
 - **Playing an animation:** `playAnimation(name)` is "play this":
   - it uses the current facing;
@@ -165,8 +167,8 @@ south clip:
 - `position` is the actor's **ground point** in room coordinates, normally its feet. The current
   frame's pivot is placed there.
 - Frame changes never move the actor, even when frames differ in size or pivot.
-- The **scale** is uniform and scales the artwork around the ground point. The room's scale map
-  is not applied automatically yet; that comes with movement.
+- The **scale** is uniform and scales the artwork around the ground point. It is the base scale
+  times the room's perspective scale ([Perspective](#perspective)).
 
 **Handles:**
 - Room objects and actors take handles from one process-wide counter
@@ -179,10 +181,9 @@ south clip:
 
 ## Actors in rooms
 
-### Placements (room format version 2)
+### Placements
 
-Room resources gained an optional `actors` array in **version 2** of the room format
-([Rooms.md](Rooms.md#versioning)). Version 1 files load exactly as before.
+A room resource lists its actors in an optional `actors` array ([Rooms.md](Rooms.md)).
 
 ```json
 "actors": [
@@ -199,8 +200,9 @@ Room resources gained an optional `actors` array in **version 2** of the room fo
 | `position` | point, **required** | the ground point. It need not be inside the room or a walkable area. |
 | `facing` | facing | default: the resource's `default_facing` |
 | `animation` | identifier | default: the resource's `default_animation` |
-| `scale` | number | default: the resource's `default_scale`. Positive, at most 1000, positive as a float. |
+| `scale` | number | base scale; default: the resource's `default_scale`; from 0.001 to 1000 |
 | `visible` | boolean | default `true` |
+| `walk_speed` | number | overrides the resource's `movement.speed` for this actor (it must be able to walk) |
 
 `RoomLibrary::load` loads each placement's actor resource (cached in its `ActorLibrary`) and
 checks that the placement's animation and facing resolve. Errors name the placement, for example
@@ -244,6 +246,7 @@ reconstructed and its actors' runtime state restored instead of the placements.
 - room-local id and actor resource path;
 - position, facing, visibility, scale;
 - logical animation;
+- movement (the request, its destinations, the path and the progress along it);
 - playback (clip, elapsed ticks, status).
 
 These are all explicit and readable, so a future save system can capture them.
@@ -277,20 +280,166 @@ keep them across a room change.
 
 Cached resources and shared textures survive.
 
+## Movement
+
+Actors walk through the room's walkable areas ([Navigation.md](Navigation.md)). Walking needs a
+`movement` block in the actor resource:
+
+```json
+"movement": { "speed": 110, "walk_animation": "walk", "idle_animation": "idle", "perspective_speed": true }
+```
+
+| Property | Type | Rules |
+|---|---|---|
+| `speed` | number, **required** | room pixels per second at perspective scale 1, from 0.001 to 100000 |
+| `walk_animation` | identifier, **required** | a logical animation of the actor, played while walking |
+| `idle_animation` | identifier, **required** | selected when a walk completes or is cancelled |
+| `perspective_speed` | boolean | default `true`: the speed is multiplied by the room's perspective scale at the actor's feet |
+
+**Animation names** are the designer's (`run`, `crawl` and `fly` work as well as `walk`); the
+engine knows none of them.
+
+**Decorative actors** leave the block out and cannot walk; asking them to is an `InvalidState`
+error.
+
+**Per instance:**
+- **Walk speed:** a placement's `walk_speed` overrides the speed, and so does
+  `ActorInstance::setWalkSpeed`, also during a walk.
+- **Perspective scaling:** `setPerspectiveScaling` turns it on or off.
+
+**Ownership:** the movement state belongs to the actor (`ActorInstance::movement()`, a
+`MovementController` component), so no two actors share any. The room holds the navigation the
+paths come from.
+
+### Walking
+
+`RoomInstance::walkTo(actor, destination, policy = NearestReachable)` takes a room-coordinate
+destination. It is **transactional**: everything is checked before anything changes, so a
+failure leaves the actor, and any walk in progress, as it was.
+
+**Checks, in order:**
+1. The actor must belong to this room (`InvalidArgument`), and the destination must be finite.
+2. The actor needs a `movement` block (`InvalidState`).
+3. The room needs walkable areas (`InvalidState`).
+4. The actor must stand in the walkable area. Otherwise the result is `NotFound`; it is never
+   teleported. Placing an actor anywhere with `setPosition` is allowed, and it then cannot walk
+   until it is put back on walkable ground.
+5. **Destination:** with `NearestReachable`, a click outside the walkable area, or on an area
+   that cannot be reached such as the demo's balcony, becomes the nearest point the actor can
+   reach. With `Strict`, it must be walkable and reachable, or the result is `NotFound`. The
+   request keeps both the requested and the resolved destination.
+6. **Path:** found by `findPath`, from where the actor stands now.
+7. **Animations:** a facing is computed for each segment (below). The walk animation, and the
+   idle animation, must resolve for every one of those facings. A failure is `NotFound`, naming
+   the animation and the facing.
+
+On success the request gets a new, process-unique `MovementRequestId`, and the actor starts
+walking.
+- **Replacement:** any walk in progress is replaced.
+- **Already there:** if the actor is already at the resolved destination, the request completes
+  immediately (`MovementRequest::completed`), and the animation changes only if the actor was
+  walking.
+
+**Movement status** (`ActorInstance::movementStatus()`):
+- `Idle`: never asked to walk.
+- `Moving`.
+- `Completed`: the last request arrived.
+- `Cancelled`: the last request was stopped.
+
+The request id tells a waiter whether "completed" means its own request. Script-level waiting comes
+in Milestone 4.4.
+
+**Stopping and taking over** (the walk never fights an explicit request):
+- `stopWalking()` stops where the actor is (`Cancelled`) and selects the idle animation.
+- `setPosition()` cancels the walk and selects idle, so stale waypoints never pull the actor back.
+- An explicit `setAnimation`, `setFacing` or `playAnimation` that succeeds cancels the walk. The
+  explicit animation wins, and no idle is selected. One that fails changes nothing, and the walk
+  goes on.
+
+### Timing
+
+Movement is time-based (seconds, the engine's update delta) and independent of animation ticks.
+An actor moves smoothly however few frames its walk clip has.
+
+- **Leftover time:** time left over at a waypoint carries on to the next segment, so several
+  waypoints can be passed in one update.
+- **Arrival:** the actor arrives exactly at the resolved destination, without overshooting.
+- **Precision:** positions are computed in double from the segment start and the distance
+  travelled, so rounding does not accumulate.
+- **Zero and large updates:** zero-time updates do nothing. Large ones, which `Application`
+  clamps to 0.25 s, simply travel further.
+
+### Facing and animation while walking
+
+**Facing:** an actor faces the direction of the segment it walks, using eight 45° sectors centred
+on the compass directions.
+- **Coordinates:** room y points down, so (0, −1) is north.
+- **Sector boundaries:** a direction exactly 22.5° from a compass direction belongs to the sector
+  counter-clockwise from it on screen: from east, that is north-east.
+- **Zero-length segments** do not change the facing.
+
+**Animation**, always with the atomic `setAnimation(animation, facing)`:
+- **At the start:** the walk animation, in the first segment's facing.
+- **At each waypoint:** the walk animation, in the new facing. The same clip keeps playing,
+  mirrored or not. A different clip starts over; directional clips are not phase-synchronised.
+- **On completion or cancellation:** the idle animation, keeping the last facing.
+
+Actors with fewer directions use the existing explicit mappings, mirroring and `fallback`. The
+walking actor in ActorDemo has north, south and east, with west mirrored.
+
+## Perspective
+
+The room's scale map (`scale_map`, [Rooms.md](Rooms.md)) gives a **perspective scale** for a
+ground y. `evaluateScaleMap` (`Room/Perspective.h`) computes it:
+- piecewise linear between the points, and the first or last point's scale beyond them, with no
+  extrapolation;
+- increasing or decreasing, since a room need not get larger towards the bottom;
+- 1 without a map.
+
+Point scales are from 0.001 to 1000.
+
+**Scales, kept separate:**
+- **Base scale:** the actor's own (`default_scale`, the placement's `scale`, `setBaseScale`). It is
+  never overwritten.
+- **Perspective scale:** derived from the actor's current position on every call. It is 1 when
+  `perspective_scale` is false, after `setPerspectiveScaling(false)`, or in a room without a map.
+  Being derived, it is never stale after a move or reposition.
+- **Effective scale** = base × perspective. Both factors lie in [0.001, 1000], so the product is
+  finite and never zero. Rendering uses it, around the ground point.
+
+**Speed:** the effective walking speed is the reference speed × perspective scale at the actor's
+feet, when `perspective_speed` is on.
+- It is never multiplied by the base scale: a smaller actor does not walk more slowly.
+- Visual perspective and speed perspective can be switched off independently.
+
+**Integration:** the scale changes continuously along a path, and the motion is integrated exactly.
+- Each segment is split where it crosses a scale-map point's y. Within a piece the scale is linear
+  in the distance travelled, `s(l) = s0 + k·l`.
+- The time to travel a distance L is `ln(1 + kL/s0) / (v·k)`.
+- The distance covered in a time T is `s0·(exp(v·k·T) − 1) / k`. Near-constant pieces use the
+  linear forms.
+- Any split of time into updates gives the same position, up to rounding.
+
 ## Update and render order
 
 There is no new loop or service. In a game's `ApplicationListener`, each frame runs in this order:
 
-1. **`onUpdate(dt)`:** game logic and input, then `room->update(dt)`. The room's `AnimationClock`
-   turns `dt` into ticks and advances every actor by the same number, visible or not. Room
-   changes happen here too, outside the script update.
+1. **`onUpdate(dt)`:** game logic and input (walk requests included), then `room->update(dt)`.
+   Room changes happen here too, outside the script update. Within `update`:
+   1. Every walking actor moves along its path by `dt` seconds: position, then facing and the
+      walk or idle animation.
+   2. The room's `AnimationClock` turns `dt` into ticks.
+   3. Every actor's playback advances by those ticks, visible or not.
+
+   An actor that arrives during an update spends that update's ticks on its idle clip. Movement
+   time and animation ticks are separate, and each is advanced exactly once per update.
 2. **`ScriptHost::update(dt)`:** called by `Application` after `onUpdate`. A script change to an
    actor will appear in the same frame's drawing and advance from the next update.
 3. **`onRender`:** `room->drawList()`, then `drawRoom(renderer, list, textures)`.
 
 Rendering only reads: drawing several times without an update draws the same frames.
 
-Movement, navigation and dialogue will hook into the same `onUpdate` step later.
+Dialogue and other adventure systems will hook into the same `onUpdate` step later.
 
 ## Rendering
 
@@ -306,21 +455,31 @@ destination = { x − px·scale, y − pivot.y·scale, w·scale, h·scale }
 
 The ground point therefore stays fixed across frames, sizes, pivots, mirroring and scale.
 
-**Draw list:** `RoomInstance::drawList()` holds the *visible* actors, sorted back to front by
-ground y. Placement order breaks ties, so the order is deterministic. Invisible actors are not
-in it, but they keep animating. The list type (`RoomDrawList`) is meant to hold room objects and
-props later, so that everything sorts together. Actors are not drawn above everything by design.
+**Draw list:** `RoomInstance::drawList()` (`Room/RoomDrawList.h`) describes the whole room:
+- **The background** first, at the room origin.
+- **The other items**, back to front by ground y in one order:
+  - every prop;
+  - every *visible* room object that has a sprite, at its runtime position;
+  - every *visible* actor, at its effective scale.
+- **Ties** at equal depth go to props, then objects, then actors, each in file order, so the order
+  is deterministic.
+
+So actors are drawn in front of some props and behind others, not above everything. Invisible
+actors are not in the list, but they keep animating. Props and objects are placed with their pivot
+on their position, using the image size from its header (`LoadedRoom::imageSizes`).
 
 **`Source/RoomGraphics`** (library `schuimm_room_graphics`) is the only place where rooms meet
 graphics:
 - **`RoomTextures::prepare(textureCache, loadedRoom)`** creates, through the engine's
-  `TextureCache`, one texture for each image any of the room's actor clips uses. Images shared by
+  `TextureCache`, one texture for the background, each prop and object sprite, and each image any
+  of the room's actor clips uses. Images shared by
   actors, clips or rooms get a single texture. It also checks each frame against its texture's
   real size. This happens once per room load; playback never decodes images or creates textures.
   Afterwards the decoded images may be unloaded. Destroying a room or its `RoomTextures` never
   invalidates a texture still in use elsewhere.
-- **`drawRoom(renderer, list, textures, layer)`** submits one `Sprite` per item, in list order, on
-  one layer. `Sprite::flipX` mirrors the texture inside the destination rectangle.
+- **`drawRoom(renderer, list, textures, layer)`** submits the background, then one `Sprite` per
+  item in list order, on one layer. `Sprite::flipX` mirrors the texture inside the destination
+  rectangle.
 
 ## Scripts
 
@@ -348,8 +507,8 @@ independently of the room an actor is in, and a room script never handles an act
 
 ## Not included
 
-- **Movement and navigation:** walking, pathfinding, navigation meshes, automatic scale-map
-  scaling, collision, hit-testing and interaction.
+- **Movement extras:** collision between actors, avoidance, clearance, acceleration, root motion,
+  phase-synchronised direction changes, interaction hit-testing.
 - **Story and game flow:** inventory, dialogue, lip sync, room transitions.
 - **Persistence:** persistent or off-screen actors, actor managers or registries, cross-room
   validation, save and load.
@@ -358,8 +517,9 @@ independently of the room an actor is in, and a room script never handles an act
 
 ## Demo and tests
 
-**ActorDemo** (`Applications/ActorDemo`) shows two rooms that share the walker and lamp
-resources. [ManualTesting.md](ManualTesting.md#actordemo) lists its keys. `ActorDemoSmoke` runs
+**ActorDemo** (`Applications/ActorDemo`) shows three rooms:
+- the courtyard, with click-to-walk, perspective and a debug overlay;
+- the hall and the garden, which share the walker and lamp resources. [ManualTesting.md](ManualTesting.md#actordemo) lists its keys. `ActorDemoSmoke` runs
 its automatic sequence.
 
 **Tests:**
@@ -374,4 +534,11 @@ its automatic sequence.
   - object linking;
   - updating and draw-list order;
   - that the demo's rooms are valid.
+- `Tests/Room/MovementTests.cpp`:
+  - facing sectors;
+  - walking: timing, waypoints, exact arrival, update-rate independence;
+  - cancelling, replacing, failed requests, nearest-reachable destinations, repositioning;
+  - animation ownership, the walk and idle clips along a path, mirroring, missing animations;
+  - perspective (scale maps, base and perspective scale, perspective speed);
+  - room drawing order.
 - `Tests/Graphics/RoomGraphicsTests.cpp`: textures and sprite submission on a fake renderer.

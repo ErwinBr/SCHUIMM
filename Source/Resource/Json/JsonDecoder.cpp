@@ -280,16 +280,19 @@ Status Decoder::readNumber(const Json& value, std::string_view path, double& out
     return {};
 }
 
-Status Decoder::readPositiveFloat(const Json& value, std::string_view path, double maximum, float& out) const
+Status Decoder::readFloatInRange(const Json& value, std::string_view path, double minimum, double maximum,
+                                 float& out) const
 {
     double number = 0.0;
     SCHUIMM_JSON_TRY(readNumber(value, path, number));
-    if (!(number > 0.0) || number > maximum) {
-        return fail(path, concat("must be a positive number of at most ", maximum, ", found ", value.dump()));
+    if (!(number >= minimum) || number > maximum) {
+        return fail(path, concat("must be a number from ", minimum, " to ", maximum, ", found ", value.dump()));
     }
-    // A tiny value such as 1e-50 becomes 0 as a float.
+    // Checked again as stored: rounding to float must not leave the range.
     const float stored = static_cast<float>(number);
-    if (!(stored > 0.0f)) return fail(path, concat("must remain positive when stored as a float, found ", value.dump()));
+    if (!(static_cast<double>(stored) >= minimum * (1.0 - 1e-6)) || static_cast<double>(stored) > maximum * (1.0 + 1e-6)) {
+        return fail(path, concat("is out of range when stored as a float, found ", value.dump()));
+    }
     out = stored;
     return {};
 }

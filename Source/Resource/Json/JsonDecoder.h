@@ -95,9 +95,9 @@ public:
                                      int& out) const;
     // Any finite number.
     [[nodiscard]] Status readNumber(const Json& value, std::string_view path, double& out) const;
-    // A number in (0, maximum] that is still positive after conversion to float.
-    [[nodiscard]] Status readPositiveFloat(const Json& value, std::string_view path, double maximum,
-                                           float& out) const;
+    // A number in [minimum, maximum] (minimum > 0), stored as a float that stays within the range.
+    [[nodiscard]] Status readFloatInRange(const Json& value, std::string_view path, double minimum, double maximum,
+                                          float& out) const;
     [[nodiscard]] Status readCoordinate(const Json& value, std::string_view path, float& out) const;
     // [x, y] of coordinates.
     [[nodiscard]] Status readPoint(const Json& value, std::string_view path, Vec2& out) const;

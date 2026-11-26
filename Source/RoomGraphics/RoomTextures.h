@@ -1,7 +1,7 @@
 #pragma once
 
-// The GPU textures a room needs to draw its actors: one per image used by any clip of the room's
-// actor animation resources, made through the engine's TextureCache (so images shared by several
+// The GPU textures a room needs: its background, props and object sprites, and every image used by
+// any clip of the room's actor animation resources, made through the engine's TextureCache (so images shared by several
 // actors, clips or rooms get one texture). Prepared once when the room is loaded, never during
 // playback: changing frames only changes which texture region is drawn.
 //

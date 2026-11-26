@@ -4,27 +4,31 @@
 
 namespace schuimm::room {
 
-Sprite makeActorSprite(const ActorRenderState& state, const RoomTextures& textures, int layer)
+Sprite makeSprite(const RoomSprite& roomSprite, const RoomTextures& textures, int layer)
 {
     Sprite sprite;
-    sprite.texture = textures.find(state.image);
-    sprite.destination = state.destination;
-    sprite.source = RectF{static_cast<float>(state.source.x), static_cast<float>(state.source.y),
-                          static_cast<float>(state.source.width), static_cast<float>(state.source.height)};
-    sprite.flipX = state.flipX;
+    sprite.texture = textures.find(roomSprite.image);
+    sprite.destination = roomSprite.destination;
+    sprite.source = RectF{static_cast<float>(roomSprite.source.x), static_cast<float>(roomSprite.source.y),
+                          static_cast<float>(roomSprite.source.width), static_cast<float>(roomSprite.source.height)};
+    sprite.flipX = roomSprite.flipX;
     sprite.layer = layer;
     return sprite;
 }
 
 Status drawRoom(Renderer2D& renderer, const RoomDrawList& list, const RoomTextures& textures, int layer)
 {
-    for (const RoomDrawItem& item : list) {
-        if (textures.find(item.sprite.image) == nullptr) {
-            return makeError(ErrorCode::NotFound,
-                             concat("no texture prepared for '", item.sprite.image.view(), "'"));
+    const auto missing = [&textures](const RoomSprite& sprite) { return textures.find(sprite.image) == nullptr; };
+    if (list.background && missing(*list.background)) {
+        return makeError(ErrorCode::NotFound, concat("no texture prepared for '", list.background->image.view(), "'"));
+    }
+    for (const RoomDrawItem& item : list.items) {
+        if (missing(item.sprite)) {
+            return makeError(ErrorCode::NotFound, concat("no texture prepared for '", item.sprite.image.view(), "'"));
         }
     }
-    for (const RoomDrawItem& item : list) renderer.drawSprite(makeActorSprite(item.sprite, textures, layer));
+    if (list.background) renderer.drawSprite(makeSprite(*list.background, textures, layer));
+    for (const RoomDrawItem& item : list.items) renderer.drawSprite(makeSprite(item.sprite, textures, layer));
     return {};
 }
 

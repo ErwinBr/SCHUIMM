@@ -2,13 +2,14 @@
 # directional animation, mirroring, pivots, scale, visibility and room lifetime at work.
 add_executable(ActorDemo
     ActorDemo.cpp
-    main.cpp)
+    main.cpp
+    ../EngineDemo/Screenshot.cpp) # PPM writer for --screenshot
 target_link_libraries(ActorDemo PRIVATE
     Schuimm::Application
     Schuimm::GraphicsOpenGL
     Schuimm::Platform
     Schuimm::RoomGraphics)
-target_include_directories(ActorDemo PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_include_directories(ActorDemo PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/../EngineDemo")
 schuimm_configure_target(ActorDemo)
 
 if(APPLE)
@@ -48,6 +49,9 @@ add_custom_command(TARGET ActorDemo POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/Assets" "${actor_demo_asset_destination}"
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${actor_demo_script_bytecode}"
             "${actor_demo_asset_destination}/Actors/Walker/walker.schb"
+    COMMAND "${CMAKE_COMMAND}" -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/LocalAssets
+            -DDESTINATION=${actor_demo_asset_destination}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/deploy_local_assets.cmake"
     COMMENT "Deploying ActorDemo assets and compiled scripts"
     VERBATIM)
 

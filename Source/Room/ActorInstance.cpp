@@ -1,7 +1,9 @@
 #include "Room/ActorInstance.h"
 
 #include "Core/Common/StringBuilder.h"
+#include "Core/Common/Assert.h"
 #include "Room/ObjectHandles.h"
+#include "Room/Perspective.h"
 
 #include <cmath>
 #include <utility>
@@ -21,11 +23,11 @@ Status checkPosition(Vec2 position)
     return {};
 }
 
-Status checkScale(float scale)
+Status checkRange(float value, double minimum, double maximum, std::string_view what)
 {
-    if (!std::isfinite(scale) || !(scale > 0.0f) || static_cast<double>(scale) > maxActorScale) {
+    if (!(static_cast<double>(value) >= minimum) || !(static_cast<double>(value) <= maximum)) {
         return makeError(ErrorCode::InvalidArgument,
-                         concat("actor scale ", scale, " must be positive, finite and at most ", maxActorScale));
+                         concat("actor ", what, " ", value, " must be from ", minimum, " to ", maximum));
     }
     return {};
 }
@@ -34,7 +36,8 @@ Status checkScale(float scale)
 
 ActorConfiguration defaultActorConfiguration(const ActorResource& resource, Vec2 position)
 {
-    return ActorConfiguration{position, resource.defaultFacing, resource.defaultAnimation, resource.defaultScale, true};
+    return ActorConfiguration{position,        resource.defaultFacing, resource.defaultAnimation, resource.defaultScale,
+                              true,            std::nullopt};
 }
 
 ActorConfiguration placementConfiguration(const ActorPlacement& placement, const ActorResource& resource)
@@ -42,37 +45,55 @@ ActorConfiguration placementConfiguration(const ActorPlacement& placement, const
     ActorConfiguration configuration = defaultActorConfiguration(resource, placement.position);
     if (placement.facing) configuration.facing = *placement.facing;
     if (placement.animation) configuration.animation = *placement.animation;
-    if (placement.scale) configuration.scale = *placement.scale;
+    if (placement.scale) configuration.baseScale = *placement.scale;
     if (placement.visible) configuration.visible = *placement.visible;
+    if (placement.walkSpeed) configuration.walkSpeed = *placement.walkSpeed;
     return configuration;
 }
 
 Result<std::unique_ptr<ActorInstance>> ActorInstance::create(std::string id, std::shared_ptr<const ActorResource> resource,
-                                            const ActorConfiguration& configuration)
+                                                            const ActorConfiguration& configuration,
+                                                            const ScaleMap* perspective)
 {
     if (!resource) return makeError(ErrorCode::InvalidArgument, concat("actor '", id, "': no actor resource"));
     const auto prefix = [&id](const Error& error) {
         return makeError(error.code, concat("actor '", id, "': ", error.message));
     };
     if (auto status = checkPosition(configuration.position); !status) return prefix(status.error());
-    if (auto status = checkScale(configuration.scale); !status) return prefix(status.error());
+    if (auto status = checkRange(configuration.baseScale, minActorScale, maxActorScale, "scale"); !status) {
+        return prefix(status.error());
+    }
+    if (configuration.walkSpeed) {
+        if (!resource->movement) {
+            return makeError(ErrorCode::InvalidState,
+                             concat("actor '", id, "': a walk speed is set, but actor '", resource->id, "' cannot walk"));
+        }
+        if (auto status = checkRange(*configuration.walkSpeed, minWalkSpeed, maxWalkSpeed, "walk speed"); !status) {
+            return prefix(status.error());
+        }
+    }
     auto clip = resource->resolve(configuration.animation, configuration.facing);
     if (!clip) return prefix(clip.error());
     return std::unique_ptr<ActorInstance>(new ActorInstance(std::move(id), detail::allocateObjectHandle(),
-                                                            std::move(resource), configuration, std::move(*clip)));
+                                                            std::move(resource), configuration, std::move(*clip),
+                                                            perspective));
 }
 
 ActorInstance::ActorInstance(std::string id, script::ObjectRef handle, std::shared_ptr<const ActorResource> resource,
-                             const ActorConfiguration& configuration, ResolvedActorClip clip)
+                             const ActorConfiguration& configuration, ResolvedActorClip clip,
+                             const ScaleMap* perspective)
     : id_(std::move(id))
     , handle_(handle)
     , resource_(std::move(resource))
     , position_(configuration.position)
     , facing_(configuration.facing)
     , visible_(configuration.visible)
-    , scale_(configuration.scale)
+    , baseScale_(configuration.baseScale)
+    , perspectiveScaling_(resource_->perspectiveScale)
+    , perspective_(perspective)
     , animation_(configuration.animation)
     , flipX_(clip.flipX)
+    , walkSpeed_(configuration.walkSpeed.value_or(resource_->movement ? resource_->movement->speed : 0.0f))
 {
     player_.play(std::move(clip.clip));
 }
@@ -80,15 +101,82 @@ ActorInstance::ActorInstance(std::string id, script::ObjectRef handle, std::shar
 Status ActorInstance::setPosition(Vec2 position)
 {
     if (auto status = checkPosition(position); !status) return status;
+    stopWalking(); // Stale waypoints must not pull the actor back.
     position_ = position;
     return {};
 }
 
-Status ActorInstance::setScale(float scale)
+Status ActorInstance::setBaseScale(float scale)
 {
-    if (auto status = checkScale(scale); !status) return status;
-    scale_ = scale;
+    if (auto status = checkRange(scale, minActorScale, maxActorScale, "scale"); !status) return status;
+    baseScale_ = scale;
     return {};
+}
+
+float ActorInstance::perspectiveScale() const noexcept
+{
+    return perspectiveScaling_ ? perspectiveScaleAt(perspective_, position_.y) : 1.0f;
+}
+
+float ActorInstance::effectiveScale() const noexcept
+{
+    // Both factors are within [0.001, 1000] (validated), so the product is in [1e-6, 1e6].
+    return static_cast<float>(static_cast<double>(baseScale_) * static_cast<double>(perspectiveScale()));
+}
+
+Status ActorInstance::setWalkSpeed(float speed)
+{
+    if (!canWalk()) {
+        return makeError(ErrorCode::InvalidState, concat("actor '", id_, "' (resource '", resource_->id, "') cannot walk"));
+    }
+    if (auto status = checkRange(speed, minWalkSpeed, maxWalkSpeed, "walk speed"); !status) return status;
+    walkSpeed_ = speed;
+    return {};
+}
+
+void ActorInstance::stopWalking()
+{
+    if (!movement_.isMoving()) return;
+    movement_.cancel();
+    // The idle animation was checked for every facing of the walk when it was accepted.
+    const Status idle = changeAnimation(resource_->movement->idleAnimation, facing_, RestartFinished::No);
+    SCHUIMM_ASSERT(idle.has_value(), "the idle animation resolves for every facing of an accepted walk");
+}
+
+void ActorInstance::beginWalk(MovementRequestId request, Vec2 requested, Vec2 resolved, std::vector<Vec2> path,
+                              Facing facing)
+{
+    movement_.start(request, requested, resolved, std::move(path));
+    const Status walk = changeAnimation(resource_->movement->walkAnimation, facing, RestartFinished::No);
+    SCHUIMM_ASSERT(walk.has_value(), "the walk animation was checked for every facing of the walk");
+}
+
+void ActorInstance::completeWalk(MovementRequestId request, Vec2 requested, Vec2 resolved)
+{
+    const bool wasWalking = movement_.isMoving();
+    movement_.completeImmediately(request, requested, resolved);
+    if (wasWalking) {
+        const Status idle = changeAnimation(resource_->movement->idleAnimation, facing_, RestartFinished::No);
+        SCHUIMM_ASSERT(idle.has_value(), "the idle animation was checked before completing the walk");
+    }
+}
+
+void ActorInstance::advanceMovement(double seconds)
+{
+    if (!movement_.isMoving()) return;
+    const ActorMovementConfig& config = *resource_->movement;
+    const MovementController::Step step =
+        movement_.advance(seconds, static_cast<double>(walkSpeed_), config.perspectiveSpeed ? perspective_ : nullptr);
+    position_ = step.position;
+    if (step.arrived) {
+        const Status idle = changeAnimation(config.idleAnimation, facing_, RestartFinished::No);
+        SCHUIMM_ASSERT(idle.has_value(), "the idle animation resolves for every facing of an accepted walk");
+    } else if (step.segmentChanged) {
+        if (const auto facing = facingFromDirection(movement_.segmentDirection())) {
+            const Status walk = changeAnimation(config.walkAnimation, *facing, RestartFinished::No);
+            SCHUIMM_ASSERT(walk.has_value(), "the walk animation was checked for every facing of the walk");
+        }
+    }
 }
 
 Status ActorInstance::changeAnimation(std::string_view name, Facing facing, RestartFinished restart)
@@ -109,24 +197,32 @@ Status ActorInstance::changeAnimation(std::string_view name, Facing facing, Rest
     return {};
 }
 
+// The public animation requests cancel a walk once they succeed: an explicit request owns the
+// animation from then on (the walk would otherwise change it again at its next waypoint).
 Status ActorInstance::setAnimation(std::string_view name, Facing facing)
 {
-    return changeAnimation(name, facing, RestartFinished::No);
+    auto status = changeAnimation(name, facing, RestartFinished::No);
+    if (status) movement_.cancel();
+    return status;
 }
 
 Status ActorInstance::setFacing(Facing facing)
 {
-    return changeAnimation(animation_, facing, RestartFinished::No);
+    auto status = changeAnimation(animation_, facing, RestartFinished::No);
+    if (status) movement_.cancel();
+    return status;
 }
 
 Status ActorInstance::playAnimation(std::string_view name)
 {
-    return changeAnimation(name, facing_, RestartFinished::Yes);
+    auto status = changeAnimation(name, facing_, RestartFinished::Yes);
+    if (status) movement_.cancel();
+    return status;
 }
 
 ActorRenderState ActorInstance::renderState() const
 {
-    return makeActorRenderState(player_.currentFrame(), position_, scale_, flipX_);
+    return makeActorRenderState(player_.currentFrame(), position_, effectiveScale(), flipX_);
 }
 
 } // namespace schuimm::room

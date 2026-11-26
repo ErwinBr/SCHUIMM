@@ -14,6 +14,12 @@ The second idle frame of each direction is two pixels taller (breathing), so its
 the feet stay on the ground point.
 
 Lamp (Actors/Lamp/lamp_on.png, lamp_dim.png, 16 x 48 each): whole-image frames.
+
+Mover (Actors/Mover/mover.png, 160 x 192): a walking figure in 32 x 64 cells; rows north, south,
+east (west is east mirrored by the actor resource), columns idle, then four walking frames.
+
+Courtyard (Rooms/Courtyard/*.png): a 960 x 540 background with a raised balcony, and props
+(column, fountain, crate) and a chest object.
 """
 
 import os
@@ -117,6 +123,144 @@ def lamp(bright):
     return canvas
 
 
+COAT = (170, 70, 60, 255)
+COAT_DARK = (130, 50, 45, 255)
+BOOT = (60, 40, 30, 255)
+
+
+def mover_figure(canvas, ox, oy, facing, phase):
+    """A 32 x 64 cell; the feet touch the cell's bottom edge. phase: None (standing) or 0..3."""
+    bottom = oy + 64
+    swing = [0, 3, 0, -3][phase] if phase is not None else 0
+    lift = [0, 2, 0, 2][phase] if phase is not None else 0
+    if facing == "east":
+        # Side view: legs swing forward and back.
+        canvas.outlined(ox + 12 + swing, bottom - 20, 6, 20 - (lift if swing > 0 else 0), TROUSERS)
+        canvas.outlined(ox + 14 - swing, bottom - 20, 6, 20 - (lift if swing < 0 else 0), TROUSERS)
+        canvas.outlined(ox + 9, bottom - 44, 15, 26, COAT)
+        canvas.outlined(ox + 10, bottom - 58, 13, 14, SKIN)
+        canvas.rect(ox + 10, bottom - 57, 9, 5, HAIR)
+        canvas.rect(ox + 19, bottom - 52, 2, 2, EYE)
+        canvas.rect(ox + 23, bottom - 49, 3, 2, SKIN)  # Nose: east.
+        canvas.outlined(ox + 14 - swing, bottom - 40, 5, 16, COAT_DARK)  # Arm.
+    else:
+        left = lift if phase in (1,) else 0
+        right = lift if phase in (3,) else 0
+        canvas.outlined(ox + 9, bottom - 20, 6, 20 - left, TROUSERS)
+        canvas.outlined(ox + 17, bottom - 20, 6, 20 - right, TROUSERS)
+        canvas.outlined(ox + 6, bottom - 44, 20, 26, COAT)
+        canvas.outlined(ox + 9, bottom - 58, 14, 14, SKIN)
+        if facing == "south":
+            canvas.rect(ox + 10, bottom - 57, 12, 4, HAIR)
+            canvas.rect(ox + 12, bottom - 52, 2, 2, EYE)
+            canvas.rect(ox + 18, bottom - 52, 2, 2, EYE)
+            canvas.rect(ox + 15, bottom - 38, 2, 16, COAT_DARK)  # Buttons line.
+        else:
+            canvas.rect(ox + 10, bottom - 57, 12, 12, HAIR)
+        canvas.outlined(ox + 3, bottom - 42 + (swing if facing == "south" else -swing), 4, 15, COAT_DARK)
+        canvas.outlined(ox + 25, bottom - 42 - (swing if facing == "south" else -swing), 4, 15, COAT_DARK)
+
+
+def mover():
+    canvas = Canvas(160, 192)
+    for row, facing in enumerate(["north", "south", "east"]):
+        mover_figure(canvas, 0, row * 64, facing, None)
+        for phase in range(4):
+            mover_figure(canvas, (phase + 1) * 32, row * 64, facing, phase)
+    return canvas
+
+
+class Random:
+    def __init__(self, seed):
+        self.state = seed & 0xFFFFFFFF
+
+    def next(self):
+        x = self.state
+        x ^= (x << 13) & 0xFFFFFFFF
+        x ^= x >> 17
+        x ^= (x << 5) & 0xFFFFFFFF
+        self.state = x
+        return x
+
+    def range(self, low, high):
+        return low + self.next() % (high - low + 1)
+
+
+def shade(colour, amount):
+    r, g, b, a = colour
+    return (max(0, min(255, r + amount)), max(0, min(255, g + amount)), max(0, min(255, b + amount)), a)
+
+
+def courtyard_background():
+    random = Random(4242)
+    canvas = Canvas(960, 540)
+    wall = (150, 120, 100, 255)
+    canvas.rect(0, 0, 960, 230, wall)
+    for y in range(0, 230, 16):  # Brick courses.
+        offset = 0 if (y // 16) % 2 == 0 else 16
+        for x in range(-offset, 960, 32):
+            canvas.rect(x + 1, y + 1, 30, 14, shade(wall, random.range(-12, 12)))
+    for x in (90, 330, 570):  # Windows.
+        canvas.outlined(x, 60, 70, 90, (60, 80, 110, 255))
+        canvas.rect(x + 34, 62, 2, 86, (40, 50, 70, 255))
+    # Balcony (its own walkable area, x 700..900, y 120..190): a platform with a railing.
+    canvas.outlined(690, 110, 220, 90, (120, 100, 90, 255))
+    canvas.rect(692, 112, 216, 6, (180, 160, 140, 255))
+    for x in range(700, 905, 20):
+        canvas.rect(x, 190, 4, 40, (70, 60, 55, 255))
+    canvas.rect(690, 226, 220, 6, (70, 60, 55, 255))
+    floor = (175, 165, 140, 255)
+    canvas.rect(0, 230, 960, 310, floor)
+    for y in range(230, 540, 30):
+        for x in range(0, 960, 30):
+            canvas.rect(x + 1, y + 1, 28, 28, shade(floor, random.range(-14, 10)))
+    # Unwalkable flower beds (outside the walkable areas): right of the corridor, along the bottom.
+    for (x, y, w, h) in [(210, 232, 380, 64), (0, 524, 960, 16)]:
+        canvas.rect(x, y, w, h, (70, 110, 50, 255))
+        for _ in range(w * h // 60):
+            canvas.rect(x + random.range(0, w - 3), y + random.range(0, h - 3), 3, 3, (200, random.range(60, 200), 80, 255))
+    return canvas
+
+
+def column():
+    canvas = Canvas(28, 130)
+    canvas.outlined(0, 0, 28, 12, (200, 195, 185, 255))
+    canvas.outlined(4, 10, 20, 108, (220, 215, 205, 255))
+    for x in (8, 13, 18):
+        canvas.rect(x, 14, 2, 100, (190, 185, 175, 255))
+    canvas.outlined(0, 116, 28, 14, (200, 195, 185, 255))
+    return canvas
+
+
+def fountain():
+    canvas = Canvas(150, 100)
+    canvas.outlined(0, 50, 150, 50, (140, 140, 150, 255))
+    canvas.rect(6, 54, 138, 20, (90, 140, 200, 255))
+    canvas.outlined(62, 10, 26, 46, (160, 160, 170, 255))
+    canvas.outlined(52, 0, 46, 14, (150, 150, 160, 255))
+    for x in (60, 75, 88):
+        canvas.rect(x, 14, 2, 36, (160, 200, 240, 255))
+    return canvas
+
+
+def crate():
+    canvas = Canvas(40, 38)
+    canvas.outlined(0, 0, 40, 38, (150, 110, 60, 255))
+    canvas.rect(3, 3, 34, 4, (120, 85, 45, 255))
+    canvas.rect(3, 31, 34, 4, (120, 85, 45, 255))
+    for i in range(32):
+        canvas.rect(4 + i, 4 + i * 30 // 32, 2, 2, (110, 80, 40, 255))
+    return canvas
+
+
+def chest():
+    canvas = Canvas(36, 28)
+    canvas.outlined(0, 8, 36, 20, (120, 70, 30, 255))
+    canvas.outlined(0, 0, 36, 10, (140, 85, 40, 255))
+    canvas.rect(15, 8, 6, 8, (230, 200, 60, 255))
+    return canvas
+
+
 def write(relative, canvas):
     path = os.path.join(ROOT, relative)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -129,3 +273,9 @@ if __name__ == "__main__":
     write("Walker/walker.png", walker())
     write("Lamp/lamp_on.png", lamp(True))
     write("Lamp/lamp_dim.png", lamp(False))
+    write("Mover/mover.png", mover())
+    write("../Rooms/Courtyard/background.png", courtyard_background())
+    write("../Rooms/Courtyard/column.png", column())
+    write("../Rooms/Courtyard/fountain.png", fountain())
+    write("../Rooms/Courtyard/crate.png", crate())
+    write("../Rooms/Courtyard/chest.png", chest())

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "mover",
+  "animation_resources": {
+    "main": "Actors/Mover/mover.anim.json"
+  },
+  "animations": {
+    "idle": {
+      "north": { "resource": "main", "clip": "idle_north" },
+      "south": { "resource": "main", "clip": "idle_south" },
+      "east": { "resource": "main", "clip": "idle_east" },
+      "west": { "resource": "main", "clip": "idle_east", "flip_x": true },
+      "north_east": { "resource": "main", "clip": "idle_east" },
+      "south_east": { "resource": "main", "clip": "idle_east" },
+      "north_west": { "resource": "main", "clip": "idle_east", "flip_x": true },
+      "south_west": { "resource": "main", "clip": "idle_east", "flip_x": true }
+    },
+    "walk": {
+      "north": { "resource": "main", "clip": "walk_north" },
+      "south": { "resource": "main", "clip": "walk_south" },
+      "east": { "resource": "main", "clip": "walk_east" },
+      "west": { "resource": "main", "clip": "walk_east", "flip_x": true },
+      "north_east": { "resource": "main", "clip": "walk_east" },
+      "south_east": { "resource": "main", "clip": "walk_east" },
+      "north_west": { "resource": "main", "clip": "walk_east", "flip_x": true },
+      "south_west": { "resource": "main", "clip": "walk_east", "flip_x": true }
+    }
+  },
+  "default_animation": "idle",
+  "default_facing": "south",
+  "movement": {
+    "speed": 110,
+    "walk_animation": "walk",
+    "idle_animation": "idle",
+    "perspective_speed": true
+  }
+}

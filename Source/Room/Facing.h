@@ -4,6 +4,8 @@
 // plays. Resource files spell them north, north_east, east, south_east, south, south_west, west
 // and north_west.
 
+#include "Core/Common/Geometry.h"
+
 #include <array>
 #include <cstddef>
 #include <optional>
@@ -38,5 +40,11 @@ inline constexpr std::array<Facing, facingCount> allFacings = {
 [[nodiscard]] std::string_view facingName(Facing facing) noexcept;
 // nullopt for anything but the eight names.
 [[nodiscard]] std::optional<Facing> parseFacing(std::string_view name) noexcept;
+
+// The facing of a movement direction in room coordinates (y points down, so (0, -1) is north).
+// Eight 45-degree sectors centred on the compass directions; a direction exactly on a sector
+// boundary (22.5 degrees from a compass direction) belongs to the sector counter-clockwise from it
+// (on screen). nullopt for a zero (or non-finite) vector.
+[[nodiscard]] std::optional<Facing> facingFromDirection(Vec2 direction) noexcept;
 
 } // namespace schuimm::room

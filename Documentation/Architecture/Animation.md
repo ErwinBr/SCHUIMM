@@ -49,7 +49,7 @@ images.
 
 | Property | Type | Rules |
 |---|---|---|
-| `version` | integer, **required** | must be `1`; checked first |
+| `version` | integer, **required** | must be `1`; checked first ([ResourceFormats.md](ResourceFormats.md)) |
 | `clips` | object, **required** | at least one clip; keys are clip names (identifiers), so they are unique |
 | `clips.<name>.loop` | boolean, **required** | whether the clip loops |
 | `clips.<name>.frames` | array, **required** | 1 to 1024 frames |

@@ -1,0 +1,245 @@
+{
+  "version": 1,
+  "clips": {
+    "idle_north": {
+      "loop": true,
+      "frames": [
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            0,
+            0,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 60
+        }
+      ]
+    },
+    "walk_north": {
+      "loop": true,
+      "frames": [
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            32,
+            0,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            64,
+            0,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            96,
+            0,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            128,
+            0,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        }
+      ]
+    },
+    "idle_south": {
+      "loop": true,
+      "frames": [
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            0,
+            64,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 60
+        }
+      ]
+    },
+    "walk_south": {
+      "loop": true,
+      "frames": [
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            32,
+            64,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            64,
+            64,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            96,
+            64,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            128,
+            64,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        }
+      ]
+    },
+    "idle_east": {
+      "loop": true,
+      "frames": [
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            0,
+            128,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 60
+        }
+      ]
+    },
+    "walk_east": {
+      "loop": true,
+      "frames": [
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            32,
+            128,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            64,
+            128,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            96,
+            128,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        },
+        {
+          "image": "Actors/Mover/mover.png",
+          "source": [
+            128,
+            128,
+            32,
+            64
+          ],
+          "pivot": [
+            16,
+            64
+          ],
+          "duration": 8
+        }
+      ]
+    }
+  }
+}

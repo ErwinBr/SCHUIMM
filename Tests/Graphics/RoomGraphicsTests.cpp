@@ -71,11 +71,11 @@ struct Scene {
         resource.id = "test";
         resource.size = {100, 100};
         const AssetPath actorPath = AssetPath::parse("Actors/blob.actor.json").value();
-        resource.actors.push_back(ActorPlacement{"front", actorPath, {10, 50}, std::nullopt, std::nullopt, 2.0f, std::nullopt});
-        resource.actors.push_back(ActorPlacement{"back", actorPath, {30, 20}, Facing::East, std::nullopt, std::nullopt, std::nullopt});
-        resource.actors.push_back(ActorPlacement{"hidden", actorPath, {50, 90}, std::nullopt, std::string("glow"), std::nullopt, false});
+        resource.actors.push_back(ActorPlacement{"front", actorPath, {10, 50}, std::nullopt, std::nullopt, 2.0f, std::nullopt, std::nullopt});
+        resource.actors.push_back(ActorPlacement{"back", actorPath, {30, 20}, Facing::East, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+        resource.actors.push_back(ActorPlacement{"hidden", actorPath, {50, 90}, std::nullopt, std::string("glow"), std::nullopt, false, std::nullopt});
         room = LoadedRoom{std::make_shared<const RoomResource>(std::move(resource)), nullptr,
-                          {actorResource, actorResource, actorResource}};
+                          {actorResource, actorResource, actorResource}, nullptr, {}};
     }
 };
 
@@ -185,4 +185,36 @@ SCHUIMM_TEST(RoomGraphics_MissingTexturesSubmitNothing)
     REQUIRE(!status.has_value());
     CHECK(status.error().code == ErrorCode::NotFound);
     CHECK(renderer.sprites.empty());
+}
+
+SCHUIMM_TEST(RoomGraphics_DrawsTheBackgroundFirstAndRoomArtwork)
+{
+    Scene scene;
+    RoomResource resource = *scene.room.resource;
+    const AssetPath background = AssetPath::parse("Images/rgb_3x1.png").value();
+    const AssetPath sheet = AssetPath::parse("Images/rgba_4x2.png").value();
+    resource.background = background;
+    resource.props.push_back(RoomProp{"rock", sheet, {20, 60}, {2, 2}}); // In front of "front" (y 50).
+    LoadedRoom room = scene.room;
+    room.resource = std::make_shared<const RoomResource>(resource);
+    room.imageSizes = {{background, {3, 1}}, {sheet, {4, 2}}};
+
+    FakeRenderer renderer;
+    const AssetLocator locator = testAssetLocator();
+    ResourceCache<Image> images(locator, loadImage);
+    TextureCache textures(renderer, images);
+    const auto prepared = RoomTextures::prepare(textures, room).value();
+    CHECK_EQ(prepared.size(), std::size_t{2}); // The prop shares the actors' sheet.
+    const auto instance = RoomInstance::create(room, scene.host).value();
+    REQUIRE(drawRoom(renderer, instance->drawList(), prepared).has_value());
+    REQUIRE(renderer.sprites.size() == 4);
+    CHECK(renderer.sprites[0].texture == prepared.find(background));
+    CHECK(renderer.sprites[0].destination == (RectF{0, 0, 3, 1}));
+    CHECK(renderer.sprites[3].destination == (RectF{18, 58, 4, 2})); // The rock, last (deepest y).
+
+    // A header size that does not match the texture is caught when preparing.
+    room.imageSizes[background] = {6, 1};
+    const auto mismatch = RoomTextures::prepare(textures, room);
+    REQUIRE(!mismatch.has_value());
+    CHECK(mismatch.error().code == ErrorCode::InvalidData);
 }

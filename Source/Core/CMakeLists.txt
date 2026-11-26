@@ -2,6 +2,7 @@ add_library(schuimm_core STATIC
     Audio/SoundData.cpp
     Common/Assert.cpp
     Common/Error.cpp
+    Common/GeometryPredicates.cpp
     Common/StringBuilder.cpp
     Text/Utf8.cpp
     Image/Image.cpp

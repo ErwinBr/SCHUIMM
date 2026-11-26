@@ -40,8 +40,14 @@ Result<LoadedRoom> RoomLibrary::load(const AssetPath& room)
 {
     auto resource = resources_.load(ResourceId<RoomResource>(room));
     if (!resource) return std::unexpected(resource.error());
-    LoadedRoom loaded{*resource, nullptr, {}};
+    LoadedRoom loaded{*resource, nullptr, {}, nullptr, {}};
+    if (auto status = loadImageSizes(room, loaded); !status) return std::unexpected(status.error());
     if (auto status = loadActors(room, loaded); !status) return std::unexpected(status.error());
+    if (auto navigation = navigationFor(room, *loaded.resource); !navigation) {
+        return std::unexpected(navigation.error());
+    } else {
+        loaded.navigation = std::move(*navigation);
+    }
     if (!loaded.resource->script) return loaded;
 
     const AssetPath& scriptPath = *loaded.resource->script;
@@ -78,10 +84,48 @@ Status RoomLibrary::loadActors(const AssetPath& room, LoadedRoom& loaded)
     return {};
 }
 
+Status RoomLibrary::loadImageSizes(const AssetPath& room, LoadedRoom& loaded)
+{
+    const RoomResource& resource = *loaded.resource;
+    const auto add = [&](const AssetPath& image, std::string_view path) -> Status {
+        if (loaded.imageSizes.contains(image)) return {};
+        auto size = actors_.imageSize(image);
+        if (!size) return makeError(size.error().code, concat(room.view(), ": ", path, ": ", size.error().message));
+        loaded.imageSizes.emplace(image, *size);
+        return {};
+    };
+    if (resource.background) {
+        if (auto status = add(*resource.background, "background.image"); !status) return status;
+    }
+    for (std::size_t i = 0; i < resource.props.size(); ++i) {
+        if (auto status = add(resource.props[i].sprite, concat("props[", i, "].sprite")); !status) return status;
+    }
+    for (std::size_t i = 0; i < resource.objects.size(); ++i) {
+        if (!resource.objects[i].sprite) continue;
+        if (auto status = add(*resource.objects[i].sprite, concat("objects[", i, "].sprite")); !status) return status;
+    }
+    return {};
+}
+
+Result<std::shared_ptr<const navigation::NavigationMap>> RoomLibrary::navigationFor(const AssetPath& room,
+                                                                                   const RoomResource& resource)
+{
+    if (resource.walkableAreas.empty()) return std::shared_ptr<const navigation::NavigationMap>();
+    if (const auto cached = navigation_.find(room); cached != navigation_.end()) return cached->second;
+    std::vector<std::vector<Vec2>> polygons;
+    polygons.reserve(resource.walkableAreas.size());
+    for (const WalkableArea& area : resource.walkableAreas) polygons.push_back(area.points);
+    auto map = navigation::NavigationMap::create(std::move(polygons));
+    if (!map) return makeError(map.error().code, concat(room.view(), ": navigation: ", map.error().message));
+    navigation_.emplace(room, *map);
+    return std::move(*map);
+}
+
 void RoomLibrary::unloadAll()
 {
     resources_.unloadAll();
     scripts_.clear();
+    navigation_.clear();
     actors_.unloadAll();
 }
 

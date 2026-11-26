@@ -6,6 +6,7 @@
 #include "Core/Common/Error.h"
 #include "Resource/AssetLocator.h"
 #include "Resource/AssetPath.h"
+#include "Navigation/NavigationMap.h"
 #include "Resource/ResourceCache.h"
 #include "Room/ActorLibrary.h"
 #include "Room/ActorResource.h"
@@ -28,6 +29,10 @@ struct LoadedRoom {
     std::shared_ptr<const RoomResource> resource;
     std::shared_ptr<const script::Program> script;
     std::vector<std::shared_ptr<const ActorResource>> actors;
+    // Built once per room resource from its walkable areas; null if it has none.
+    std::shared_ptr<const navigation::NavigationMap> navigation;
+    // Sizes of the background, prop and object images (from their headers), for placing them.
+    std::map<AssetPath, Extent2D> imageSizes;
 };
 
 // Checks that `room.actors` matches the placements and that each placement's configuration is
@@ -58,11 +63,15 @@ public:
 
 private:
     Status loadActors(const AssetPath& room, LoadedRoom& loaded);
+    Status loadImageSizes(const AssetPath& room, LoadedRoom& loaded);
+    Result<std::shared_ptr<const navigation::NavigationMap>> navigationFor(const AssetPath& room,
+                                                                          const RoomResource& resource);
 
     const AssetLocator& locator_;
     script::ScriptHost& host_;
     ResourceCache<RoomResource> resources_;
     std::map<AssetPath, std::shared_ptr<const script::Program>> scripts_;
+    std::map<AssetPath, std::shared_ptr<const navigation::NavigationMap>> navigation_;
     ActorLibrary actors_;
 };
 

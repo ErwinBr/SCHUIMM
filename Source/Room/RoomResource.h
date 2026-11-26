@@ -20,9 +20,9 @@
 
 namespace schuimm::room {
 
-// The newest room resource format version; this engine reads versions 1 to this one. Version 2
-// added actor placements.
-inline constexpr int roomResourceVersion = 2;
+// The room resource format version this engine reads (the only one: formats are provisional
+// before release, see Documentation/Architecture/ResourceFormats.md).
+inline constexpr int roomResourceVersion = 1;
 
 // A non-interactive image placed in the room. `position` is where `pivot` (in sprite pixels,
 // from the sprite's top-left corner) lands in room space.
@@ -53,8 +53,13 @@ struct ScalePoint {
     friend bool operator==(ScalePoint, ScalePoint) = default;
 };
 
-// Character scale by ground position: at least two points with strictly increasing y. Only
-// stored here; evaluating it is a later milestone.
+// Scales of a scale map's points.
+inline constexpr double minScaleMapScale = 0.001;
+inline constexpr double maxScaleMapScale = 1000.0;
+
+// Perspective scale by ground position: at least two points with strictly increasing y (as
+// stored), each scale in [minScaleMapScale, maxScaleMapScale]. Evaluated by evaluateScaleMap
+// (Room/Perspective.h): piecewise linear, clamped beyond the first and last point.
 struct ScaleMap {
     enum class Type { Linear };
     Type type = Type::Linear;
@@ -63,7 +68,7 @@ struct ScaleMap {
     friend bool operator==(const ScaleMap&, const ScaleMap&) = default;
 };
 
-// A walkable polygon (at least three points, no consecutive duplicates, non-zero area).
+// A walkable polygon: simple (Navigation/Polygon.h) and inside the room.
 struct WalkableArea {
     std::string id;
     std::vector<Vec2> points;
@@ -92,8 +97,9 @@ struct ActorPlacement {
     Vec2 position; // Ground point.
     std::optional<Facing> facing;
     std::optional<std::string> animation;
-    std::optional<float> scale;
+    std::optional<float> scale;     // Base scale.
     std::optional<bool> visible;
+    std::optional<float> walkSpeed; // Overrides the actor resource's movement speed.
 
     friend bool operator==(const ActorPlacement&, const ActorPlacement&) = default;
 };
@@ -108,7 +114,7 @@ struct RoomResource {
     std::optional<ScaleMap> scaleMap;
     std::vector<WalkableArea> walkableAreas;
     std::vector<RoomRegion> regions;
-    std::vector<ActorPlacement> actors; // Version 2.
+    std::vector<ActorPlacement> actors;
 
     [[nodiscard]] const RoomObjectDefinition* findObject(std::string_view objectId) const noexcept
     {

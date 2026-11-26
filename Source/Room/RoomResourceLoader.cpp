@@ -3,6 +3,8 @@
 #include "Core/Common/StringBuilder.h"
 
 #include "Resource/Json/JsonDecoder.h"
+#include "Navigation/NavigationMap.h"
+#include "Navigation/Polygon.h"
 #include "Room/ActorResource.h"
 
 #include <algorithm>
@@ -24,8 +26,6 @@ using json::element;
 using json::member;
 
 constexpr int maxRoomSize = 65536;
-// Polygons with an area below this (square pixels) are degenerate: all points on one line.
-constexpr double minPolygonArea = 1e-6;
 constexpr std::uint64_t maxRoomFileBytes = 16u << 20;
 
 class Decoder : public json::Decoder {
@@ -35,14 +35,9 @@ public:
     Result<RoomResource> decodeRoot(const Json& root) const
     {
         int version = 0;
-        SCHUIMM_JSON_TRY(readVersion(root, "room resource", 1, roomResourceVersion, version));
-        if (version >= 2) {
-            SCHUIMM_JSON_TRY(onlyKnown(root, "", {"version", "id", "size", "script", "background", "props", "objects",
-                                                  "scale_map", "navigation", "regions", "actors"}));
-        } else {
-            SCHUIMM_JSON_TRY(onlyKnown(root, "", {"version", "id", "size", "script", "background", "props", "objects",
-                                                  "scale_map", "navigation", "regions"}));
-        }
+        SCHUIMM_JSON_TRY(readVersion(root, "room resource", roomResourceVersion, roomResourceVersion, version));
+        SCHUIMM_JSON_TRY(onlyKnown(root, "", {"version", "id", "size", "script", "background", "props", "objects",
+                                              "scale_map", "navigation", "regions", "actors"}));
 
         RoomResource room;
         const Json* value = nullptr;
@@ -81,7 +76,7 @@ public:
             room.scaleMap = std::move(map);
         }
         if (const Json* navigation = optional(root, "navigation")) {
-            SCHUIMM_JSON_TRY(readNavigation(*navigation, "navigation", room.walkableAreas));
+            SCHUIMM_JSON_TRY(readNavigation(*navigation, "navigation", room.size, room.walkableAreas));
         }
         if (const Json* regions = optional(root, "regions")) {
             SCHUIMM_JSON_TRY(readArray(*regions, "regions"));
@@ -103,33 +98,20 @@ public:
 private:
     // --- Values ----------------------------------------------------------------------------------
 
+    // A simple polygon (Navigation/Polygon.h), validated on the stored float coordinates.
     Status readPolygon(const Json& value, std::string_view path, std::vector<Vec2>& out) const
     {
         SCHUIMM_JSON_TRY(readArray(value, path));
-        if (value.size() < 3) {
-            return fail(path, concat("a polygon needs at least 3 points, found ", value.size()));
+        if (value.size() > navigation::maxPolygonVertices) {
+            return fail(path, concat("a polygon has at most ", navigation::maxPolygonVertices, " points, found ",
+                                     value.size()));
         }
         out.resize(value.size());
         for (std::size_t i = 0; i < value.size(); ++i) {
             SCHUIMM_JSON_TRY(readPoint(value[i], element(path, i), out[i]));
         }
-        for (std::size_t i = 1; i < out.size(); ++i) {
-            if (out[i] == out[i - 1]) {
-                return fail(element(path, i), concat("repeats the previous point (", out[i].x, ", ", out[i].y, ")"));
-            }
-        }
-        if (out.back() == out.front()) {
-            return fail(element(path, out.size() - 1),
-                        "repeats the first point (polygons are closed implicitly; do not repeat the first point)");
-        }
-        double twiceArea = 0.0; // Shoelace formula.
-        for (std::size_t i = 0; i < out.size(); ++i) {
-            const Vec2 a = out[i];
-            const Vec2 b = out[(i + 1) % out.size()];
-            twiceArea += static_cast<double>(a.x) * static_cast<double>(b.y) - static_cast<double>(b.x) * static_cast<double>(a.y);
-        }
-        if (std::fabs(twiceArea) / 2.0 < minPolygonArea) {
-            return fail(path, "polygon has zero area (all points lie on one line)");
+        if (const auto defect = navigation::findPolygonDefect(out)) {
+            return fail(path, navigation::describe(*defect, out.size()));
         }
         return {};
     }
@@ -224,7 +206,6 @@ private:
             SCHUIMM_JSON_TRY(onlyKnown(point, pointPath, {"y", "scale"}));
             const Json* member_ = nullptr;
             double y = 0.0;
-            double scale = 0.0;
             SCHUIMM_JSON_TRY(required(point, pointPath, "y", member_));
             SCHUIMM_JSON_TRY(readNumber(*member_, member(pointPath, "y"), y));
             if (y < 0.0 || y > size.height) {
@@ -237,22 +218,17 @@ private:
                                                            static_cast<double>(out.points.back().y), ")"));
             }
             SCHUIMM_JSON_TRY(required(point, pointPath, "scale", member_));
-            SCHUIMM_JSON_TRY(readNumber(*member_, member(pointPath, "scale"), scale));
-            if (!(scale > 0.0) || scale > 1e6) {
-                return fail(member(pointPath, "scale"), concat("must be a positive number, found ", member_->dump()));
-            }
-            // Finite (at most 1e6), but a tiny scale such as 1e-50 becomes 0 as a float.
-            const float storedScale = static_cast<float>(scale);
-            if (!(storedScale > 0.0f)) {
-                return fail(member(pointPath, "scale"),
-                            concat("must remain positive when stored as a float, found ", member_->dump()));
-            }
+            float storedScale = 1.0f;
+            SCHUIMM_JSON_TRY(readFloatInRange(*member_, member(pointPath, "scale"), minScaleMapScale, maxScaleMapScale,
+                                              storedScale));
             out.points.push_back(ScalePoint{static_cast<float>(y), storedScale});
         }
         return {};
     }
 
-    Status readNavigation(const Json& value, std::string_view path, std::vector<WalkableArea>& out) const
+    // Walkable areas must lie inside the room, and their number and size are limited so that
+    // building the navigation map stays cheap (Navigation/NavigationMap.h).
+    Status readNavigation(const Json& value, std::string_view path, Extent2D size, std::vector<WalkableArea>& out) const
     {
         SCHUIMM_JSON_TRY(readJsonObject(value, path));
         SCHUIMM_JSON_TRY(onlyKnown(value, path, {"walkable_areas"}));
@@ -260,7 +236,12 @@ private:
         if (areas == nullptr) return {};
         const std::string areasPath = member(path, "walkable_areas");
         SCHUIMM_JSON_TRY(readArray(*areas, areasPath));
+        if (areas->size() > navigation::maxNavigationPolygons) {
+            return fail(areasPath, concat("a room has at most ", navigation::maxNavigationPolygons,
+                                          " walkable areas, found ", areas->size()));
+        }
         IdMap ids;
+        std::size_t vertices = 0;
         for (std::size_t i = 0; i < areas->size(); ++i) {
             const Json& area = (*areas)[i];
             const std::string areaPath = element(areasPath, i);
@@ -270,7 +251,21 @@ private:
             SCHUIMM_JSON_TRY(readUniqueIdentifier(area, areaPath, ids, walkable.id));
             const Json* points = nullptr;
             SCHUIMM_JSON_TRY(required(area, areaPath, "points", points));
-            SCHUIMM_JSON_TRY(readPolygon(*points, member(areaPath, "points"), walkable.points));
+            const std::string pointsPath = member(areaPath, "points");
+            SCHUIMM_JSON_TRY(readPolygon(*points, pointsPath, walkable.points));
+            for (std::size_t p = 0; p < walkable.points.size(); ++p) {
+                const Vec2 point = walkable.points[p];
+                if (point.x < 0.0f || point.y < 0.0f || point.x > static_cast<float>(size.width) ||
+                    point.y > static_cast<float>(size.height)) {
+                    return fail(element(pointsPath, p), concat("(", point.x, ", ", point.y, ") is outside the room (0 to ",
+                                                               size.width, " x 0 to ", size.height, ")"));
+                }
+            }
+            vertices += walkable.points.size();
+            if (vertices > navigation::maxNavigationVertices) {
+                return fail(pointsPath, concat("a room's walkable areas have at most ", navigation::maxNavigationVertices,
+                                               " points in total"));
+            }
             out.push_back(std::move(walkable));
         }
         return {};
@@ -279,14 +274,15 @@ private:
     Status readActor(const Json& value, const std::string& path, IdMap& ids, std::vector<ActorPlacement>& out) const
     {
         SCHUIMM_JSON_TRY(readJsonObject(value, path));
-        SCHUIMM_JSON_TRY(onlyKnown(value, path, {"id", "actor", "position", "facing", "animation", "scale", "visible"}));
+        SCHUIMM_JSON_TRY(onlyKnown(value, path,
+                                   {"id", "actor", "position", "facing", "animation", "scale", "visible", "walk_speed"}));
         std::string id;
         SCHUIMM_JSON_TRY(readUniqueIdentifier(value, path, ids, id));
         const Json* field = nullptr;
         std::optional<AssetPath> actor;
         SCHUIMM_JSON_TRY(required(value, path, "actor", field));
         SCHUIMM_JSON_TRY(readAssetPath(*field, member(path, "actor"), actor));
-        ActorPlacement placement{std::move(id), std::move(*actor), {}, {}, {}, {}, {}};
+        ActorPlacement placement{std::move(id), std::move(*actor), {}, {}, {}, {}, {}, {}};
         SCHUIMM_JSON_TRY(required(value, path, "position", field));
         SCHUIMM_JSON_TRY(readPoint(*field, member(path, "position"), placement.position));
         if (const Json* facing = optional(value, "facing")) {
@@ -306,8 +302,13 @@ private:
         }
         if (const Json* scale = optional(value, "scale")) {
             float stored = 1.0f;
-            SCHUIMM_JSON_TRY(readPositiveFloat(*scale, member(path, "scale"), maxActorScale, stored));
+            SCHUIMM_JSON_TRY(readFloatInRange(*scale, member(path, "scale"), minActorScale, maxActorScale, stored));
             placement.scale = stored;
+        }
+        if (const Json* speed = optional(value, "walk_speed")) {
+            float stored = 1.0f;
+            SCHUIMM_JSON_TRY(readFloatInRange(*speed, member(path, "walk_speed"), minWalkSpeed, maxWalkSpeed, stored));
+            placement.walkSpeed = stored;
         }
         if (const Json* visible = optional(value, "visible")) {
             bool stored = true;

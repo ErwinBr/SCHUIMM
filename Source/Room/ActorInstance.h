@@ -29,6 +29,7 @@
 #include "Animation/AnimationPlayer.h"
 #include "Core/Common/Error.h"
 #include "Core/Common/Geometry.h"
+#include "Room/ActorMovement.h"
 #include "Room/ActorRenderState.h"
 #include "Room/ActorResource.h"
 #include "Room/Facing.h"
@@ -36,6 +37,8 @@
 #include "Script/Runtime/Value.h"
 
 #include <cstdint>
+#include <optional>
+#include <vector>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -49,8 +52,9 @@ struct ActorConfiguration {
     Vec2 position;
     Facing facing = Facing::South;
     std::string animation;
-    float scale = 1.0f;
+    float baseScale = 1.0f;
     bool visible = true;
+    std::optional<float> walkSpeed; // Defaults to the resource's movement speed.
 };
 
 // The configuration an actor starts with when nothing overrides it: the resource's defaults.
@@ -62,9 +66,12 @@ class ActorInstance {
 public:
     // Validates `configuration` (position, scale, and that the animation resolves for the facing),
     // allocates a fresh handle and starts the animation.
+    // `perspective` is the room's scale map (null outside a room or in a room without one); it
+    // must outlive the actor (the RoomInstance holds the room resource).
     [[nodiscard]] static Result<std::unique_ptr<ActorInstance>> create(std::string id,
                                                                        std::shared_ptr<const ActorResource> resource,
-                                                                       const ActorConfiguration& configuration);
+                                                                       const ActorConfiguration& configuration,
+                                                                       const ScaleMap* perspective = nullptr);
 
     ActorInstance(ActorInstance&&) = delete;
     ActorInstance(const ActorInstance&) = delete;
@@ -79,7 +86,9 @@ public:
 
     // --- State ---------------------------------------------------------------------------------
     [[nodiscard]] Vec2 position() const noexcept { return position_; }
-    // InvalidArgument for non-finite coordinates or ones beyond maxActorCoordinate.
+    // Places the actor directly (anywhere, walkable or not). InvalidArgument for non-finite
+    // coordinates or ones beyond maxActorCoordinate. Cancels a walk: the actor stops there and
+    // selects its idle animation.
     [[nodiscard]] Status setPosition(Vec2 position);
 
     [[nodiscard]] Facing facing() const noexcept { return facing_; }
@@ -91,9 +100,31 @@ public:
     [[nodiscard]] bool visible() const noexcept { return visible_; }
     void setVisible(bool visible) noexcept { visible_ = visible; }
 
-    [[nodiscard]] float scale() const noexcept { return scale_; }
-    // InvalidArgument unless positive, finite and at most maxActorScale.
-    [[nodiscard]] Status setScale(float scale);
+    // Scale: effective = base x perspective. The base scale is the actor's own; the perspective
+    // scale comes from the room's scale map at the actor's ground y (1 without a map or when
+    // perspective scaling is off), derived on every call so it never goes stale.
+    [[nodiscard]] float baseScale() const noexcept { return baseScale_; }
+    // InvalidArgument unless within [minActorScale, maxActorScale].
+    [[nodiscard]] Status setBaseScale(float scale);
+    [[nodiscard]] float perspectiveScale() const noexcept;
+    [[nodiscard]] float effectiveScale() const noexcept;
+    [[nodiscard]] bool perspectiveScaling() const noexcept { return perspectiveScaling_; }
+    void setPerspectiveScaling(bool enabled) noexcept { perspectiveScaling_ = enabled; }
+
+    // --- Movement ------------------------------------------------------------------------------
+    // Walking is requested through RoomInstance::walkTo (it needs the room's navigation).
+    [[nodiscard]] bool canWalk() const noexcept { return resource_->movement.has_value(); }
+    [[nodiscard]] const MovementState& movement() const noexcept { return movement_.state(); }
+    [[nodiscard]] bool isWalking() const noexcept { return movement_.isMoving(); }
+    [[nodiscard]] MovementStatus movementStatus() const noexcept { return movement_.state().status; }
+    // Stops a walk where the actor is (Cancelled) and selects the idle animation; no effect when
+    // not walking.
+    void stopWalking();
+    // Room pixels per second at perspective scale 1 (0 for an actor that cannot walk).
+    [[nodiscard]] float walkSpeed() const noexcept { return walkSpeed_; }
+    // InvalidArgument unless within [minWalkSpeed, maxWalkSpeed]; InvalidState if the actor cannot
+    // walk. Takes effect immediately, also for a walk in progress.
+    [[nodiscard]] Status setWalkSpeed(float speed);
 
     // --- Animation -----------------------------------------------------------------------------
     [[nodiscard]] const std::string& animation() const noexcept { return animation_; }
@@ -101,6 +132,8 @@ public:
     [[nodiscard]] bool flipX() const noexcept { return flipX_; }
     // NotFound if the actor has no such animation or it has no clip for the current facing.
     [[nodiscard]] Status playAnimation(std::string_view name);
+    // (setAnimation, setFacing and playAnimation cancel a walk when they succeed: an explicit
+    // animation request wins, and the walk does not override it at its next waypoint.)
     void restartAnimation() noexcept { player_.restart(); }
     void pauseAnimation() noexcept { player_.pause(); }
     void resumeAnimation() noexcept { player_.resume(); }
@@ -115,12 +148,19 @@ public:
     [[nodiscard]] ActorRenderState renderState() const;
 
 private:
+    friend class RoomInstance;
     enum class RestartFinished { No, Yes };
+
+    // For RoomInstance::walkTo, after it validated the request.
+    void beginWalk(MovementRequestId request, Vec2 requested, Vec2 resolved, std::vector<Vec2> path, Facing facing);
+    void completeWalk(MovementRequestId request, Vec2 requested, Vec2 resolved);
+    // For RoomInstance::update: moves along the path, turning and switching to idle on arrival.
+    void advanceMovement(double seconds);
 
     Status changeAnimation(std::string_view name, Facing facing, RestartFinished restart);
 
     ActorInstance(std::string id, script::ObjectRef handle, std::shared_ptr<const ActorResource> resource,
-                  const ActorConfiguration& configuration, ResolvedActorClip clip);
+                  const ActorConfiguration& configuration, ResolvedActorClip clip, const ScaleMap* perspective);
 
     std::string id_;
     script::ObjectRef handle_;
@@ -129,10 +169,14 @@ private:
     Vec2 position_;
     Facing facing_;
     bool visible_;
-    float scale_;
+    float baseScale_;
+    bool perspectiveScaling_;
+    const ScaleMap* perspective_;
     std::string animation_;
     bool flipX_;
     animation::AnimationPlayer player_;
+    float walkSpeed_;
+    MovementController movement_;
 };
 
 } // namespace schuimm::room

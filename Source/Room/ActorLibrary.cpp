@@ -29,6 +29,13 @@ Result<std::shared_ptr<const animation::AnimationResource>> ActorLibrary::loadAn
     return animations_.load(ResourceId<animation::AnimationResource>(resource));
 }
 
+Result<Extent2D> ActorLibrary::imageSize(const AssetPath& image)
+{
+    auto info = images_.load(ResourceId<ImageInfo>(image));
+    if (!info) return std::unexpected(info.error());
+    return (*info)->size;
+}
+
 void ActorLibrary::unloadAll()
 {
     actors_.unloadAll();

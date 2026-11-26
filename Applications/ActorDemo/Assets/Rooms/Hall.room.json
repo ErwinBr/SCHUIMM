@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 1,
   "id": "hall",
   "size": { "width": 640, "height": 360 },
   "actors": [

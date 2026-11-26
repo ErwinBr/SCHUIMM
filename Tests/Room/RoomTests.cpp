@@ -270,8 +270,8 @@ SCHUIMM_TEST(Room_OptionalPropertiesMayBeNull)
 
 SCHUIMM_TEST(Room_VersionAndRequiredFields)
 {
-    CHECK_ERROR(mutated([](Json& j) { j["version"] = 3; }),
-                "Kitchen.room.json: version: unsupported room resource version 3 (this engine reads versions 1 to 2)");
+    CHECK_ERROR(mutated([](Json& j) { j["version"] = 2; }),
+                "Kitchen.room.json: version: unsupported room resource version 2 (this engine reads version 1)");
     CHECK_ERROR(mutated([](Json& j) { j["version"] = 0; }), "unsupported room resource version 0");
     CHECK_ERROR(mutated([](Json& j) { j["version"] = "1"; }), "version: expected an integer, found a string");
     CHECK_ERROR(mutated([](Json& j) { j["version"] = 1.0; }), "version: expected an integer, found the number 1.0");
@@ -345,13 +345,14 @@ SCHUIMM_TEST(Room_ScaleMap)
                 "scale_map.points[1].y: must be within the room (0 to 1440), found 1500");
     CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["y"] = -1; }), "scale_map.points[0].y: must be within the room");
     CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = 0; }),
-                "scale_map.points[0].scale: must be a positive number, found 0");
-    CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = -0.5; }), "scale_map.points[0].scale: must be a positive");
+                "scale_map.points[0].scale: must be a number from 0.001 to 1000, found 0");
+    CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = -0.5; }), "scale_map.points[0].scale: must be a number from");
     CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = "big"; }), "scale_map.points[0].scale: expected a number");
-    // Positive as a double, but 0 once stored as a float.
-    CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = 1e-50; }),
-                "scale_map.points[0].scale: must remain positive when stored as a float, found 1e-50");
-    CHECK(decode(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = 1e-30; })).has_value()); // Fits a float.
+    // Below the range (tiny values would make actors vanish and walking stall), and above it.
+    CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = 1e-50; }), "scale_map.points[0].scale: must be a number from");
+    CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = 1001; }), "scale_map.points[0].scale: must be a number from");
+    CHECK(decode(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = 0.001; })).has_value());
+    CHECK(decode(mutated([](Json& j) { j["scale_map"]["points"][0]["scale"] = 1000; })).has_value());
     CHECK_ERROR(mutated([](Json& j) { j["scale_map"]["type"] = "curve"; }),
                 "scale_map.type: unsupported scale map type 'curve' (supported: linear)");
     CHECK_ERROR(mutated([](Json& j) { j["scale_map"].erase("points"); }), "scale_map.points: missing required property");
@@ -365,16 +366,27 @@ SCHUIMM_TEST(Room_Polygons)
     };
     const std::string path = "navigation.walkable_areas[0].points";
     CHECK_ERROR(area(Json::parse("[[0, 0], [10, 0]]")), path + ": a polygon needs at least 3 points, found 2");
-    CHECK_ERROR(area(Json::parse("[[0, 0], [10, 0], [10, 0], [0, 10]]")), path + "[2]: repeats the previous point (10, 0)");
-    CHECK_ERROR(area(Json::parse("[[0, 0], [10, 0], [0, 10], [0, 0]]")), path + "[3]: repeats the first point");
+    CHECK_ERROR(area(Json::parse("[[0, 0], [10, 0], [10, 0], [0, 10]]")), path + ": points[2] repeats points[1]");
+    CHECK_ERROR(area(Json::parse("[[0, 0], [10, 0], [0, 10], [0, 0]]")), path + ": points[3] repeats the first point");
+    // Self-intersecting with a non-zero area (a lopsided bow tie), and adjacent edges folding back.
+    CHECK_ERROR(area(Json::parse("[[50, 0], [150, 100], [150, 0], [50, 100], [0, 50]]")),
+                path + ": edges 0 (points[0]-points[1]) and 2 (points[2]-points[3]) intersect");
+    CHECK_ERROR(area(Json::parse("[[0, 0], [100, 0], [50, 0], [50, 50]]")), path + ": edges 0 (points[0]-points[1]) and 1");
+    // Walkable areas lie inside the room (2560 x 1440).
+    CHECK_ERROR(area(Json::parse("[[0, 0], [2600, 0], [0, 10]]")), path + "[1]: (2600, 0) is outside the room");
     CHECK_ERROR(area(Json::parse("[[0, 0], [5, 5], [10, 10]]")), path + ": polygon has zero area (all points lie on one line)");
     CHECK_ERROR(area(Json::parse("[[0, 0], [10, 0], [0, 1e7]]")), path + "[2][1]: coordinate 10000000.0 is out of range");
+    Json many = Json::array();
+    for (int i = 0; i < 129; ++i) many.push_back(Json::array({i, i % 2}));
+    CHECK_ERROR(area(many), path + ": a polygon has at most 128 points, found 129");
     CHECK_ERROR(area(Json::parse("[[0, 0], [10, 0, 3], [0, 10]]")), path + "[1]: expected a point [x, y], found an array");
     CHECK_ERROR(area(Json::parse("[[0, 0], [10, \"0\"], [0, 10]]")), path + "[1][1]: expected a number, found a string");
     CHECK_ERROR(area(Json::parse("{}")), path + ": expected an array, found an object");
-    // Clockwise and counter-clockwise are both fine; negative coordinates are allowed.
+    // Clockwise and counter-clockwise are both fine, and so are concave polygons.
     CHECK(decode(area(Json::parse("[[0, 0], [0, 10], [10, 0]]"))).has_value());
-    CHECK(decode(area(Json::parse("[[-5, -5], [10, -5], [0, 10]]"))).has_value());
+    CHECK(decode(area(Json::parse("[[0, 0], [40, 0], [40, 80], [60, 80], [60, 0], [100, 0], [100, 100], [0, 100]]"))).has_value());
+    // Regions may extend beyond the room.
+    CHECK(decode(mutated([](Json& j) { j["regions"][1]["points"] = Json::parse("[[-5, -5], [10, -5], [0, 10]]"); })).has_value());
 }
 
 SCHUIMM_TEST(Room_Regions)
@@ -579,7 +591,7 @@ SCHUIMM_TEST(Room_ScriptObjectWithoutRoomObjectIsAnError)
     REQUIRE(resource.has_value());
     auto program = fixture.host.load(compileToBytecode("object fridge:\n\tfunc open():\n\t\tsay(\"cold\")\n"), "fridge.schb");
     REQUIRE(program.has_value());
-    auto instance = RoomInstance::create(LoadedRoom{std::make_shared<const RoomResource>(std::move(*resource)), *program, {}},
+    auto instance = RoomInstance::create(LoadedRoom{std::make_shared<const RoomResource>(std::move(*resource)), *program, {}, nullptr, {}},
                                          fixture.host);
     REQUIRE(!instance.has_value());
     CHECK(contains(instance.error().message, "declares object 'fridge', which room 'kitchen' does not define"));

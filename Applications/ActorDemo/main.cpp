@@ -26,6 +26,7 @@ constexpr const char* usage =
     "  --frames N      quit after N frames\n"
     "  --auto          run a timed sequence of the interactive actions\n"
     "  --assets PATH   asset root (default: next to the executable)\n"
+    "  --screenshot F  with --frames: save the last frame as a PPM image\n"
     "  --help          show this text\n";
 
 Result<actordemo::Options> parseOptions(int argc, char** argv)
@@ -37,10 +38,14 @@ Result<actordemo::Options> parseOptions(int argc, char** argv)
             options.showHelp = true;
         } else if (argument == "--auto") {
             options.automatic = true;
-        } else if ((argument == "--frames" || argument == "--assets") && i + 1 < argc) {
+        } else if ((argument == "--frames" || argument == "--assets" || argument == "--screenshot") && i + 1 < argc) {
             const std::string_view value = argv[++i];
             if (argument == "--assets") {
                 options.assetRoot = std::string(value);
+                continue;
+            }
+            if (argument == "--screenshot") {
+                options.screenshotPath = std::string(value);
                 continue;
             }
             const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), options.frames);

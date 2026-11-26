@@ -20,3 +20,6 @@ Thumbs.db
 # Runtime artefacts
 *.log
 *.ppm
+
+# Demo art that must not be redistributed (Applications/ActorDemo/LocalAssets/README.md)
+/Applications/ActorDemo/LocalAssets/

@@ -7,6 +7,17 @@ namespace schuimm::room {
 Result<RoomTextures> RoomTextures::prepare(TextureCache& textures, const LoadedRoom& room, TextureSettings settings)
 {
     RoomTextures prepared;
+    // Background, props and objects: their size must match the header size they are placed with.
+    for (const auto& [image, size] : room.imageSizes) {
+        auto texture = textures.load(ResourceId<Image>(image), settings);
+        if (!texture) return std::unexpected(texture.error());
+        if ((*texture)->size() != size) {
+            return makeError(ErrorCode::InvalidData, concat("texture of '", image.view(), "' is ", (*texture)->size().width,
+                                                            "x", (*texture)->size().height, ", but its header said ",
+                                                            size.width, "x", size.height));
+        }
+        prepared.textures_.emplace(image, std::move(*texture));
+    }
     for (const auto& actor : room.actors) {
         if (!actor) continue;
         for (const auto& [name, animationResource] : actor->animationResources) {

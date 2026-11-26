@@ -86,11 +86,8 @@ Deliberate scope limits (as of Milestone 2) and known platform caveats.
 ## Rooms
 
 See [Rooms.md](Rooms.md).
-* Rooms are parsed, validated and instantiated. Of their contents only actors are drawn: there
-  is no background, prop or object rendering, no interaction detection, movement, automatic
-  scale-map scaling, pathfinding or room transition yet.
-* Polygons are not checked for self-intersection; walkable areas and regions are not checked
-  against the room bounds (scale-map points are).
+* There is no interaction detection or room transition yet.
+* Regions are not checked against the room bounds (walkable areas and scale-map points are).
 * Loading reports the first error only, not every error in the file.
 * Room object state (`RoomInstance` objects) is reachable from C++ only; there are no natives
   over it yet, and no lookup from an arbitrary `ObjectRef` to its live room.
@@ -104,10 +101,20 @@ See [Rooms.md](Rooms.md).
 See [Actors.md](Actors.md) and [Animation.md](Animation.md).
 * Actor scripts are referenced and checked to exist, but not loaded or executed; there are no
   script-facing actor functions.
-* Actors do not move, and the room's scale map is not applied to them automatically.
-* Changing to a different directional clip restarts it (the phase is not carried over).
-* The draw list holds actors only; room objects and props will join it for unified depth
-  sorting. Depth is the ground y; there are no occlusion masks or foreground layers.
+* Changing to a different directional clip restarts it (the phase is not carried over), also
+  when a walk turns at a waypoint.
+* Depth is the ground y; there are no occlusion masks, foreground layers or per-pixel depth.
+* Walking is not exposed to scripts yet (Milestone 4.4), and there is no script-level waiting for
+  a walk.
+
+## Navigation and movement
+
+See [Navigation.md](Navigation.md) and [Actors.md](Actors.md#movement).
+* Actors are points: no clearance, no collision or avoidance between actors (they may pass through
+  one another), no acceleration.
+* Navigation is static: no dynamic obstacles, navigation links or one-way areas.
+* Paths are geometrically shortest; travel time (perspective speed) does not affect the route.
+* At most 32 walkable areas and 256 walkable-area points per room (visibility-graph cost).
 * No animation events, blending, state machines, multiple tracks or skeletal animation.
 * Actor state is not saved or restored yet.
 * Image sizes for animation frames come from the PNG header, but `AssetLocator` reads whole

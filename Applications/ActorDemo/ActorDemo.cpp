@@ -3,13 +3,17 @@
 #include "Core/Application/Application.h"
 #include "Core/Common/StringBuilder.h"
 #include "Core/Input/InputState.h"
+#include "Core/Common/GeometryPredicates.h"
 #include "Graphics/Interface/Color.h"
+#include "Graphics/Interface/Presentation.h"
 #include "Graphics/Interface/Sprite.h"
 #include "Resource/Image/ImageLoader.h"
 #include "RoomGraphics/RoomRenderer.h"
+#include "Screenshot.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace schuimm::actordemo {
 
@@ -41,6 +45,34 @@ void drawRectangle(Renderer2D& renderer, RectF rectangle, Color colour, int laye
     renderer.drawSprite(sprite);
 }
 
+// A line as a thin rotated solid sprite.
+void drawLine(Renderer2D& renderer, Vec2 a, Vec2 b, float thickness, Color colour, int layer)
+{
+    const auto l = static_cast<float>(distance(a, b));
+    if (!(l > 0.0f)) return;
+    Sprite sprite;
+    sprite.destination = {a.x, a.y - thickness / 2, l, thickness};
+    sprite.origin = {0, thickness / 2};
+    sprite.rotation = std::atan2(b.y - a.y, b.x - a.x);
+    sprite.tint = colour;
+    sprite.layer = layer;
+    renderer.drawSprite(sprite);
+}
+
+void drawCross(Renderer2D& renderer, Vec2 p, float size, Color colour, int layer)
+{
+    drawLine(renderer, {p.x - size, p.y - size}, {p.x + size, p.y + size}, 2, colour, layer);
+    drawLine(renderer, {p.x - size, p.y + size}, {p.x + size, p.y - size}, 2, colour, layer);
+}
+
+std::string describePoint(Vec2 p)
+{
+    return concat("(", std::lround(p.x), ", ", std::lround(p.y), ")");
+}
+
+// The gardener's rounds in the courtyard (it walks to the next point when it arrives).
+constexpr std::array<Vec2, 4> patrolPoints = {Vec2{820, 300}, Vec2{120, 260}, Vec2{140, 500}, Vec2{880, 490}};
+
 std::string describeActor(const ActorInstance& actor)
 {
     return concat("'", actor.id(), "' (", actor.resource().id, ", handle ", actor.handle().id, ")");
@@ -51,7 +83,8 @@ std::string describeActor(const ActorInstance& actor)
 ActorDemoListener::ActorDemoListener(Options options, const AssetLocator& assets)
     : options_(std::move(options))
     , assets_(assets)
-    , rooms_{AssetPath::parse("Rooms/Hall.room.json").value(), AssetPath::parse("Rooms/Garden.room.json").value()}
+    , rooms_{AssetPath::parse("Rooms/Courtyard.room.json").value(), AssetPath::parse("Rooms/Hall.room.json").value(),
+             AssetPath::parse("Rooms/Garden.room.json").value()}
 {
 }
 
@@ -63,10 +96,13 @@ Status ActorDemoListener::onInitialize(Application& app)
     library_ = std::make_unique<room::RoomLibrary>(assets_, *app.scripts());
     images_ = std::make_unique<ResourceCache<Image>>(assets_, loadImage);
     textures_ = std::make_unique<TextureCache>(app.graphics().renderer(), *images_);
+    camera_.setViewport(app.graphics().presentation().virtualResolution);
+    camera_.setPixelSnap(true);
     enterRoom(app, 0);
     if (!room_) return makeError(ErrorCode::InvalidData, "the first room could not be entered (see the log)");
-    app.logger().info(category, "Tab: next room   R: re-enter   1-9: select actor   arrows: facing   "
-                                "W: wave   I: idle   Space: pause   V: visible   -/=: scale   Esc: quit");
+    app.logger().info(category, "Click: walk   Right-click/S: stop   G: debug overlay   Tab: next room   R: re-enter   "
+                                "1-9: select actor   arrows: facing   W: wave   I: idle   Space: pause   V: visible   "
+                                "-/=: scale   Esc: quit");
     return {};
 }
 
@@ -102,6 +138,12 @@ void ActorDemoListener::enterRoom(Application& app, std::size_t index)
     roomTextures_ = std::move(*textures);
     room_ = std::move(*instance);
     selected_ = 0;
+    patrolIndex_ = 0;
+    const Extent2D size = room_->resource().size;
+    camera_.setBounds(RectF{0, 0, static_cast<float>(size.width), static_cast<float>(size.height)});
+    const ActorInstance* hero = room_->actor("hero");
+    camera_.setPosition(hero != nullptr ? hero->position()
+                                        : Vec2{static_cast<float>(size.width) / 2, static_cast<float>(size.height) / 2});
     app.logger().info(category, concat("Entered room '", room_->resource().id, "' with ", room_->actors().size(),
                                        " fresh actors (", roomTextures_.size(), " textures, ",
                                        library_->actors().actorCount(), " actor resources cached)"));
@@ -150,8 +192,8 @@ void ActorDemoListener::perform(Application& app, Action action)
         actor->setVisible(!actor->visible());
         report({}, actor->visible() ? "visible" : "invisible (still animating)");
         break;
-    case Action::ScaleUp: report(actor->setScale(std::min(actor->scale() * 1.25f, 8.0f)), "scale up"); break;
-    case Action::ScaleDown: report(actor->setScale(std::max(actor->scale() / 1.25f, 0.25f)), "scale down"); break;
+    case Action::ScaleUp: report(actor->setBaseScale(std::min(actor->baseScale() * 1.25f, 8.0f)), "scale up"); break;
+    case Action::ScaleDown: report(actor->setBaseScale(std::max(actor->baseScale() / 1.25f, 0.25f)), "scale down"); break;
     default: break;
     }
     updateTitle(app);
@@ -177,6 +219,17 @@ void ActorDemoListener::handleKeys(Application& app)
 {
     const InputState& input = app.input();
     if (input.wasPressed(Key::Escape)) app.requestQuit();
+    if (input.wasPressed(Key::G)) {
+        debug_ = !debug_;
+        app.logger().info(category, debug_ ? "Debug overlay on" : "Debug overlay off");
+    }
+    if (input.wasPressed(Key::S) || input.wasPressed(MouseButton::Right)) {
+        if (ActorInstance* hero = room_ ? room_->actor("hero") : nullptr; hero != nullptr && hero->isWalking()) {
+            hero->stopWalking();
+            app.logger().info(category, concat("hero: stopped at ", describePoint(hero->position()), " (request ",
+                                               hero->movement().request, " cancelled)"));
+        }
+    }
     if (input.wasPressed(Key::Tab)) perform(app, Action::NextRoom);
     if (input.wasPressed(Key::R)) perform(app, Action::ReenterRoom);
     if (input.wasPressed(Key::W)) perform(app, Action::Wave);
@@ -213,52 +266,172 @@ void ActorDemoListener::runAutomaticStep(Application& app)
     // One step every 20 frames: every interaction of the manual controls, including leaving
     // and re-entering rooms.
     if (app.frameIndex() == 0 || app.frameIndex() % 20 != 0) return;
-    switch (automaticStep_++ % 15) {
-    case 0: setFacing(app, Facing::West); break;      // Another clip.
-    case 1: setFacing(app, Facing::East); break;      // The same clip mirrored: playback continues.
-    case 2: setFacing(app, Facing::North); break;
-    case 3: setFacing(app, Facing::SouthEast); break; // No artwork: the fallback (south).
-    case 4: perform(app, Action::Wave); break;        // Non-looping: holds its last frame.
-    case 5: setFacing(app, Facing::West); break;      // Wave falls back to south: continues.
-    case 6: perform(app, Action::ScaleUp); break;
-    case 7: perform(app, Action::SelectNext); perform(app, Action::ToggleVisible); break;
-    case 8: perform(app, Action::TogglePause); break;
-    case 9: perform(app, Action::TogglePause); break;
-    case 10: perform(app, Action::NextRoom); break;
-    case 11: perform(app, Action::Wave); break;
-    case 12: perform(app, Action::NextRoom); break; // Back: the authored placements again.
-    case 13: perform(app, Action::ReenterRoom); break;
-    case 14: perform(app, Action::Idle); break;
+    switch (automaticStep_++ % 21) {
+    // The courtyard: walking, around the fountain, replacement, stopping, an unreachable click.
+    case 0: debug_ = true; walkHero(app, {880, 300}); break;
+    case 1: walkHero(app, {500, 500}); break;   // Replaces the walk, from where the hero is.
+    case 2: walkHero(app, {500, 330}); break;   // Around the fountain.
+    case 3: walkHero(app, {800, 150}); break;   // The balcony: the nearest reachable point instead.
+    case 4: perform(app, Action::NextRoom); break; // Leaving while walking.
+    case 5: break;
+    case 6: setFacing(app, Facing::West); break;      // Another clip.
+    case 7: setFacing(app, Facing::East); break;      // The same clip mirrored: playback continues.
+    case 8: setFacing(app, Facing::North); break;
+    case 9: setFacing(app, Facing::SouthEast); break; // No artwork: the fallback (south).
+    case 10: perform(app, Action::Wave); break;        // Non-looping: holds its last frame.
+    case 11: setFacing(app, Facing::West); break;      // Wave falls back to south: continues.
+    case 12: perform(app, Action::ScaleUp); break;
+    case 13: perform(app, Action::SelectNext); perform(app, Action::ToggleVisible); break;
+    case 14: perform(app, Action::TogglePause); break;
+    case 15: perform(app, Action::TogglePause); break;
+    case 16: perform(app, Action::NextRoom); break;
+    case 17: perform(app, Action::Wave); break;
+    case 18: perform(app, Action::NextRoom); break; // Back to the courtyard: fresh actors from the placements.
+    case 19: perform(app, Action::ReenterRoom); break;
+    case 20: perform(app, Action::NextRoom); break;
+    }
+}
+
+void ActorDemoListener::walkHero(Application& app, Vec2 destination)
+{
+    ActorInstance* hero = room_ ? room_->actor("hero") : nullptr;
+    if (hero == nullptr) return;
+    auto request = room_->walkTo(*hero, destination);
+    if (!request) {
+        app.logger().warning(category, concat("hero: cannot walk to ", describePoint(destination), ": ",
+                                              request.error().message));
+        return;
+    }
+    app.logger().info(category, concat("hero: walk ", request->id, " to ", describePoint(request->requested),
+                                       request->resolved == request->requested
+                                           ? std::string()
+                                           : concat(", resolved to ", describePoint(request->resolved)),
+                                       request->completed ? " (already there)" : "", ", ",
+                                       hero->movement().path.size(), " waypoints"));
+}
+
+void ActorDemoListener::handleMouse(Application& app)
+{
+    const InputState& input = app.input();
+    if (!input.wasPressed(MouseButton::Left) || !input.hasMousePosition() || !room_) return;
+    // Window points -> virtual screen (letterboxing and HiDPI) -> room coordinates (camera).
+    const PresentationSettings& presentation = app.graphics().presentation();
+    const Vec2 screen = windowToVirtual(input.mousePosition(), app.window().size(), app.window().framebufferSize(),
+                                        presentation.virtualResolution, presentation.integerScaling);
+    const Extent2D view = presentation.virtualResolution;
+    if (screen.x < 0 || screen.y < 0 || screen.x >= static_cast<float>(view.width) ||
+        screen.y >= static_cast<float>(view.height)) {
+        return; // A click on the letterbox bars.
+    }
+    walkHero(app, camera_.screenToWorld(screen));
+}
+
+void ActorDemoListener::patrol(Application& app)
+{
+    ActorInstance* gardener = room_ ? room_->actor("gardener") : nullptr;
+    if (gardener == nullptr || !gardener->canWalk() || gardener->isWalking()) return;
+    const Vec2 next = patrolPoints[patrolIndex_++ % patrolPoints.size()];
+    if (auto request = room_->walkTo(*gardener, next); !request) {
+        app.logger().warning(category, concat("gardener: ", request.error().message));
     }
 }
 
 void ActorDemoListener::onUpdate(Application& app, double deltaSeconds)
 {
     handleKeys(app);
+    handleMouse(app);
     if (options_.automatic) runAutomaticStep(app);
-    // Animation advances here, before the ScriptHost update; drawing only reads.
-    if (room_) room_->update(deltaSeconds);
-    if (options_.frames != 0 && app.frameIndex() + 1 >= options_.frames) app.requestQuit();
+    if (room_ && room_->resource().id == "courtyard") patrol(app);
+    // Movement and animation advance here, before the ScriptHost update; drawing only reads.
+    if (room_) {
+        room_->update(deltaSeconds);
+        if (const ActorInstance* hero = room_->actor("hero")) camera_.follow(hero->position(), deltaSeconds, 4.0f);
+    }
+    if (captureRequested_) {
+        if (std::optional<Image> frame = app.graphics().takeCapturedFrame()) {
+            captureRequested_ = false;
+            captured_ = true;
+            if (demo::writePpm(options_.screenshotPath, *frame)) {
+                app.logger().info(category, concat("Screenshot written to ", options_.screenshotPath));
+            } else {
+                app.logger().error(category, concat("Could not write ", options_.screenshotPath));
+                exitCode_ = 1;
+            }
+        }
+    }
+    if (options_.frames != 0 && app.frameIndex() + 1 >= options_.frames) {
+        if (!options_.screenshotPath.empty() && !captured_) {
+            if (!captureRequested_) {
+                app.graphics().requestFrameCapture();
+                captureRequested_ = true;
+            }
+            return;
+        }
+        app.requestQuit();
+    }
 }
 
 void ActorDemoListener::onRender(Application&, Renderer2D& renderer)
 {
     renderer.clear(Color::black());
     if (!room_) return;
-    const Extent2D size = room_->resource().size;
-    const RoomStyle style = styleOf(room_->resource().id);
-    const auto width = static_cast<float>(size.width);
-    const auto height = static_cast<float>(size.height);
-    drawRectangle(renderer, {0, 0, width, style.horizon}, style.wall, -2);
-    drawRectangle(renderer, {0, style.horizon, width, height - style.horizon}, style.floor, -2);
+    renderer.setView(camera_.viewTransform());
+    if (!room_->resource().background) {
+        // Rooms without a background image get a plain wall and floor.
+        const Extent2D size = room_->resource().size;
+        const RoomStyle style = styleOf(room_->resource().id);
+        const auto width = static_cast<float>(size.width);
+        const auto height = static_cast<float>(size.height);
+        drawRectangle(renderer, {0, 0, width, style.horizon}, style.wall, -2);
+        drawRectangle(renderer, {0, style.horizon, width, height - style.horizon}, style.floor, -2);
+    }
 
     // A marker on the selected actor's ground point.
     if (ActorInstance* actor = selected()) {
         const Vec2 p = actor->position();
-        drawRectangle(renderer, {p.x - 10, p.y - 1, 20, 3}, {1.0f, 0.9f, 0.2f, actor->visible() ? 0.9f : 0.4f}, -1);
+        // Above the room (layer 1): the background is part of the room's drawing.
+        drawRectangle(renderer, {p.x - 10, p.y - 1, 20, 3}, {1.0f, 0.9f, 0.2f, actor->visible() ? 0.9f : 0.4f}, 1);
     }
     if (auto status = room::drawRoom(renderer, room_->drawList(), roomTextures_); !status) {
         exitCode_ = 1;
+    }
+    if (debug_) drawDebug(renderer);
+    renderer.resetView();
+}
+
+void ActorDemoListener::drawDebug(Renderer2D& renderer)
+{
+    constexpr int layer = 10;
+    if (const navigation::NavigationMap* map = room_->navigation()) {
+        // Visibility edges (faint), then the walkable polygons, then the graph's corner nodes.
+        for (const auto& edge : map->edges()) {
+            drawLine(renderer, map->nodes()[edge.from].point, map->nodes()[edge.to].point, 1, {0.3f, 0.6f, 1.0f, 0.25f},
+                     layer);
+        }
+        for (const auto& polygon : map->polygons()) {
+            for (std::size_t i = 0; i < polygon.size(); ++i) {
+                drawLine(renderer, polygon[i], polygon[(i + 1) % polygon.size()], 2, {0.2f, 1.0f, 0.3f, 0.8f}, layer);
+            }
+        }
+        for (const auto& node : map->nodes()) {
+            drawRectangle(renderer, {node.point.x - 2, node.point.y - 2, 4, 4}, {1.0f, 1.0f, 0.2f, 0.9f}, layer);
+        }
+    }
+    for (const ActorInstance& actor : room_->actors()) {
+        const Vec2 p = actor.position();
+        drawRectangle(renderer, {p.x - 2, p.y - 2, 5, 5}, {1, 1, 1, 1}, layer + 1); // Ground point.
+        const room::MovementState& movement = actor.movement();
+        if (movement.status == room::MovementStatus::Idle) continue;
+        if (actor.isWalking()) {
+            Vec2 from = p;
+            for (std::size_t i = movement.nextWaypoint; i < movement.path.size(); ++i) {
+                drawLine(renderer, from, movement.path[i], 2, {1.0f, 0.5f, 0.1f, 0.9f}, layer + 1);
+                from = movement.path[i];
+            }
+        }
+        drawCross(renderer, movement.requested, 5, {1.0f, 0.2f, 0.2f, 0.9f}, layer + 1);
+        drawRectangle(renderer, {movement.resolved.x - 3, movement.resolved.y - 3, 7, 7}, {0.2f, 1.0f, 0.4f, 0.9f},
+                      layer + 1);
     }
 }
 
@@ -269,7 +442,10 @@ void ActorDemoListener::updateTitle(Application& app)
         title += concat(" - room '", room_->resource().id, "'");
         if (const ActorInstance* actor = selected()) {
             title += concat(" - ", actor->id(), ": ", actor->animation(), ", ", room::facingName(actor->facing()),
-                            ", x", actor->scale(), actor->visible() ? "" : ", invisible");
+                            ", x", actor->baseScale(), actor->visible() ? "" : ", invisible");
+        }
+        if (room_->navigation() != nullptr) {
+            title += concat(" - click to walk, G: debug");
         }
     }
     app.window().setTitle(title);

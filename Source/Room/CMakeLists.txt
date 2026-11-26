@@ -6,17 +6,19 @@
 add_library(schuimm_room STATIC
     ActorInstance.cpp
     ActorLibrary.cpp
+    ActorMovement.cpp
     ActorRenderState.cpp
     ActorResource.cpp
     ActorResourceLoader.cpp
     Facing.cpp
     ObjectHandles.cpp
+    Perspective.cpp
     RoomInstance.cpp
     RoomLibrary.cpp
     RoomResourceLoader.cpp
     RoomScript.cpp)
 add_library(Schuimm::Room ALIAS schuimm_room)
 target_link_libraries(schuimm_room
-    PUBLIC Schuimm::Resource Schuimm::Animation Schuimm::ScriptRuntime
+    PUBLIC Schuimm::Resource Schuimm::Animation Schuimm::Navigation Schuimm::ScriptRuntime
     PRIVATE Schuimm::ResourceJson)
 schuimm_configure_target(schuimm_room)

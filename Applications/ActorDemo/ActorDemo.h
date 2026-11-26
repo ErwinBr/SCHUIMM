@@ -1,6 +1,8 @@
 #pragma once
 
-// ActorDemo: two rooms with actors, to see the actor and animation foundation at work.
+// ActorDemo: rooms with actors, to see actors, animation, navigation and movement at work. The
+// courtyard has click-to-walk navigation (walkable areas, an island, a disconnected balcony, a
+// perspective scale map) and a debug overlay; the hall and garden show actors and animation.
 //
 // Rooms are entered the way a game will: the current room instance is destroyed first, then the
 // next one is created from its (cached, immutable) resources, so its actors start from their
@@ -8,6 +10,7 @@
 
 #include "Core/Application/ApplicationListener.h"
 #include "Core/Image/Image.h"
+#include "Graphics/Common/Camera2D.h"
 #include "GraphicsResources/TextureCache.h"
 #include "Resource/AssetLocator.h"
 #include "Resource/ResourceCache.h"
@@ -28,6 +31,7 @@ struct Options {
     std::uint64_t frames = 0; // Quit after this many frames (0: run until closed).
     bool automatic = false;   // Drive the demo with a timed sequence of the same actions as the keys.
     std::string assetRoot;
+    std::string screenshotPath; // With frames: the last frame as a PPM image.
     bool showHelp = false;
 };
 
@@ -62,6 +66,10 @@ private:
     void handleKeys(Application& app);
     void runAutomaticStep(Application& app);
     void updateTitle(Application& app);
+    void handleMouse(Application& app);
+    void walkHero(Application& app, Vec2 destination);
+    void patrol(Application& app);
+    void drawDebug(Renderer2D& renderer);
     [[nodiscard]] room::ActorInstance* selected();
 
     Options options_;
@@ -76,7 +84,13 @@ private:
     room::RoomTextures roomTextures_;
     std::unique_ptr<room::RoomInstance> room_;
 
+    Camera2D camera_;
+    bool debug_ = false;
+    std::size_t patrolIndex_ = 0;
+
     std::size_t automaticStep_ = 0;
+    bool captureRequested_ = false;
+    bool captured_ = false;
     int exitCode_ = 0;
 };
 

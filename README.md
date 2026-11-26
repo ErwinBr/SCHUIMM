@@ -167,8 +167,13 @@ See `EngineDemo --help`. Scripts: the demo runs `Applications/EngineDemo/Scripts
 Build\windows-msvc\bin\ActorDemo\Debug\ActorDemo.exe                  # Windows
 ```
 
-Two rooms (a hall and a garden) with actors that share one walker resource and one lamp
-resource. It shows:
+Three rooms with actors:
+- **The courtyard:** click-to-walk through walkable areas around an island, with a separate
+  balcony. It also shows perspective scaling and speed, depth sorting with props and objects, a
+  second actor walking on its own, and a debug overlay (G).
+- **The hall and the garden:** they share one walker resource and one lamp resource.
+
+It shows:
 - directional animation and mirroring;
 - frames of different sizes and pivots;
 - looping and non-looping clips, visibility and scale;
@@ -179,8 +184,9 @@ The keys are in
 [ManualTesting.md](Documentation/Architecture/ManualTesting.md#actordemo). `--auto` runs a timed
 sequence of the same actions, and `--frames N` quits after N frames. Regenerate the art with
 `python3 Applications/ActorDemo/Tools/generate_actor_demo_assets.py`. Formats and architecture:
-[Actors.md](Documentation/Architecture/Actors.md) and
-[Animation.md](Documentation/Architecture/Animation.md).
+[Actors.md](Documentation/Architecture/Actors.md),
+[Animation.md](Documentation/Architecture/Animation.md) and
+[Navigation.md](Documentation/Architecture/Navigation.md).
 
 ## Verification status
 

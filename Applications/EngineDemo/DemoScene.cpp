@@ -42,9 +42,9 @@ constexpr const char* helpLines[] = {
     "F1: help   F11: fullscreen   V: VSync   Esc: quit",
 };
 
-float length(Vec2 v)
+float lengthOf(Vec2 v)
 {
-    return std::sqrt(v.x * v.x + v.y * v.y);
+    return static_cast<float>(length(v));
 }
 
 } // namespace
@@ -258,14 +258,14 @@ void DemoScene::handleInput(Application& app, double deltaSeconds)
     }
     if (walkTargetActive_) {
         const Vec2 toTarget = walkTarget_ - playerFeet_;
-        if (length(toTarget) < 3.0f) {
+        if (lengthOf(toTarget) < 3.0f) {
             walkTargetActive_ = false;
         } else {
             direction = toTarget;
         }
     }
     const float run = (input.isDown(Key::LeftShift) || input.isDown(Key::RightShift)) ? 2.0f : 1.0f;
-    const float magnitude = length(direction);
+    const float magnitude = lengthOf(direction);
     movePlayer(deltaSeconds, magnitude > 0.0f ? direction * (run / magnitude) : Vec2{});
 
     const auto dt = static_cast<float>(deltaSeconds);
@@ -305,7 +305,7 @@ void DemoScene::movePlayer(double deltaSeconds, Vec2 velocity)
     if (velocity.x != 0.0f) {
         facingLeft_ = velocity.x < 0.0f;
     }
-    const auto speed = static_cast<double>(length(velocity));
+    const auto speed = length(velocity);
     walkTime_ += deltaSeconds * speed;
     stepTimer_ -= deltaSeconds * speed;
     if (stepTimer_ <= 0.0) {

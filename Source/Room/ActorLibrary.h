@@ -31,6 +31,9 @@ public:
     [[nodiscard]] Result<std::shared_ptr<const ActorResource>> load(const AssetPath& actor);
     [[nodiscard]] Result<std::shared_ptr<const animation::AnimationResource>> loadAnimation(const AssetPath& resource);
 
+    // An image's size from its header, through the image-header cache (also used by rooms).
+    [[nodiscard]] Result<Extent2D> imageSize(const AssetPath& image);
+
     void unloadAll();
 
     [[nodiscard]] std::size_t actorCount() const noexcept { return actors_.size(); }
