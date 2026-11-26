@@ -348,11 +348,12 @@ walking.
 
 The request id tells a waiter whether "completed" means its own request.
 
-**Script waiting.** `MovementState` describes only the latest request. Scripts therefore wait
-through a completion token per request: the adventure layer keys it by the request id and
-resolves it once per frame from this state ([Adventure.md](Adventure.md#walk_to)). A waiter sees
-its own request's outcome even after a newer request has started. Nothing keeps a movement
-history.
+**Script waiting.** `MovementState` describes only the latest request, so outcomes are not
+read from it. The actor reports each request's end the moment it happens: completed, stopped or
+replaced ([Rooms.md](Rooms.md#operation-events)). The adventure layer records that outcome on the
+request's completion token and delivers it once per frame
+([Adventure.md](Adventure.md#record-deliver-execute)). A waiter therefore sees its own request's
+outcome even after a newer request has started. Nothing keeps a movement history.
 
 **Stopping and taking over** (the walk never fights an explicit request):
 - `stopWalking()` stops where the actor is (`Cancelled`) and selects the idle animation.

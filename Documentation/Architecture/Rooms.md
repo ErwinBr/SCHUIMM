@@ -297,6 +297,29 @@ Two instances of the same room have different handles for "the same" object, and
 
 `start(function, arguments)` runs a room-level function such as `enter`. Nothing is started automatically: when `enter` runs is up to the future room-transition code. Event names are never fixed anywhere.
 
+## Operation events
+
+A room reports the end of each operation to one optional listener
+(`RoomInstance::setEventListener`, `Room/RoomEvents.h`). The adventure layer uses it to record
+outcomes on completion tokens ([Adventure.md](Adventure.md#record-deliver-execute)). Events are
+emitted at the moment the state changes, so every walk request and playback is reported, also
+when another one starts right after.
+
+| Event | Emitted by |
+|---|---|
+| `movementEnded(actor, request, Completed)` | arrival in `update`; a request that needs no walking |
+| `movementEnded(..., Stopped)` | `stopWalking`, `setPosition`, a successful `setAnimation` / `setFacing` / `playAnimation` during a walk |
+| `movementEnded(..., Replaced)` | a new `walkTo` while walking, for the old request |
+| `playbackEnded(entity, isActor, generation, Finished)` | `update`, when a non-looping clip reaches its end |
+| `playbackEnded(..., Replaced)` | a playback ending unfinished: another clip, `restart`, `stop`, a walk's automatic clip change |
+| `roomDestroyed()` | the room's destructor, first, while everything still exists |
+
+- **Never reported:** pausing and resuming, and failed requests (they change nothing).
+- **Exactly once:** each request and playback ends exactly once.
+- **Snapshots:** copies of a `RoomObject` never report.
+- **Listener rules:** a listener records and returns; it must not change the room from inside a
+  notification.
+
 ## Ownership and lifetime
 
 - **`RoomLibrary`**

@@ -66,8 +66,12 @@ struct DispatchResult {
 //   * Exceptions: natives that throw fail their coroutine (see runCoroutine). An exception from
 //     the event or trace callback propagates out of update(), but the scheduler stays usable:
 //     the coroutine that was running is marked Failed and update() may be called again.
-//   * Finished, failed and cancelled coroutines release their frames immediately but keep their
-//     state and error until release()/releaseFinished(), so callers can inspect the outcome.
+//   * Finished, failed and cancelled coroutines release their frames immediately but keep a small
+//     record (state, error, result) until release()/releaseFinished(), so callers can inspect the
+//     outcome. Reclamation policy: whoever owns a scheduler calls releaseFinished() regularly.
+//     ScriptHost does so after every update, which also reclaims spawned coroutines whose
+//     handles were discarded; freed slots are reused, so storage stays bounded by the number of
+//     coroutines alive at once.
 //   * spawn (the Spawn instruction) adds a Ready coroutine that inherits the spawning
 //     coroutine's execution owner. It first runs in the next update, like start(). Spawned
 //     coroutines are independent: they outlive the coroutine that spawned them and are not
@@ -137,6 +141,8 @@ public:
     [[nodiscard]] std::size_t activeCount() const noexcept; // Not yet ended.
     [[nodiscard]] std::size_t activeCount(ExecutionOwner owner) const noexcept; // Of one owner.
     [[nodiscard]] std::size_t size() const noexcept;        // Including ended, unreleased ones.
+    // Slots allocated (in use or free for reuse): the scheduler's storage (diagnostics).
+    [[nodiscard]] std::size_t slotCapacity() const noexcept { return slots_.size(); }
     // True while update() runs (i.e. inside a native or a callback called from it).
     [[nodiscard]] bool isUpdating() const noexcept { return updating_; }
     [[nodiscard]] std::int64_t timeNanoseconds() const noexcept { return now_; }

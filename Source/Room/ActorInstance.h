@@ -27,6 +27,7 @@
 //   * update(ticks) advances playback; nothing else does (drawing is read-only).
 
 #include "Animation/AnimationPlayer.h"
+#include "Room/RoomEvents.h"
 #include "Core/Common/Error.h"
 #include "Core/Common/Geometry.h"
 #include "Room/ActorMovement.h"
@@ -134,15 +135,15 @@ public:
     [[nodiscard]] Status playAnimation(std::string_view name);
     // (setAnimation, setFacing and playAnimation cancel a walk when they succeed: an explicit
     // animation request wins, and the walk does not override it at its next waypoint.)
-    void restartAnimation() noexcept { player_.restart(); }
+    void restartAnimation() noexcept;
     void pauseAnimation() noexcept { player_.pause(); }
     void resumeAnimation() noexcept { player_.resume(); }
-    void stopAnimation() noexcept { player_.stop(); }
+    void stopAnimation() noexcept;
     [[nodiscard]] animation::PlaybackStatus playbackStatus() const noexcept { return player_.status(); }
     [[nodiscard]] const animation::AnimationPlayer& player() const noexcept { return player_; }
 
     // Advances playback by whole animation ticks.
-    animation::AdvanceResult update(std::uint64_t ticks) noexcept { return player_.advance(ticks); }
+    animation::AdvanceResult update(std::uint64_t ticks) noexcept;
 
     // The current frame as it is to be drawn (also when invisible: callers skip those).
     [[nodiscard]] ActorRenderState renderState() const;
@@ -158,6 +159,11 @@ private:
     void advanceMovement(double seconds);
 
     Status changeAnimation(std::string_view name, Facing facing, RestartFinished restart);
+    // Ends the walk in progress, if any, and reports how (RoomEvents.h).
+    void endWalk(MovementOutcome outcome);
+    // After a player change: reports the playback of `before` as replaced if it ended without
+    // finishing.
+    void reportPlaybackChange(std::uint64_t before) noexcept;
 
     ActorInstance(std::string id, script::ObjectRef handle, std::shared_ptr<const ActorResource> resource,
                   const ActorConfiguration& configuration, ResolvedActorClip clip, const ScaleMap* perspective);
@@ -177,6 +183,10 @@ private:
     animation::AnimationPlayer player_;
     float walkSpeed_;
     MovementController movement_;
+    // The room's event sink (set by RoomInstance; null outside a room) and the last playback
+    // generation whose end was reported.
+    const RoomEventSink* events_ = nullptr;
+    std::uint64_t reportedGeneration_ = 0;
 };
 
 } // namespace schuimm::room

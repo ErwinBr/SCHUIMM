@@ -12,9 +12,16 @@
 // with its last reference: there is no history of past operations.
 //
 // Coroutines wait through NativeResult::await (Runtime/NativeRegistry.h). The scheduler
-// subscribes the waiting coroutine; resolving the token makes it Ready (completed) or cancels it
-// (cancelled), through the scheduler and never by running script code directly. Each outcome is
-// delivered exactly once to each waiter. Resolving an already resolved token does nothing.
+// subscribes the waiting coroutine.
+//
+// Resolving is two steps, which an engine system may separate:
+//   record   at the moment the operation ends: the outcome is fixed (first record wins) and
+//            visible at once (state(); a new await returns or cancels immediately). Nothing is
+//            notified and no script runs.
+//   deliver  later, at a safe point (the adventure layer's publish()): each subscribed waiter is
+//            notified exactly once, which makes it Ready (completed) or cancels it (cancelled)
+//            through the scheduler. Script code runs only in the scheduler's update.
+// complete() and cancel() do both at once. Delivering twice, or before recording, does nothing.
 //
 // Tokens use a non-atomic reference count, like strings: game thread only.
 
@@ -44,7 +51,13 @@ public:
     // Why the operation was cancelled ("stopped", "replaced", "destroyed", ...); empty otherwise.
     [[nodiscard]] const std::string& cancelReason() const noexcept { return reason_; }
 
-    // Resolve the token. Only the first call has an effect; it notifies every waiter.
+    // Record the outcome (only the first record has an effect) without notifying anyone.
+    void recordCompleted();
+    void recordCancelled(std::string reason);
+    // Notify the waiters of the recorded outcome (once; nothing if none is recorded yet).
+    void deliver();
+    [[nodiscard]] bool isDelivered() const noexcept { return delivered_; }
+    // record + deliver.
     void complete();
     void cancel(std::string reason);
 
@@ -79,7 +92,7 @@ private:
     CompletionToken();
     ~CompletionToken();
 
-    void resolve(State state, std::string reason);
+    void record(State state, std::string reason);
     void addWaiter(ScriptScheduler& scheduler, CoroutineHandle coroutine);
     void removeWaiter(const ScriptScheduler& scheduler, CoroutineHandle coroutine);
     void abandon();
@@ -87,6 +100,7 @@ private:
     std::uint32_t references_ = 1;
     State state_ = State::Pending;
     bool awaitable_ = true;
+    bool delivered_ = false;
     std::string reason_;
     std::string notAwaitable_;
     std::vector<Waiter> waiters_;

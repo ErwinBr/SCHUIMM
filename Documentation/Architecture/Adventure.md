@@ -32,22 +32,44 @@ adventure.setActiveRoom(room.get());       // at most one active room
 adventure.setCamera(&camera);
 ```
 
-- **Active room.** There is at most one; `setActiveRoom(nullptr)` means none. Changing it
-  cancels every pending operation of the previous room with reason "destroyed". **Call
-  `setActiveRoom(nullptr)` before destroying the active room.** There is no registry of actors or
-  objects besides the room's own.
+- **Active room.** There is at most one; `setActiveRoom(nullptr)` means none.
+  - **Changing it** cancels every pending operation of the previous room with reason
+    "destroyed", and makes the context the new room's event listener
+    ([Rooms.md](Rooms.md#operation-events)).
+  - **Destroying the active room** detaches it automatically: the room tells its listener first,
+    and the context cancels the room's operations and forgets the room. Detaching explicitly
+    first is still the clearer order.
+  - There is no registry of actors or objects besides the room's own.
 - **Camera.** `setCamera(camera)`: the camera natives fail without one.
-- **Lifetime.** The bound natives capture the context, so it must outlive every coroutine that
-  can call them. Stop or destroy the `ScriptHost` first.
+- **Lifetime.**
+  - Destroying the context detaches it from the room, so the room never reports to a dead
+    listener.
+  - The bound natives capture the context, so it must outlive every coroutine that can call
+    them: stop or destroy the `ScriptHost` first. The full ownership model (rooms, modules,
+    actors, contexts) is part of Milestone 4.4 Part II.
 - **Headless.** No graphics device is involved; the tests run it without a window.
+
+### Record, deliver, execute
+
+The end of an operation goes through three separate steps:
+
+| Step | When | What happens |
+|---|---|---|
+| **record** | the moment the walk or playback ends: arrival in `room.update`, `stop_walking` inside a native, a C++ `walkTo`, … | The room reports the event ([Rooms.md](Rooms.md#operation-events)), and the context records the outcome on that operation's token (`CompletionToken::recordCompleted` / `recordCancelled`). Nothing is notified and no script runs. |
+| **deliver** | `adventure.publish()`, once per frame | The recorded outcomes are delivered (`CompletionToken::deliver`): waiting coroutines become Ready or are cancelled. |
+| **execute** | the `ScriptHost` update that follows | Resumed coroutines continue. |
+
+Because the outcome is recorded when it happens, it is never reconstructed from the entity's
+later state. A walk that arrives and is followed by another walk before publish still resumes
+its waiter, and the same holds for a finished playback followed by another playback.
 
 ### Update order
 
 Once per frame, in the game's `onUpdate`, followed by the application's script update:
 
 1. input and pending requests;
-2. `room.update(dt)`: movement, then animation playback;
-3. `adventure.publish()`: resolves the operations from the room's new state;
+2. `room.update(dt)`: movement, then animation playback (outcomes are recorded here);
+3. `adventure.publish()`: delivers the recorded outcomes;
 4. `ScriptHost::update(dt)`, run by `Application` after `onUpdate`: resumed coroutines continue;
 5. rendering, which only reads.
 
@@ -56,8 +78,10 @@ Consequences:
 - A walk that arrives in this frame's room update resumes its waiter in this frame's script
   update.
 - A walk started by a script begins moving in the next room update.
-- An operation that a script changes (`stop_walking`, a new `walk_to`, `stop_animation`) reaches
-  its waiters at the next `publish()`.
+- An operation that a script changes (`stop_walking`, a new `walk_to`, `stop_animation`) is
+  recorded at once:
+  - a later `wait(op)` in the same coroutine sees the outcome immediately;
+  - coroutines that are already waiting are notified at the next `publish()`.
 
 ## Entity references
 
@@ -116,15 +140,15 @@ actor that cannot walk. They change nothing.
 - **Already there:** returns at once, without suspending.
 - **Concurrent walks** use `spawn walk_to(guard, ...)`. There are no non-blocking variants.
 
-Internally each accepted request gets a completion token keyed by its `MovementRequestId`.
-`publish()` resolves it:
+Internally each accepted request gets a completion token keyed by its `MovementRequestId`. The
+room reports how *that* request ended, when it ends:
 
-| The actor's state at publish | The waiting coroutine |
+| The request ended because | The waiting coroutine |
 |---|---|
-| this request has Completed | resumes |
-| this request was cancelled (`stop_walking`, `set_position`, `set_direction`, an explicit `play_animation`) | is cancelled ("stopped") |
-| another request replaced it (a later `walk_to`, possibly from another coroutine) | is cancelled ("replaced") |
-| the actor or room is gone | is cancelled ("destroyed") |
+| it reached its destination | resumes |
+| it was stopped (`stop_walking`, `set_position`, `set_direction`, an explicit `play_animation`) | is cancelled ("stopped") |
+| another request replaced it (a later `walk_to`, possibly from another coroutine or from C++) | is cancelled ("replaced") |
+| the room was left or destroyed | is cancelled ("destroyed") |
 
 Cancellation is normal and is not reported as a script failure.
 
@@ -142,14 +166,14 @@ resulting **playback**. It does not suspend.
 - **Identity** is the player's playback generation
   ([Animation.md](Animation.md#playback)), not the animation name.
 
-`wait(op)` and `publish()`:
+How the playback ended, as the room reports it:
 
-| At publish | Waiters of the operation |
+| The playback | Waiters of the operation |
 |---|---|
-| same playback generation, player Finished | resume |
-| the generation changed: another `play_animation`, `stop_animation`, a walk's automatic walk/idle clip, a direction change selecting another clip | cancelled ("replaced") |
-| the entity or room is gone | cancelled ("destroyed") |
-| paused | still waiting (pausing neither completes nor cancels) |
+| finished (a non-looping clip reached its end) | resume, even if another playback started before publish |
+| ended unfinished: another `play_animation`, `stop_animation`, a walk's automatic walk/idle clip, a direction change selecting another clip | cancelled ("replaced") |
+| the room was left or destroyed | cancelled ("destroyed") |
+| is paused | still waiting (pausing neither completes nor cancels) |
 
 - **Looping animations** never complete, so waiting for one is a script error ("animation 'spin'
   loops, …"). The animation itself keeps running.
@@ -251,4 +275,11 @@ interface) covers:
   - outcomes retained after later playbacks;
 - the camera;
 - leaving the room cancelling its operations, with every token reclaimed;
+- completion recorded at the source:
+  - walk A arrives and C++ starts walk B before publish: A's waiter resumes;
+  - the same for a finished playback followed by another;
+- record and deliver separated (a stop is seen by the same coroutine at once, by suspended
+  waiters at publish);
+- destroying the active room, or the context, without detaching first;
+- 20 000 spawned coroutines reclaimed, with bounded scheduler storage;
 - the ActorDemo courtyard script running to its end on the demo's assets.

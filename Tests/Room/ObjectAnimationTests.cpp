@@ -10,6 +10,7 @@
 #include "Core/Logging/Logger.h"
 #include "Platform/FileSystem/FileSystem.h"
 #include "Platform/FileSystem/Path.h"
+#include "Core/Common/StringBuilder.h"
 #include "Room/RoomInstance.h"
 #include "Room/RoomLibrary.h"
 #include "Room/RoomResourceLoader.h"
@@ -358,8 +359,9 @@ SCHUIMM_TEST(ObjectAnimation_DrawListUsesTheCurrentFrame)
     CHECK(item->sprite.destination == (RectF{384, 278, 32, 24})); // Pivot (16, 22).
     CHECK(!item->sprite.flipX);
     // Depth: objects sort by position y with everything else; the static lamp is still drawn.
-    REQUIRE(drawn(list, 2) != nullptr);
-    CHECK(drawn(list, 2)->sprite.destination == (RectF{196, 312, 8, 8}));
+    const RoomDrawItem* lamp = drawn(list, 2);
+    REQUIRE(lamp != nullptr);
+    CHECK(lamp->sprite.destination == (RectF{196, 312, 8, 8}));
     CHECK(drawn(list, 3) == nullptr); // The hotspot has nothing to draw.
     std::vector<std::size_t> order;
     for (const RoomDrawItem& entry : list.items) order.push_back(entry.index);
@@ -416,4 +418,54 @@ SCHUIMM_TEST(ObjectAnimation_RoomsRecreateAuthoredStateAndReleasePlayback)
         CHECK(!resource.expired()); // The live instance keeps what it plays.
     }
     CHECK(resource.expired()); // Room and library gone: the playback state and resource are released.
+}
+
+namespace {
+
+struct PlaybackListener final : RoomEventListener {
+    std::vector<std::string> events;
+    void movementEnded(script::ObjectRef, MovementRequestId, MovementOutcome) override {}
+    void playbackEnded(script::ObjectRef entity, bool isActor, std::uint64_t generation, PlaybackOutcome outcome) override
+    {
+        events.push_back(concat(isActor ? "actor" : "object", " #", entity.id, " g", generation, " ", toString(outcome)));
+    }
+    void roomDestroyed() override {}
+};
+
+} // namespace
+
+SCHUIMM_TEST(ObjectAnimation_PlaybackEndsAreReportedWhenTheyHappen)
+{
+    Fixture fixture;
+    const AssetLocator locator = fixture.locator();
+    RoomLibrary library(locator, fixture.host);
+    auto room = workshop(fixture, library);
+    PlaybackListener listener;
+    room->setEventListener(&listener);
+    RoomObject& fan = *room->object("fan");
+    const std::string id = concat("object #", fan.handle().id, " g");
+    const std::uint64_t idle = fan.player().playbackGeneration();
+    REQUIRE(fan.playAnimation("burst").has_value()); // Replaces the idle playback.
+    const std::uint64_t burst = fan.player().playbackGeneration();
+    CHECK(listener.events == (std::vector<std::string>{concat(id, idle, " replaced")}));
+    REQUIRE(fan.pauseAnimation().has_value());
+    REQUIRE(fan.resumeAnimation().has_value());
+    REQUIRE(fan.playAnimation("burst").has_value()); // Continues: the same playback, nothing ends.
+    CHECK_EQ(listener.events.size(), std::size_t{1});
+    room->update(1.0);
+    CHECK_EQ(listener.events.back(), concat(id, burst, " finished"));
+    // Another playback starting after the finish does not turn it into "replaced".
+    REQUIRE(fan.playAnimation("spinning").has_value());
+    CHECK_EQ(listener.events.size(), std::size_t{2});
+    const std::uint64_t spinning = fan.player().playbackGeneration();
+    REQUIRE(fan.stopAnimation().has_value());
+    CHECK_EQ(listener.events.back(), concat(id, spinning, " replaced"));
+    REQUIRE(fan.stopAnimation().has_value()); // Already stopped.
+    CHECK_EQ(listener.events.size(), std::size_t{3});
+    // Snapshots never report.
+    RoomObject snapshot = *room->object("fan");
+    REQUIRE(snapshot.restartAnimation().has_value());
+    REQUIRE(snapshot.playAnimation("burst").has_value());
+    CHECK_EQ(listener.events.size(), std::size_t{3});
+    room->setEventListener(nullptr);
 }

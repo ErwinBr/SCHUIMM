@@ -42,6 +42,7 @@
 #include "Room/ActorInstance.h"
 #include "Room/ActorRenderState.h"
 #include "Room/RoomDrawList.h"
+#include "Room/RoomEvents.h"
 #include "Room/ObjectAnimation.h"
 #include "Room/RoomLibrary.h"
 #include "Room/RoomResource.h"
@@ -85,7 +86,8 @@ namespace schuimm::room {
 // is no move constructor (an rvalue is copied), so the room's object keeps its state.
 class RoomObject {
 public:
-    RoomObject(const RoomObject&) = default;
+    // A copy is a snapshot: it reports no events (RoomEvents.h).
+    RoomObject(const RoomObject& other);
     RoomObject& operator=(const RoomObject&) = delete;
     RoomObject& operator=(RoomObject&&) = delete;
 
@@ -120,13 +122,14 @@ public:
     // The object's playback (a player without clip for a static object).
     [[nodiscard]] const animation::AnimationPlayer& player() const noexcept { return player_; }
     // Advances playback by whole animation ticks (RoomInstance::update; nothing else does).
-    animation::AdvanceResult update(std::uint64_t ticks) noexcept { return player_.advance(ticks); }
+    animation::AdvanceResult update(std::uint64_t ticks) noexcept;
 
 private:
     friend class RoomInstance;
     RoomObject(const RoomObjectDefinition& definition, script::ObjectRef handle,
                std::shared_ptr<const ObjectAnimationSet> animations);
     [[nodiscard]] Status requireAnimated(std::string_view operation) const;
+    void reportPlaybackChange(std::uint64_t before) noexcept;
 
     const RoomObjectDefinition* definition_;
     script::ObjectRef handle_;
@@ -135,6 +138,8 @@ private:
     std::shared_ptr<const ObjectAnimationSet> animations_;
     std::string animation_;
     animation::AnimationPlayer player_;
+    const RoomEventSink* events_ = nullptr; // The room's (set by RoomInstance); null for snapshots.
+    std::uint64_t reportedGeneration_ = 0;
 };
 
 // A view of a room's actors: ActorInstance& (or const ActorInstance&) in placement order, with
@@ -260,12 +265,19 @@ public:
     // Coroutines of this instance (started by it, or spawned by those) that have not ended yet.
     [[nodiscard]] std::size_t activeCoroutineCount() const;
 
+    // Receives the room's operation events (RoomEvents.h): walks and playbacks ending, and the
+    // room's destruction. At most one listener; nullptr detaches. The listener must detach (or
+    // outlive the room) before it is destroyed.
+    void setEventListener(RoomEventListener* listener) noexcept { events_.listener = listener; }
+    [[nodiscard]] RoomEventListener* eventListener() const noexcept { return events_.listener; }
+
 private:
     RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<std::unique_ptr<ActorInstance>> actors);
 
     LoadedRoom room_;
     script::ScriptHost& host_;
     script::ExecutionOwner owner_; // Of every coroutine this instance starts (and they spawn).
+    RoomEventSink events_;         // Shared by the actors and objects (stable address).
     std::vector<RoomObject> objects_;
     std::vector<std::unique_ptr<ActorInstance>> actors_;
     animation::AnimationClock clock_;

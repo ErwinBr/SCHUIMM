@@ -587,3 +587,67 @@ SCHUIMM_TEST(Coroutine_SpawnBytecodeIsValidated)
     REQUIRE(!typed.has_value());
     CHECK(contains(typed.error().message, "spawn stores its coroutine in register"));
 }
+
+SCHUIMM_TEST(Completion_RecordingAndDeliveringAreSeparate)
+{
+    Fixture f;
+    f.newToken();
+    f.newToken();
+    const auto program = f.load("func waiter():\n\twalk(0)\n\tlog(\"resumed\")\n"
+                                "func late():\n\twalk(1)\n\tlog(\"never\")\n");
+    const CoroutineHandle waiter = f.start(program, "waiter");
+    f.run(2);
+    REQUIRE(f.scheduler.state(waiter) == CoroutineState::Waiting);
+    // Recorded: the outcome is fixed and visible, but nobody is notified yet.
+    f.tokens[0]->recordCompleted();
+    f.tokens[0]->recordCancelled("too late"); // First record wins.
+    CHECK(f.tokens[0]->state() == CompletionToken::State::Completed);
+    CHECK(!f.tokens[0]->isDelivered());
+    f.run(2);
+    CHECK(f.scheduler.state(waiter) == CoroutineState::Waiting);
+    CHECK(f.output.empty());
+    f.tokens[0]->deliver();
+    f.tokens[0]->deliver(); // Once.
+    CHECK(f.scheduler.state(waiter) == CoroutineState::Ready);
+    f.run(1);
+    CHECK_EQ(f.joined(), std::string("5:resumed\n"));
+    // A new wait on a recorded (undelivered) cancellation is cancelled at once.
+    f.tokens[1]->recordCancelled("stopped");
+    const CoroutineHandle late = f.start(program, "late");
+    f.run(1);
+    CHECK(f.scheduler.state(late) == CoroutineState::Cancelled);
+    CHECK_EQ(f.tokens[1]->waiterCount(), std::size_t{0});
+    // Delivering before anything is recorded does nothing.
+    f.newToken();
+    f.tokens[2]->deliver();
+    CHECK(!f.tokens[2]->isDelivered());
+}
+
+SCHUIMM_TEST(Coroutine_ABareSchedulerReclaimsWhatItsOwnerReleases)
+{
+    // The policy (ScriptScheduler.h): ended records stay until released. Spawning short-lived
+    // coroutines therefore grows a bare scheduler unless its owner calls releaseFinished();
+    // with it, freed slots are reused.
+    const auto spawner = [](Fixture& f) {
+        return f.load("func blink():\n\tpass\n"
+                      "func main():\n\tfor i in range(2000):\n\t\tspawn blink()\n\t\tif i % 50 == 49:\n\t\t\tyield()\n");
+    };
+    {
+        Fixture f;
+        f.start(spawner(f));
+        f.run(60);
+        CHECK(f.scheduler.size() > std::size_t{2000}); // Every ended record kept.
+    }
+    {
+        Fixture f;
+        f.start(spawner(f));
+        std::size_t largest = 0;
+        for (int i = 0; i < 60; ++i) {
+            f.scheduler.update(0.0);
+            f.scheduler.releaseFinished();
+            largest = std::max(largest, f.scheduler.slotCapacity());
+        }
+        CHECK_EQ(f.scheduler.size(), std::size_t{0});
+        CHECK(largest <= std::size_t{128});
+    }
+}

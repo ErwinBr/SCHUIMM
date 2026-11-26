@@ -67,7 +67,9 @@ RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vecto
     for (std::size_t i = 0; i < definitions.size(); ++i) {
         objects_.push_back(RoomObject(definitions[i], detail::allocateObjectHandle(),
                                       i < room_.objectAnimations.size() ? room_.objectAnimations[i] : nullptr));
+        objects_.back().events_ = &events_; // After the copy into the vector (copies report nothing).
     }
+    for (const std::unique_ptr<ActorInstance>& actor : actors_) actor->events_ = &events_;
 }
 
 RoomInstance::~RoomInstance()
@@ -75,6 +77,11 @@ RoomInstance::~RoomInstance()
     // Checked in every build: a native of this room's script may be running, and it would go on
     // using a room that no longer exists.
     SCHUIMM_VERIFY(!host_.isUpdating(), "a RoomInstance must not be destroyed while the ScriptHost updates");
+    // Listeners learn of the destruction while the room and its entities still exist.
+    if (RoomEventListener* listener = events_.listener) {
+        events_.listener = nullptr;
+        listener->roomDestroyed();
+    }
     // Everything the room started, and everything those coroutines spawned.
     host_.cancelOwner(owner_);
 }
@@ -89,8 +96,42 @@ RoomObject::RoomObject(const RoomObjectDefinition& definition, script::ObjectRef
     if (animations_) {
         // Validated when loading: the default animation exists.
         animation_ = animations_->defaultAnimation;
-        player_.play(*animations_->find(animation_));
+        const animation::AnimationClipRef* clip = animations_->find(animation_);
+        SCHUIMM_ASSERT(clip != nullptr, "the default animation is validated when the room is loaded");
+        if (clip != nullptr) player_.play(*clip);
     }
+}
+
+RoomObject::RoomObject(const RoomObject& other)
+    : flags(other.flags)
+    , definition_(other.definition_)
+    , handle_(other.handle_)
+    , position_(other.position_)
+    , visible_(other.visible_)
+    , animations_(other.animations_)
+    , animation_(other.animation_)
+    , player_(other.player_)
+    , reportedGeneration_(other.reportedGeneration_)
+{
+}
+
+void RoomObject::reportPlaybackChange(std::uint64_t before) noexcept
+{
+    if (player_.playbackGeneration() == before || reportedGeneration_ == before) return;
+    reportedGeneration_ = before;
+    if (events_ != nullptr) events_->playbackEnded(handle_, false, before, PlaybackOutcome::Replaced);
+}
+
+animation::AdvanceResult RoomObject::update(std::uint64_t ticks) noexcept
+{
+    const animation::AdvanceResult result = player_.advance(ticks);
+    if (result.finished) {
+        reportedGeneration_ = player_.playbackGeneration();
+        if (events_ != nullptr) {
+            events_->playbackEnded(handle_, false, player_.playbackGeneration(), PlaybackOutcome::Finished);
+        }
+    }
+    return result;
 }
 
 Status RoomObject::setPosition(Vec2 position)
@@ -119,7 +160,9 @@ Status RoomObject::playAnimation(std::string_view name)
     if (clip == nullptr) {
         return makeError(ErrorCode::NotFound, concat("object '", id(), "' has no animation '", name, "'"));
     }
+    const std::uint64_t before = player_.playbackGeneration();
     player_.play(*clip);
+    reportPlaybackChange(before);
     animation_ = std::string(name);
     return {};
 }
@@ -127,7 +170,9 @@ Status RoomObject::playAnimation(std::string_view name)
 Status RoomObject::restartAnimation()
 {
     if (auto status = requireAnimated("restarting an animation"); !status) return status;
+    const std::uint64_t before = player_.playbackGeneration();
     player_.restart();
+    reportPlaybackChange(before);
     return {};
 }
 
@@ -148,7 +193,9 @@ Status RoomObject::resumeAnimation()
 Status RoomObject::stopAnimation()
 {
     if (auto status = requireAnimated("stopping an animation"); !status) return status;
+    const std::uint64_t before = player_.playbackGeneration();
     player_.stop();
+    reportPlaybackChange(before);
     return {};
 }
 

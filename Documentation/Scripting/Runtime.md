@@ -306,6 +306,17 @@ terminal; the coroutine's frames and values are released at once, but its state,
 result stay queryable until `release()` / `releaseFinished()`. Handles are generation-checked,
 so a stale handle never refers to a new coroutine.
 
+**Reclamation policy.** An ended coroutine keeps a small record (state, error, result) until it is
+released, and freed slots are reused.
+- `ScriptHost::update` calls `releaseFinished()` after every scheduler update. That includes
+  spawned coroutines whose handles a script discarded (`spawn blink()` in a loop). A host's
+  storage is therefore bounded by the number of coroutines alive at once.
+  `scheduler().slotCapacity()` reports it.
+- A bare `ScriptScheduler` reclaims only what its owner releases, so its owner calls
+  `releaseFinished()` regularly.
+
+Scripts cannot inspect an ended coroutine (there is no joining), so nothing is lost.
+
 ### Update
 
 `update(deltaSeconds)`:
@@ -363,8 +374,14 @@ A `RoomInstance` owns the coroutines it starts and cancels its owner when it is 
 
 A `CompletionToken` (`Runtime/Completion.h`) represents **one** accepted engine operation, such
 as a walk request or an animation playback. It is never "whatever the actor is doing now".
-- **Resolution.** The engine resolves it once: `complete()` or `cancel(reason)`, with reasons
-  such as "stopped", "replaced" or "destroyed". Later calls do nothing.
+- **Resolution, in two steps** that an engine system may separate:
+  - `recordCompleted()` / `recordCancelled(reason)` fix the outcome the moment the operation
+    ends. The first record wins, and reasons are such as "stopped", "replaced" or "destroyed".
+    `state()` reports the outcome at once, and a new wait sees it, but nobody is notified.
+  - `deliver()` notifies the waiters, once, at a safe point; the adventure layer does it in
+    `publish()`.
+
+  `complete()` and `cancel(reason)` do both.
 - **Lifetime.** It is reference-counted (non-atomic; game thread only). It is held by the engine,
   by `operation` values in scripts and by waiting coroutines, and freed with its last reference.
   There is no history and no registry.
@@ -372,12 +389,12 @@ as a walk request or an animation playback. It is never "whatever the actor is d
   entity started another operation before the waiter resumed.
 - **Waiting.** A native suspends its caller with `NativeResult::await(token, abandonCancels)`
   ([Native functions](#native-functions)). The scheduler subscribes the coroutine to the token.
-  Resolving the token notifies each subscribed coroutine exactly once:
-  - completed makes it Ready, and it runs from the scheduler loop. Resolving never runs script
-    code, so a native or engine system may resolve tokens at any time without recursion;
+  Delivering notifies each subscribed coroutine exactly once:
+  - completed makes it Ready, and it runs from the scheduler loop. Delivering never runs script
+    code, so a native or engine system may deliver at any time without recursion;
   - cancelled cancels it.
-- **Before the wait.** A token resolved before the wait is not lost: completed returns at once,
-  cancelled cancels the caller.
+- **Before the wait.** A token recorded before the wait, delivered or not, is not lost: completed
+  returns at once, cancelled cancels the caller.
 - **Not awaitable.** `setNotAwaitable(message)` marks an operation that never ends by itself;
   waiting for it is a Native error with that message.
 - **Abandoning.** `setAbandonHandler` lets the engine stop an operation whose waiter gave up

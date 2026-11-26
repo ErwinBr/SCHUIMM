@@ -733,3 +733,132 @@ SCHUIMM_TEST(Adventure_TheDemoCourtyardScriptRunsToTheEnd)
         adventure.setActiveRoom(nullptr);
     }
 }
+
+// --- Outcomes are recorded when they happen (review fixes) ----------------------------------------
+
+SCHUIMM_TEST(Adventure_ACompletedWalkStaysCompletedWhenAnotherStartsBeforePublish)
+{
+    Fixture f;
+    f.start("func main():\n\twalk_to(get_actor(\"hero\"), vec2(150, 100))\n\tprint(\"A arrived\")\n");
+    f.frame(); // Walk A starts; its coroutine waits.
+    room::ActorInstance& hero = f.actor("hero");
+    // Room updates without publishing, until A arrives.
+    for (int i = 0; i < 20 && hero.isWalking(); ++i) f.room->update(0.1);
+    REQUIRE(hero.movementStatus() == room::MovementStatus::Completed);
+    // C++ starts walk B before the next publish.
+    REQUIRE(f.room->walkTo(hero, {300, 100}).has_value());
+    REQUIRE(hero.isWalking());
+    f.adventure.publish();
+    f.host.update(0.1);
+    CHECK_EQ(f.joined(), std::string("A arrived\n")); // Not cancelled as "replaced".
+    CHECK_EQ(f.cancelled, 0);
+    CHECK(hero.isWalking()); // B goes on.
+}
+
+SCHUIMM_TEST(Adventure_AFinishedPlaybackStaysFinishedWhenAnotherStartsBeforePublish)
+{
+    Fixture f;
+    f.start("func main():\n\twait(play_animation(get_actor(\"hero\"), \"wave\"))\n\tprint(\"waved\")\n");
+    f.frame();
+    room::ActorInstance& hero = f.actor("hero");
+    for (int i = 0; i < 20 && hero.playbackStatus() != animation::PlaybackStatus::Finished; ++i) f.room->update(0.05);
+    REQUIRE(hero.playbackStatus() == animation::PlaybackStatus::Finished);
+    REQUIRE(hero.playAnimation("idle").has_value()); // Another playback, before publish.
+    f.adventure.publish();
+    f.host.update(0.1);
+    CHECK_EQ(f.joined(), std::string("waved\n"));
+    CHECK_EQ(f.cancelled, 0);
+}
+
+SCHUIMM_TEST(Adventure_CancellationIsRecordedAtOnceAndDeliveredAtPublish)
+{
+    Fixture f;
+    // Recorded at once: the same coroutine's wait sees the stopped playback without suspending.
+    f.start("func main():\n\tvar fan = get_object(\"fan\")\n\tvar burst = play_animation(fan, \"burst\")\n"
+            "\tstop_animation(fan)\n\twait(burst)\n\tprint(\"never\")\n");
+    f.frame();
+    CHECK_EQ(f.cancelled, 1); // In this frame's script update, not a frame later.
+    CHECK(f.output.empty());
+    // A waiter that is already suspended hears of it at the next publish, not inside the native.
+    f.cancelled = 0;
+    const auto program = f.load("func walker():\n\twalk_to(get_actor(\"hero\"), vec2(350, 100))\n\tprint(\"never\")\n"
+                                "func stopper():\n\tyield()\n\tstop_walking(get_actor(\"hero\"))\n\tprint(\"stopped\")\n");
+    REQUIRE(f.host.start(program, "walker").has_value());
+    REQUIRE(f.host.start(program, "stopper").has_value());
+    f.frame(); // walker waits; stopper yields.
+    f.frame(); // stopper stops the walk: recorded, not delivered yet.
+    CHECK_EQ(f.joined(), std::string("stopped\n"));
+    CHECK_EQ(f.cancelled, 0);
+    CHECK_EQ(f.adventure.undelivered(), std::size_t{1});
+    CHECK_EQ(f.adventure.pendingWalks(), std::size_t{0});
+    f.frame(); // publish delivers; the waiter is cancelled.
+    CHECK_EQ(f.cancelled, 1);
+    CHECK_EQ(f.adventure.undelivered(), std::size_t{0});
+    CHECK(f.errors.empty());
+}
+
+SCHUIMM_TEST(Adventure_DestroyingTheActiveRoomDetachesItSafely)
+{
+    Fixture f;
+    const auto program = f.load("func walker():\n\twalk_to(get_actor(\"hero\"), vec2(350, 100))\n\tprint(\"never\")\n"
+                                "func waver():\n\twait(play_animation(get_object(\"fan\"), \"burst\"))\n\tprint(\"never\")\n"
+                                "func probe():\n\tprint(is_valid(get_actor(\"hero\")))\n\tset_visible(get_actor(\"hero\"), False)\n");
+    REQUIRE(f.host.start(program, "walker").has_value());
+    REQUIRE(f.host.start(program, "waver").has_value());
+    f.frame();
+    REQUIRE(f.adventure.pendingWalks() == 1);
+    f.room.reset(); // Without setActiveRoom(nullptr) first.
+    CHECK(f.adventure.activeRoom() == nullptr);
+    CHECK_EQ(f.cancelled, 2); // Both waiters, "destroyed", at once.
+    CHECK_EQ(f.adventure.pendingWalks(), std::size_t{0});
+    CHECK_EQ(f.adventure.pendingPlaybacks(), std::size_t{0});
+    REQUIRE(f.host.start(program, "probe").has_value());
+    f.frames(3); // publish, natives and abandon paths with no room: nothing touches freed state.
+    CHECK_EQ(f.joined(), std::string("False\n"));
+    REQUIRE(f.errors.size() == 1);
+    CHECK(contains(f.firstError(), "the actor reference is null"));
+}
+
+SCHUIMM_TEST(Adventure_DestroyingTheContextDetachesItFromTheRoom)
+{
+    Fixture f;
+    {
+        Logger logger{LogLevel::Off};
+        script::ScriptHost host{logger};
+        auto context = std::make_unique<AdventureContext>();
+        REQUIRE(context->bind(host.natives()).has_value());
+        context->setActiveRoom(f.room.get()); // Takes the room's listener over from f.adventure.
+        CHECK(f.room->eventListener() != nullptr);
+        host.stopAll();
+        context.reset();
+        CHECK(f.room->eventListener() == nullptr);
+    }
+    // The room keeps working without a listener.
+    room::ActorInstance& hero = f.actor("hero");
+    REQUIRE(f.room->walkTo(hero, {300, 100}).has_value());
+    REQUIRE(hero.playAnimation("wave").has_value());
+    hero.stopWalking();
+    f.room->update(1.0);
+    f.adventure.setActiveRoom(nullptr);
+}
+
+// --- Coroutine reclamation ------------------------------------------------------------------------------
+
+SCHUIMM_TEST(Adventure_SpawnedCoroutinesAreReclaimed)
+{
+    Fixture f;
+    f.start("func blink():\n\tpass\n"
+            "func main():\n\tfor i in range(20000):\n\t\tspawn blink()\n\t\tif i % 100 == 99:\n\t\t\tyield()\n"
+            "\tprint(\"spawned 20000\")\n");
+    std::size_t largest = 0;
+    for (int frame = 0; frame < 400 && f.output.empty(); ++frame) {
+        f.frame();
+        largest = std::max(largest, f.host.scheduler().slotCapacity());
+    }
+    f.frame();
+    CHECK_EQ(f.joined(), std::string("spawned 20000\n"));
+    CHECK(f.errors.empty());
+    // At most the coroutines alive at once (main and one batch of 100), never 20000.
+    CHECK(largest <= std::size_t{256});
+    CHECK_EQ(f.host.scheduler().size(), std::size_t{0}); // Every ended record was released.
+}

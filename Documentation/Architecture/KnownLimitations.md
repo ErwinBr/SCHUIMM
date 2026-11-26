@@ -135,8 +135,8 @@ Language scope (version 2.0, see [Language.md](../Scripting/Language.md#12-limit
 * ActorDemo's camera follows the hero every frame, so a script's `set_camera_position` there lasts
   only until the next frame (zoom is kept);
 * the adventure API acts on one active room; room transitions, global script modules and actor
-  scripts are Part II. The game must call `AdventureContext::setActiveRoom(nullptr)` before
-  destroying the active room (it cannot detect it);
+  scripts are Part II. The `AdventureContext` must outlive the coroutines that call its natives
+  (the ownership model is Part II);
 * one source file is one program; natives are linked by exact signature, and engine enums by
   qualified name and members.
 * Format 2.0 does not read 1.x bytecode: scripts are recompiled from source.

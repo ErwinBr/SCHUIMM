@@ -14,6 +14,7 @@ add_library(schuimm_room STATIC
     Facing.cpp
     ObjectHandles.cpp
     Perspective.cpp
+    RoomEvents.cpp
     RoomInstance.cpp
     RoomLibrary.cpp
     RoomResourceLoader.cpp

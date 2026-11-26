@@ -36,9 +36,21 @@ void CompletionToken::release() noexcept
     }
 }
 
-void CompletionToken::complete() { resolve(State::Completed, {}); }
+void CompletionToken::recordCompleted() { record(State::Completed, {}); }
 
-void CompletionToken::cancel(std::string reason) { resolve(State::Cancelled, std::move(reason)); }
+void CompletionToken::recordCancelled(std::string reason) { record(State::Cancelled, std::move(reason)); }
+
+void CompletionToken::complete()
+{
+    recordCompleted();
+    deliver();
+}
+
+void CompletionToken::cancel(std::string reason)
+{
+    recordCancelled(std::move(reason));
+    deliver();
+}
 
 void CompletionToken::setNotAwaitable(std::string message)
 {
@@ -46,14 +58,22 @@ void CompletionToken::setNotAwaitable(std::string message)
     notAwaitable_ = std::move(message);
 }
 
-void CompletionToken::resolve(State state, std::string reason)
+void CompletionToken::record(State state, std::string reason)
 {
     if (state_ != State::Pending) {
         return;
     }
     state_ = state;
     reason_ = std::move(reason);
-    abandon_ = nullptr; // Resolved: nothing left to abandon (and no captured state to keep).
+    abandon_ = nullptr; // Ended: nothing left to abandon (and no captured state to keep).
+}
+
+void CompletionToken::deliver()
+{
+    if (state_ == State::Pending || delivered_) {
+        return;
+    }
+    delivered_ = true;
     // Notifying may drop the last other references (a cancelled waiter releases its frames).
     const CompletionRef keepAlive = CompletionRef::share(this);
     std::vector<Waiter> waiters = std::move(waiters_);

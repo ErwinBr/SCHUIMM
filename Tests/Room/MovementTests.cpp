@@ -7,6 +7,7 @@
 #include "TestPng.h"
 
 #include "Core/Common/GeometryPredicates.h"
+#include "Core/Common/StringBuilder.h"
 #include "Core/Logging/Logger.h"
 #include "Platform/FileSystem/FileSystem.h"
 #include "Platform/FileSystem/Path.h"
@@ -15,11 +16,13 @@
 #include "Room/RoomLibrary.h"
 #include "Script/Runtime/ScriptHost.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using namespace schuimm;
 using namespace schuimm::room;
@@ -842,4 +845,94 @@ SCHUIMM_TEST(Movement_WalkingOnDiagonalEdgesFarFromTheOrigin)
         room->update(1000.0);
         CHECK(hero.position() == (Vec2{60600, 60500}));
     }
+}
+
+// --- Operation events (RoomEvents.h) ---------------------------------------------------------------
+
+namespace {
+
+struct RecordingListener final : RoomEventListener {
+    std::vector<std::string> events;
+    int destroyed = 0;
+
+    void movementEnded(script::ObjectRef actor, MovementRequestId request, MovementOutcome outcome) override
+    {
+        events.push_back(concat("walk #", actor.id, ".", request, " ", toString(outcome)));
+    }
+    void playbackEnded(script::ObjectRef entity, bool isActor, std::uint64_t generation, PlaybackOutcome outcome) override
+    {
+        events.push_back(concat(isActor ? "actor" : "object", " #", entity.id, " g", generation, " ", toString(outcome)));
+    }
+    void roomDestroyed() override { ++destroyed; }
+
+    [[nodiscard]] std::size_t count(std::string_view part) const
+    {
+        return static_cast<std::size_t>(
+            std::count_if(events.begin(), events.end(), [&](const std::string& e) { return e.find(part) != std::string::npos; }));
+    }
+};
+
+} // namespace
+
+SCHUIMM_TEST(Movement_EveryEndedRequestIsReportedOnceWithItsOutcome)
+{
+    MovementFixture fixture;
+    auto room = fixture.room("Flat");
+    RecordingListener listener;
+    room->setEventListener(&listener);
+    ActorInstance& hero = *room->actor("hero");
+    const auto walk = [&](Vec2 to) { return room->walkTo(hero, to).value().id; };
+    const std::string id = concat("walk #", hero.handle().id, ".");
+
+    const MovementRequestId arrive = walk({150, 100});
+    run(*room, 1.0, 0.1);
+    CHECK_EQ(listener.count(concat(id, arrive, " completed")), std::size_t{1});
+
+    const MovementRequestId replaced = walk({300, 100});
+    const MovementRequestId stopped = walk({300, 200}); // Replaces the walk in progress.
+    CHECK_EQ(listener.count(concat(id, replaced, " replaced")), std::size_t{1});
+    room->update(0.1);
+    hero.stopWalking();
+    hero.stopWalking(); // Not walking any more: nothing more to report.
+    CHECK_EQ(listener.count(concat(id, stopped, " stopped")), std::size_t{1});
+
+    const MovementRequestId moved = walk({300, 200});
+    REQUIRE(hero.setPosition({200, 200}).has_value());
+    CHECK_EQ(listener.count(concat(id, moved, " stopped")), std::size_t{1});
+
+    const MovementRequestId animated = walk({100, 200});
+    REQUIRE(hero.playAnimation("idle").has_value()); // An explicit animation stops the walk.
+    CHECK_EQ(listener.count(concat(id, animated, " stopped")), std::size_t{1});
+
+    // A request that needs no walking completes at once, and replaces a walk in progress.
+    const MovementRequestId walking = walk({300, 250});
+    const MovementRequestId here = walk(hero.position());
+    CHECK_EQ(listener.count(concat(id, walking, " replaced")), std::size_t{1});
+    CHECK_EQ(listener.count(concat(id, here, " completed")), std::size_t{1});
+    CHECK_EQ(listener.count("walk #"), std::size_t{7}); // Exactly one event per request.
+
+    // Walking switches clips (idle -> walk -> idle): each switch reports the playback it ended.
+    CHECK(listener.count(concat("actor #", hero.handle().id)) >= std::size_t{2});
+    CHECK_EQ(listener.count(" finished"), std::size_t{0}); // Looping clips never finish.
+    // A failed request reports nothing.
+    const std::size_t before = listener.events.size();
+    CHECK(!room->walkTo(*room->actor("plant"), {60, 60}).has_value());
+    CHECK_EQ(listener.events.size(), before);
+
+    room.reset();
+    CHECK_EQ(listener.destroyed, 1);
+}
+
+SCHUIMM_TEST(Movement_ActorsOutsideARoomReportNothing)
+{
+    MovementFixture fixture;
+    auto room = fixture.room("Flat");
+    RecordingListener listener;
+    room->setEventListener(&listener);
+    room->setEventListener(nullptr); // Detached: nothing is reported.
+    REQUIRE(room->walkTo(*room->actor("hero"), {150, 100}).has_value());
+    run(*room, 1.0, 0.1);
+    CHECK(listener.events.empty());
+    room.reset();
+    CHECK_EQ(listener.destroyed, 0);
 }

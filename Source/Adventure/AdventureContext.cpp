@@ -71,25 +71,78 @@ std::uint32_t directionFromFacing(room::Facing facing) noexcept
     return 4; // SOUTH; unreachable: the table covers every facing.
 }
 
-AdventureContext::~AdventureContext() { cancelAll("destroyed"); }
+AdventureContext::~AdventureContext() { detach(); }
 
 void AdventureContext::cancelAll(const std::string& reason)
 {
-    // Move the records out first: cancelling notifies schedulers, whose abandon handlers could
-    // otherwise see half-cleared lists.
+    // Move the records out first: delivering notifies schedulers, whose abandon handlers may
+    // reach the room and report events back here.
     std::vector<Walk> walks = std::move(walks_);
     std::vector<Playback> playbacks = std::move(playbacks_);
+    std::vector<script::CompletionRef> recorded = std::move(recorded_);
     walks_.clear();
     playbacks_.clear();
-    for (Walk& walk : walks) walk.token->cancel(reason);
-    for (Playback& playback : playbacks) playback.token->cancel(reason);
+    recorded_.clear();
+    for (Walk& walk : walks) walk.token->recordCancelled(reason);
+    for (Playback& playback : playbacks) playback.token->recordCancelled(reason);
+    // Safe to notify now: rooms are only attached, detached and destroyed between frames.
+    for (Walk& walk : walks) walk.token->deliver();
+    for (Playback& playback : playbacks) playback.token->deliver();
+    for (script::CompletionRef& token : recorded) token->deliver();
+}
+
+void AdventureContext::detach()
+{
+    if (room_ != nullptr) {
+        room_->setEventListener(nullptr);
+        room_ = nullptr;
+    }
+    cancelAll("destroyed");
 }
 
 void AdventureContext::setActiveRoom(room::RoomInstance* room)
 {
     if (room == room_) return;
-    cancelAll("destroyed");
+    detach();
     room_ = room;
+    if (room_ != nullptr) room_->setEventListener(this);
+}
+
+void AdventureContext::roomDestroyed()
+{
+    // The room calls this first thing in its destructor (it already forgot this listener).
+    room_ = nullptr;
+    cancelAll("destroyed");
+}
+
+void AdventureContext::movementEnded(script::ObjectRef actor, room::MovementRequestId request, room::MovementOutcome outcome)
+{
+    const auto walk = std::find_if(walks_.begin(), walks_.end(),
+                                   [&](const Walk& w) { return w.actor == actor && w.request == request; });
+    if (walk == walks_.end()) return; // Not a script's walk (or already ended).
+    if (outcome == room::MovementOutcome::Completed) {
+        walk->token->recordCompleted();
+    } else {
+        walk->token->recordCancelled(toString(outcome));
+    }
+    recorded_.push_back(std::move(walk->token));
+    walks_.erase(walk);
+}
+
+void AdventureContext::playbackEnded(script::ObjectRef entity, bool isActor, std::uint64_t generation,
+                                     room::PlaybackOutcome outcome)
+{
+    const auto playback = std::find_if(playbacks_.begin(), playbacks_.end(), [&](const Playback& p) {
+        return p.entity == entity && p.actor == isActor && p.generation == generation;
+    });
+    if (playback == playbacks_.end()) return; // Nobody asked for an operation for it.
+    if (outcome == room::PlaybackOutcome::Finished) {
+        playback->token->recordCompleted();
+    } else {
+        playback->token->recordCancelled(toString(outcome));
+    }
+    recorded_.push_back(std::move(playback->token));
+    playbacks_.erase(playback);
 }
 
 Result<AdventureContext::Entity> AdventureContext::resolve(const Value& reference) const
@@ -172,60 +225,13 @@ NativeResult AdventureContext::playAnimation(const Value& entityValue, std::stri
 
 void AdventureContext::publish()
 {
-    // Resolve outside the loops: resolving notifies schedulers, and their abandon handlers may
-    // touch actors (never these lists).
-    std::vector<std::pair<script::CompletionRef, std::string>> cancelled;
-    std::vector<script::CompletionRef> completed;
-    std::erase_if(walks_, [&](const Walk& walk) {
-        const room::ActorInstance* actor = room_ != nullptr ? room_->actor(walk.actor) : nullptr;
-        if (actor == nullptr) {
-            cancelled.emplace_back(walk.token, "destroyed");
-            return true;
-        }
-        const room::MovementState& state = actor->movement();
-        if (state.request != walk.request) {
-            cancelled.emplace_back(walk.token, "replaced");
-            return true;
-        }
-        if (state.status == room::MovementStatus::Completed) {
-            completed.push_back(walk.token);
-            return true;
-        }
-        if (state.status != room::MovementStatus::Moving) {
-            cancelled.emplace_back(walk.token, "stopped");
-            return true;
-        }
-        return false;
-    });
-    std::erase_if(playbacks_, [&](const Playback& playback) {
-        if (playback.token->referenceCount() == 1 || !playback.token->isPending()) {
-            return true; // Nobody can observe it any more (no script value, no waiter).
-        }
-        Entity entity;
-        if (room_ != nullptr) {
-            if (playback.actor) {
-                entity.actor = room_->actor(playback.entity);
-            } else {
-                entity.object = room_->object(playback.entity);
-            }
-        }
-        if (entity.actor == nullptr && entity.object == nullptr) {
-            cancelled.emplace_back(playback.token, "destroyed");
-            return true;
-        }
-        const animation::AnimationPlayer& player = playerOf(entity);
-        if (player.playbackGeneration() != playback.generation) {
-            cancelled.emplace_back(playback.token, "replaced");
-            return true;
-        }
-        if (player.status() == animation::PlaybackStatus::Finished) {
-            completed.push_back(playback.token);
-            return true;
-        }
-        return false;
-    });
-    for (const script::CompletionRef& token : completed) token->complete();
-    for (const auto& [token, reason] : cancelled) token->cancel(reason);
+    // Outcomes were recorded when they happened; this only tells the waiters. Delivering may
+    // cancel coroutines, whose abandon handlers can report new events: take the list first.
+    std::vector<script::CompletionRef> recorded = std::move(recorded_);
+    recorded_.clear();
+    for (const script::CompletionRef& token : recorded) token->deliver();
+    // A playback nobody can observe (no script value, no waiter) needs no record.
+    std::erase_if(playbacks_, [](const Playback& playback) { return playback.token->referenceCount() == 1; });
 }
 
 Status AdventureContext::bind(script::NativeRegistry& registry)

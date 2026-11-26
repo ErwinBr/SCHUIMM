@@ -134,10 +134,51 @@ Status ActorInstance::setWalkSpeed(float speed)
     return {};
 }
 
+void ActorInstance::endWalk(MovementOutcome outcome)
+{
+    if (!movement_.isMoving()) return;
+    const MovementRequestId request = movement_.state().request;
+    movement_.cancel();
+    if (events_ != nullptr) events_->movementEnded(handle_, request, outcome);
+}
+
+void ActorInstance::reportPlaybackChange(std::uint64_t before) noexcept
+{
+    if (player_.playbackGeneration() == before || reportedGeneration_ == before) return;
+    reportedGeneration_ = before;
+    if (events_ != nullptr) events_->playbackEnded(handle_, true, before, PlaybackOutcome::Replaced);
+}
+
+void ActorInstance::restartAnimation() noexcept
+{
+    const std::uint64_t before = player_.playbackGeneration();
+    player_.restart();
+    reportPlaybackChange(before);
+}
+
+void ActorInstance::stopAnimation() noexcept
+{
+    const std::uint64_t before = player_.playbackGeneration();
+    player_.stop();
+    reportPlaybackChange(before);
+}
+
+animation::AdvanceResult ActorInstance::update(std::uint64_t ticks) noexcept
+{
+    const animation::AdvanceResult result = player_.advance(ticks);
+    if (result.finished) {
+        reportedGeneration_ = player_.playbackGeneration();
+        if (events_ != nullptr) {
+            events_->playbackEnded(handle_, true, player_.playbackGeneration(), PlaybackOutcome::Finished);
+        }
+    }
+    return result;
+}
+
 void ActorInstance::stopWalking()
 {
     if (!movement_.isMoving()) return;
-    movement_.cancel();
+    endWalk(MovementOutcome::Stopped);
     // The idle animation was checked for every facing of the walk when it was accepted.
     const Status idle = changeAnimation(resource_->movement->idleAnimation, facing_, RestartFinished::No);
     SCHUIMM_ASSERT(idle.has_value(), "the idle animation resolves for every facing of an accepted walk");
@@ -146,6 +187,7 @@ void ActorInstance::stopWalking()
 void ActorInstance::beginWalk(MovementRequestId request, Vec2 requested, Vec2 resolved, std::vector<Vec2> path,
                               Facing facing)
 {
+    endWalk(MovementOutcome::Replaced); // The walk in progress, if any.
     movement_.start(request, requested, resolved, std::move(path));
     // Entering locomotion: the walk clip must play, even if it was selected but stopped, finished
     // or paused before (it continues if it was already playing). Turns during the walk instead keep
@@ -158,7 +200,9 @@ void ActorInstance::beginWalk(MovementRequestId request, Vec2 requested, Vec2 re
 void ActorInstance::completeWalk(MovementRequestId request, Vec2 requested, Vec2 resolved)
 {
     const bool wasWalking = movement_.isMoving();
+    endWalk(MovementOutcome::Replaced);
     movement_.completeImmediately(request, requested, resolved);
+    if (events_ != nullptr) events_->movementEnded(handle_, request, MovementOutcome::Completed);
     if (wasWalking) {
         const Status idle = changeAnimation(resource_->movement->idleAnimation, facing_, RestartFinished::No);
         SCHUIMM_ASSERT(idle.has_value(), "the idle animation was checked before completing the walk");
@@ -173,6 +217,7 @@ void ActorInstance::advanceMovement(double seconds)
         movement_.advance(seconds, static_cast<double>(walkSpeed_), config.perspectiveSpeed ? perspective_ : nullptr);
     position_ = step.position;
     if (step.arrived) {
+        if (events_ != nullptr) events_->movementEnded(handle_, movement_.state().request, MovementOutcome::Completed);
         // Face the way the last segment was walked, even if it was entered and finished within this
         // update (so the final facing does not depend on the update rate).
         Facing facing = facing_;
@@ -200,7 +245,9 @@ Status ActorInstance::changeAnimation(std::string_view name, Facing facing, Rest
     if (!(clip->clip == player_.clip()) || restart == RestartFinished::Yes) {
         // A different clip starts from its beginning; for the same clip, play() restarts it only
         // if it is stopped or finished and leaves it untouched if it is playing or paused.
+        const std::uint64_t before = player_.playbackGeneration();
         player_.play(std::move(clip->clip));
+        reportPlaybackChange(before);
     }
     return {};
 }
@@ -210,21 +257,21 @@ Status ActorInstance::changeAnimation(std::string_view name, Facing facing, Rest
 Status ActorInstance::setAnimation(std::string_view name, Facing facing)
 {
     auto status = changeAnimation(name, facing, RestartFinished::No);
-    if (status) movement_.cancel();
+    if (status) endWalk(MovementOutcome::Stopped);
     return status;
 }
 
 Status ActorInstance::setFacing(Facing facing)
 {
     auto status = changeAnimation(animation_, facing, RestartFinished::No);
-    if (status) movement_.cancel();
+    if (status) endWalk(MovementOutcome::Stopped);
     return status;
 }
 
 Status ActorInstance::playAnimation(std::string_view name)
 {
     auto status = changeAnimation(name, facing_, RestartFinished::Yes);
-    if (status) movement_.cancel();
+    if (status) endWalk(MovementOutcome::Stopped);
     return status;
 }
 
