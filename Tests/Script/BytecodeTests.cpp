@@ -1,5 +1,6 @@
 #include "ScriptTestSupport.h"
 
+#include "Core/Common/StringBuilder.h"
 #include "Script/Bytecode/BytecodeFormat.h"
 #include "Script/Bytecode/Crc32.h"
 #include "Script/Bytecode/Disassembler.h"
@@ -17,7 +18,7 @@ namespace {
 const char* sampleSource =
     "extern func give(item: string, count: int) -> bool\n"
     "func main():\n"
-    "\tname = \"key\"\n"
+    "\tvar name = \"key\"\n"
     "\tfor i in range(3):\n"
     "\t\tif give(name, i):\n"
     "\t\t\tprint(helper(i, 2.5))\n"
@@ -111,7 +112,7 @@ SCHUIMM_TEST(Bytecode_RoundTrip)
     for (std::size_t i = 0; i < original.functions.size(); ++i) {
         CHECK(read->functions[i].code == original.functions[i].code);
         CHECK(read->functions[i].positions == original.functions[i].positions);
-        CHECK(read->functions[i].registerCount == original.functions[i].registerCount);
+        CHECK(read->functions[i].registerTypes == original.functions[i].registerTypes);
         CHECK(read->functions[i].parameters == original.functions[i].parameters);
     }
     REQUIRE(read->imports.size() == 3); // give, print and wait: only natives that are called
@@ -143,7 +144,8 @@ SCHUIMM_TEST(Bytecode_VersionChecks)
 {
     std::vector<std::byte> bytes = sampleBytes();
     putU16(bytes, 4, bytecodeFormatMajor + 1);
-    CHECK(failsWith(bytes, "format 2." + std::to_string(bytecodeFormatMinor) + " is not supported", ErrorCode::Unsupported));
+    CHECK(failsWith(bytes, concat("format ", bytecodeFormatMajor + 1, ".", bytecodeFormatMinor, " is not supported"),
+                    ErrorCode::Unsupported));
     bytes = sampleBytes();
     putU16(bytes, 6, bytecodeFormatMinor + 1);
     CHECK(failsWith(bytes, "not supported", ErrorCode::Unsupported));
@@ -203,7 +205,7 @@ SCHUIMM_TEST(Bytecode_InvalidRegistersTargetsAndIndices)
 {
     Module module = sampleModule();
     Function& main = module.functions[0];
-    const std::uint16_t count = main.registerCount;
+    const std::uint16_t count = main.registerCount();
 
     Module m = module;
     m.functions[0].code[0] = {Opcode::Move, count, 0, 0};
@@ -247,7 +249,7 @@ SCHUIMM_TEST(Bytecode_InvalidRegistersTargetsAndIndices)
     CHECK(failsWith(encode(m), "unused operand"));
 
     m = module;
-    m.functions[1].registerCount = 1; // fewer registers than parameters
+    m.functions[1].registerTypes.resize(1); // fewer registers than parameters
     CHECK(failsWith(encode(m), "fewer registers than parameters"));
 
     m = module;
@@ -318,9 +320,11 @@ SCHUIMM_TEST(Bytecode_MalformedSectionsAndOverflowingOffsets)
     // A function whose code range overflows.
     bytes = good;
     const std::size_t functions = sectionOffset(good, format::SectionId::Functions) + 4;
-    // main(): name u32, return u8, param count u8 (0), registers u16, code offset u32, length u32.
-    putU32(bytes, functions + 8, 0xFFFFFFFFu);
-    putU32(bytes, functions + 12, 2);
+    // main(): name u32, return u8, param count u8 (0), registers u16, one type byte per
+    // register, code offset u32, length u32.
+    const std::size_t registers = static_cast<std::size_t>(good[functions + 6]) | (static_cast<std::size_t>(good[functions + 7]) << 8);
+    putU32(bytes, functions + 8 + registers, 0xFFFFFFFFu);
+    putU32(bytes, functions + 12 + registers, 2);
     fixCrc(bytes);
     CHECK(failsWith(bytes, "code range"));
     // Trailing bytes inside a section.
@@ -365,8 +369,8 @@ SCHUIMM_TEST(Bytecode_RandomCorruptionNeverCrashes)
             for (std::size_t f = 0; f < (*program)->module().functions.size(); ++f) {
                 const Function& function = (*program)->module().functions[f];
                 std::vector<Value> arguments;
-                for (const ScriptType type : function.parameters) {
-                    switch (type) {
+                for (const TypeRef type : function.parameters) {
+                    switch (type.kind) {
                     case ScriptType::Int: arguments.push_back(Value::fromInt(2)); break;
                     case ScriptType::Float: arguments.push_back(Value::fromFloat(1.5)); break;
                     case ScriptType::Bool: arguments.push_back(Value::fromBool(true)); break;
@@ -421,28 +425,6 @@ Module objectModule()
     return c.result.module;
 }
 
-// Rewrites a 1.1 file without objects as a format 1.0 file (6 sections, no Objects section).
-std::vector<std::byte> downgradeToVersion10(const std::vector<std::byte>& bytes)
-{
-    std::vector<std::byte> out(bytes.begin(), bytes.begin() + format::headerSize);
-    putU16(out, 6, 0);
-    putU16(out, 10, 0);
-    putU32(out, 24, format::sectionCountVersion10);
-    out.resize(format::headerSize + format::sectionCountVersion10 * format::sectionEntrySize);
-    for (std::uint32_t id = 1; id <= format::sectionCountVersion10; ++id) {
-        const std::size_t entry = sectionEntry(static_cast<format::SectionId>(id));
-        const std::uint32_t offset = getU32(bytes, entry + 4);
-        const std::uint32_t size = getU32(bytes, entry + 8);
-        putU32(out, entry, id);
-        putU32(out, entry + 4, static_cast<std::uint32_t>(out.size()));
-        putU32(out, entry + 8, size);
-        out.insert(out.end(), bytes.begin() + offset, bytes.begin() + offset + size);
-    }
-    putU32(out, 20, static_cast<std::uint32_t>(out.size()));
-    fixCrc(out);
-    return out;
-}
-
 std::vector<std::byte> encodeModule(const Module& module)
 {
     auto bytes = writeBytecode(module);
@@ -472,7 +454,6 @@ SCHUIMM_TEST(Bytecode_ObjectsRoundTrip)
     REQUIRE(original.objects.size() == 2);
     const std::vector<std::byte> bytes = encodeModule(original);
     CHECK_EQ(getU32(bytes, 24), format::sectionCount);
-    CHECK(static_cast<int>(bytes[6]) == format::objectsMinorVersion);
     auto read = readBytecode(bytes);
     REQUIRE(read.has_value());
     CHECK_EQ(read->formatMinor, bytecodeFormatMinor);
@@ -487,10 +468,10 @@ SCHUIMM_TEST(Bytecode_ObjectsRoundTrip)
     }
     CHECK(encodeModule(*read) == bytes);
     const std::string listing = disassemble(*read);
-    CHECK(listing.find("; SCHUIMM bytecode 1.1, language 1.1") != std::string::npos);
+    CHECK(listing.find("; SCHUIMM bytecode 2.0, language 2.0") != std::string::npos);
     CHECK(listing.find("  blender: look_at -> f2 use -> f3\n  cupboard: look_at -> f4\n") != std::string::npos);
     CHECK(listing.find("function f3 blender.use(object, object) -> bool") != std::string::npos);
-    CHECK(listing.find("EqObject") != std::string::npos);
+    CHECK(listing.find("EqRef") != std::string::npos);
     // Room-level "use" and the handler "blender.use" coexist; lookup keeps them apart.
     NativeRegistry natives;
     REQUIRE(registerStandardNatives(natives, {}).has_value());
@@ -504,72 +485,16 @@ SCHUIMM_TEST(Bytecode_ObjectsRoundTrip)
     CHECK_EQ((*program)->functionDisplayName(1), std::string("use"));
 }
 
-SCHUIMM_TEST(Bytecode_Version10FilesStillLoad)
+SCHUIMM_TEST(Bytecode_FormatOneIsRejected)
 {
-    const std::vector<std::byte> old = downgradeToVersion10(sampleBytes());
-    auto module = readBytecode(old);
-    if (!module) std::fprintf(stderr, "  %s\n", module.error().message.c_str());
-    REQUIRE(module.has_value());
-    CHECK_EQ(module->formatMinor, std::uint16_t{0});
-    CHECK(module->objects.empty());
-    // It runs as before.
-    NativeRegistry natives;
-    std::vector<std::string> output;
-    REQUIRE(registerStandardNatives(natives, [&](std::string_view, std::string_view text) { output.emplace_back(text); })
-                .has_value());
-    REQUIRE(natives.add({"give", {ScriptType::String, ScriptType::Int}, ScriptType::Bool,
-                         [](NativeContext&, std::span<const Value>) { return NativeResult::returnValue(Value::fromBool(true)); },
-                         {}})
-                .has_value());
-    auto program = Program::load(old, natives);
-    REQUIRE(program.has_value());
-    ScriptScheduler scheduler;
-    REQUIRE(scheduler.start(*program, "main").has_value());
-    for (int i = 0; i < 4; ++i) scheduler.update(0.5);
-    CHECK_EQ(output.size(), std::size_t{3});
-    // A 1.0 header with 7 sections, or a 1.1 header with 6, is malformed.
-    std::vector<std::byte> mixed = old;
-    putU16(mixed, 6, 1);
-    fixCrc(mixed);
-    CHECK(failsWith(mixed, "expected 7 sections"));
-    std::vector<std::byte> current = sampleBytes();
-    putU16(current, 6, 0);
-    fixCrc(current);
-    CHECK(failsWith(current, "expected 6 sections"));
-}
-
-SCHUIMM_TEST(Bytecode_Version10CannotUseObjects)
-{
-    // The object type in a signature.
-    const Compiled typed = compileSource("extern func touch(o: object)\nfunc f(o: object):\n\ttouch(o)\n");
-    REQUIRE(typed.result.success);
-    CHECK(failsWith(downgradeToVersion10(encodeModule(typed.result.module)), "requires bytecode format 1.1"));
-    Module module = typed.result.module;
-    module.formatMinor = 0;
-    CHECK(invalidModule(module, "native import 'touch' uses type object"));
-    module.imports.clear();
-    module.functions[0].code = {{Opcode::Return, noRegister, 0, 0}};
-    module.functions[0].positions = {{}};
-    CHECK(invalidModule(module, "function 'f' uses type object"));
-    // The object opcodes.
-    const Compiled compare = compileSource("func f(a: int, b: int) -> bool:\n\treturn a == b\n");
-    REQUIRE(compare.result.success);
-    Module opcodes = compare.result.module;
-    bool replaced = false;
-    for (Instruction& instruction : opcodes.functions[0].code) {
-        if (instruction.opcode == Opcode::EqInt) {
-            instruction.opcode = Opcode::EqObject;
-            replaced = true;
-        }
+    // Format 2.0 changed the encoding (typed registers, enums); 1.x files are not read.
+    std::vector<std::byte> bytes = encodeModule(objectModule());
+    for (const std::uint16_t minor : {std::uint16_t{0}, std::uint16_t{1}}) {
+        putU16(bytes, 4, 1);
+        putU16(bytes, 6, minor);
+        fixCrc(bytes);
+        CHECK(failsWith(bytes, "recompile the script from its source", ErrorCode::Unsupported));
     }
-    REQUIRE(replaced);
-    CHECK(validateModule(opcodes).has_value()); // 1.1: valid (register types are checked when run).
-    opcodes.formatMinor = 0;
-    CHECK(invalidModule(opcodes, "opcode requires bytecode format 1.1"));
-    // Objects.
-    Module objects = objectModule();
-    objects.formatMinor = 0;
-    CHECK(invalidModule(objects, "object declarations require bytecode format 1.1"));
 }
 
 SCHUIMM_TEST(Bytecode_ObjectTableValidation)
@@ -651,8 +576,8 @@ SCHUIMM_TEST(Bytecode_RandomCorruptionOfObjectsNeverCrashes)
     std::uint32_t seed = 54321;
     int accepted = 0;
     int rejected = 0;
-    const auto argumentFor = [](ScriptType type) {
-        switch (type) {
+    const auto argumentFor = [](TypeRef type) {
+        switch (type.kind) {
         case ScriptType::Int: return Value::fromInt(2);
         case ScriptType::Float: return Value::fromFloat(1.5);
         case ScriptType::Bool: return Value::fromBool(true);
@@ -678,7 +603,7 @@ SCHUIMM_TEST(Bytecode_RandomCorruptionOfObjectsNeverCrashes)
             const Module& module = (*program)->module();
             for (std::size_t f = 0; f < module.functions.size(); ++f) {
                 std::vector<Value> arguments;
-                for (const ScriptType type : module.functions[f].parameters) arguments.push_back(argumentFor(type));
+                for (const TypeRef type : module.functions[f].parameters) arguments.push_back(argumentFor(type));
                 (void)scheduler.start(*program, (*program)->functionName(f), arguments);
             }
             for (const ObjectEntry& object : module.objects) {

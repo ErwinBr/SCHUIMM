@@ -16,12 +16,19 @@ enum class OperandKind : std::uint8_t {
     Native,      // Index into the native import table.
     ArgWindow,   // First of N consecutive argument registers; N comes from the callee signature.
     Target,      // Field b and c together: absolute instruction index (b | c << 16) in the function.
+    Enum,        // Index into the enum table.
+    Immediate,   // A literal value (e.g. an enum ordinal), checked by the instruction's rules.
 };
 
 inline constexpr std::uint16_t noRegister = 0xFFFF;
 
 // X(name, a, b, c, terminator). The numeric opcode is the position in this list. Appending is
 // backwards compatible within a format major version; reordering or removing is not.
+//
+// Register types: every instruction requires particular register types (Bytecode.md lists them);
+// the validator checks them against Function::registerTypes. Vec2 ops: MulVec2/DivVec2 take a
+// vector (b) and a float (c); SetVec2X/Y overwrite one component of the vector in register a
+// with the float in b. EqRef/NeRef compare two entity references (actor, object or entity).
 #define SCHUIMM_SCRIPT_OPCODES(X)                                                                   \
     X(Nop, Unused, Unused, Unused, false)                                                           \
     X(LoadConst, Register, Constant, Unused, false)                                                 \
@@ -79,8 +86,23 @@ inline constexpr std::uint16_t noRegister = 0xFFFF;
     X(CallNative, OptRegister, Native, ArgWindow, false)                                            \
     X(Return, OptRegister, Unused, Unused, true)                                                    \
     X(Unreachable, Unused, Unused, Unused, true)                                                    \
-    X(EqObject, Register, Register, Register, false)                                                \
-    X(NeObject, Register, Register, Register, false)
+    X(EqRef, Register, Register, Register, false)                                                   \
+    X(NeRef, Register, Register, Register, false)                                                   \
+    X(LoadEnum, Register, Enum, Immediate, false)                                                   \
+    X(EqEnum, Register, Register, Register, false)                                                  \
+    X(NeEnum, Register, Register, Register, false)                                                  \
+    X(MakeVec2, Register, Register, Register, false)                                                \
+    X(Vec2X, Register, Register, Unused, false)                                                     \
+    X(Vec2Y, Register, Register, Unused, false)                                                     \
+    X(SetVec2X, Register, Register, Unused, false)                                                  \
+    X(SetVec2Y, Register, Register, Unused, false)                                                  \
+    X(AddVec2, Register, Register, Register, false)                                                 \
+    X(SubVec2, Register, Register, Register, false)                                                 \
+    X(MulVec2, Register, Register, Register, false)                                                 \
+    X(DivVec2, Register, Register, Register, false)                                                 \
+    X(NegVec2, Register, Register, Unused, false)                                                   \
+    X(EqVec2, Register, Register, Register, false)                                                  \
+    X(NeVec2, Register, Register, Register, false)
 
 enum class Opcode : std::uint8_t {
 #define SCHUIMM_X(name, a, b, c, terminator) name,

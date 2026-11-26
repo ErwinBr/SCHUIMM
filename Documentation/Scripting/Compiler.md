@@ -22,8 +22,8 @@ dumps and tests. Each stage is also a separate function with its own header and 
 | Stage | Files | Output |
 |---|---|---|
 | Lexer | `Lexer.h`, `Token.h` | `std::vector<Token>` with `INDENT`/`DEDENT`/`NEWLINE`, decoded literals and a `SourceRange` (file id, offset, line, column, end) per token |
-| Parser | `Parser.h`, `Ast.h` | `SourceUnit`: functions, object declarations, statements and expressions with source ranges. Purely syntactic |
-| Semantic analysis | `TypeChecker.h`, `Types.h` | `SemanticModel`: per expression its type, implicit widening, resolved variable or call target; per function its variables and owning object; the objects and their handlers; the native signatures |
+| Parser | `Parser.h`, `Ast.h` | `SourceUnit`: functions, object and enum declarations, statements and expressions with source ranges. Purely syntactic: a type written as a name that is not built in stays a name |
+| Semantic analysis | `TypeChecker.h`, `Types.h` | `SemanticModel`: per expression its type, implicit widening, resolved variable, call target, enum member or vector component; per function its resolved signature, variables and owning object; the objects and their handlers; the enums; the native signatures |
 | IR builder | `IrBuilder.h`, `Ir.h` | `IrModule` |
 | Optimizer | `Optimizer.h` | `IrModule` (optional) |
 | Code generator | `CodeGen.h` | `Module` |
@@ -45,8 +45,8 @@ Comparisons are parsed non-associatively.
 **Error recovery:** a failed statement reports one error (further errors in the same statement
 are suppressed as likely consequences), then the parser skips to the end of the logical line,
 including an indented block that belongs to it, and continues with the next statement. At the
-top level it resynchronises at the next `func`/`extern`/`object`; inside an object body, at the
-next `func`. One run therefore reports independent
+top level it resynchronises at the next `func`/`extern`/`object`/`enum`; inside an object body,
+at the next `func`. One run therefore reports independent
 syntax errors throughout the file. Semantic analysis runs only on syntactically correct files
 (on a recovered tree it would report confusing follow-up errors).
 
@@ -54,19 +54,38 @@ syntax errors throughout the file. Semantic analysis runs only on syntactically 
 
 A separate pass over the AST, never mixed into parsing:
 
-1. Collect all function and `extern` signatures (functions may be called before their
-   declaration). Duplicate and reserved names are reported here.
-2. Collect the object declarations ([Language.md §8](Language.md#8-objects-and-handlers)): object
+1. Declare the native interfaces: the core interface and those in `CompileOptions::interfaces`
+   (each at most once). Their functions become natives and their enums become engine enums,
+   qualified by the interface name. Two interfaces declaring the same function or enum name are
+   an error.
+2. Declare the script's enums. A name already used by an interface, function or other enum is
+   an error, as are duplicate members and empty enums.
+3. Collect all function and `extern` signatures (functions may be called before their
+   declaration), resolving type names to enums. Duplicate and reserved names, and names an
+   interface declares, are reported here.
+4. Collect the object declarations ([Language.md §8](Language.md#8-objects-and-handlers)): object
    names (unique, not clashing with functions, natives or reserved names) and per object its
    handlers (unique within the object). Handlers are appended to the function list after the
    room-level functions, each with the index of its object; handler names are kept in the
    object's scope only, never in the room scope used to resolve calls.
-3. Check every function body with a stack of block scopes: declarations, lookups, assignment
-   compatibility, operator typing, call arity and argument types, `bool` conditions, return types
-   and "every path returns" (a function with a result whose body can fall off the end).
+5. Check every function body with a stack of block scopes:
+   - `var` declarations and assignments, and whether values are assignable;
+   - lookups; operator typing, including vectors, enums and references;
+   - `Enum.MEMBER` and `vector.x`;
+   - call arity and argument types; `bool` conditions;
+   - return types, and "every path returns" (a function with a result whose body can fall off
+     the end).
 
 In a handler, variable 0 is the hidden parameter `self` (type `object`); the `self` expression
 resolves to it, and is an error in room-level functions.
+
+Compiler types (`Types.h`) are a `Type` enumeration with one value per built-in type. Enum types
+are `Type::EnumBase + i`, where `i` indexes `SemanticModel::enums()`: engine enums first, then the
+script's own.
+
+The type checker depends only on interface *declarations* (`NativeInterface`, in the bytecode
+library). The compiler is independent of the adventure layer: the adventure API reaches it as an
+interface in the options.
 
 Types of the form *Error* mark expressions whose type is unknown after an error; they are
 compatible with everything, so one mistake produces one diagnostic, not a cascade.
@@ -94,9 +113,11 @@ The location is `file:line:column`. Notes add hints where the compiler knows a l
 * **Virtual registers**: one per variable (reassigned; the IR is not SSA) plus a fresh one per
   temporary. Each register has a static type.
 * **Instructions**: `dest = op operands` with explicit, typed operations (`AddInt`,
-  `AddFloat`, `Concat`, `LtString`, `IntToFloat`, …), `Load*` immediates, `Call` (script
-  function), `CallNative` (engine function) and `CheckRangeStep`. Each records its source
-  line and column.
+  `AddFloat`, `Concat`, `LtString`, `IntToFloat`, `AddVec2`, `EqEnum`, `EqRef`, …), `Load*`
+  immediates (`LoadEnum` carries the enum and ordinal), `Call` (script function), `CallNative`
+  (engine function) and `CheckRangeStep`. `SetVec2X dest, v, x` produces `v` with a new x; when
+  `dest` is `v` (the usual case) it becomes one in-place bytecode instruction. Each instruction
+  records its source line and column.
 * **Basic blocks** end in exactly one terminator: `Jump`, `Branch cond, then, else`,
   `Return [value]` or `Unreachable` (end of a function with a result that the type checker
   proved cannot be reached). Block 0 is the entry.
@@ -146,8 +167,10 @@ nothing changes (at most 8 rounds). Each pass is a separate function with its ow
 * An operation that may trap is never removed, and is folded only when its operands are known not
   to trap. `9223372036854775807 + 1`, `1 // 0` or `int(1e300)` stay in the code and fail at run
   time with the right message and line.
-* Calls are never removed or folded: script functions and natives may have side effects (a native
-  could be marked pure in the future; none is).
+* Calls are never folded. Calls of script functions are never removed. Calls of natives are
+  removed only when their result is unused and the native is declared pure (the core vector
+  functions are).
+* Enum, vector and reference operations are not folded; the pure ones may be removed when unused.
 * Code generation also omits jumps to the immediately following block, with or without the
   optimizer.
 
@@ -163,8 +186,12 @@ transformations, common subexpression elimination.
 
 * Blocks are laid out in order; branch targets are patched to instruction indices.
 * Virtual registers are renumbered densely in order of first use; parameters stay in `r0…`.
+  Every register keeps the static type of its virtual register, which becomes the function's
+  register type table ([Bytecode.md](Bytecode.md#typed-registers)).
 * Call arguments must be consecutive registers (the bytecode's argument window). If they are not,
-  they are copied into a scratch window above the locals.
+  they are copied into a scratch window above the locals. Calls with the same argument types
+  share a window, so each window register has one type.
+* Only the enums the module uses are written to the Enums section, in order of first use.
 * Constants and strings are deduplicated. Only natives that are actually called become imports.
 * Every instruction gets its source line and column as debug information.
 * Format limits (65 535 registers per function, 65 536 constants) are reported as diagnostics.
@@ -182,6 +209,8 @@ schuimmc [options] input.sch
 | `-o FILE` | write the bytecode (without `-o` the file is only checked) |
 | `-O0` / `-O1` | disable / enable (default) the optimizer |
 | `--name NAME` | the source name stored in diagnostics and debug information |
+| `--interface NAME` | let the script use the native interface `NAME` besides the core interface (repeatable) |
+| `--list-interfaces` | print the interfaces the compiler knows, with their enums and signatures |
 | `--tokens` | dump the token stream |
 | `--ast` | dump the syntax tree |
 | `--types` | dump the syntax tree with types and implicit conversions |

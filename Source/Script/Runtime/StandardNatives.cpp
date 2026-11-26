@@ -4,38 +4,61 @@
 #include "Script/Bytecode/Semantics.h"
 #include "Script/Runtime/ScriptScheduler.h"
 
+#include <cmath>
+
 namespace schuimm::script {
+
+namespace {
+
+NativeResult returnVec2(double x, double y)
+{
+    return NativeResult::returnValue(Value::fromVec2(x, y));
+}
+
+} // namespace
 
 Status registerStandardNatives(NativeRegistry& registry, PrintSink print)
 {
-    if (auto status = registry.add({"print", {ScriptType::Any}, ScriptType::None,
-                                    [sink = std::move(print)](NativeContext& context, std::span<const Value> arguments) {
-                                        if (sink) {
-                                            sink(context.script, toDisplayString(arguments[0]));
-                                        }
-                                        return NativeResult::returnValue();
-                                    },
-                                    "Writes a value as text to the script output."});
-        !status) {
-        return status;
-    }
-    if (auto status = registry.add({"wait", {ScriptType::Float}, ScriptType::None,
-                                    [](NativeContext&, std::span<const Value> arguments) {
-                                        const double seconds = arguments[0].asFloat();
-                                        const auto nanoseconds = secondsToNanoseconds(seconds);
-                                        if (!nanoseconds) {
-                                            return NativeResult::error(concat(
-                                                "the duration must be between 0 and 1e9 seconds, got ", formatFloat(seconds)));
-                                        }
-                                        return NativeResult::waitFor(*nanoseconds);
-                                    },
-                                    "Suspends the coroutine for the given number of seconds of game time."});
-        !status) {
-        return status;
-    }
-    return registry.add({"yield", {}, ScriptType::None,
-                         [](NativeContext&, std::span<const Value>) { return NativeResult::yieldNow(); },
-                         "Suspends the coroutine until the next scheduler update."});
+    std::unordered_map<std::string, NativeImplementation> implementations;
+    implementations["print"] = [sink = std::move(print)](NativeContext& context, std::span<const Value> arguments) {
+        if (sink) {
+            sink(context.script, context.module != nullptr ? toDisplayString(arguments[0], *context.module)
+                                                           : toDisplayString(arguments[0]));
+        }
+        return NativeResult::returnValue();
+    };
+    implementations["wait"] = [](NativeContext&, std::span<const Value> arguments) {
+        const double seconds = arguments[0].asFloat();
+        const auto nanoseconds = secondsToNanoseconds(seconds);
+        if (!nanoseconds) {
+            return NativeResult::error(concat("the duration must be between 0 and 1e9 seconds, got ", formatFloat(seconds)));
+        }
+        return NativeResult::waitFor(*nanoseconds);
+    };
+    implementations["yield"] = [](NativeContext&, std::span<const Value>) { return NativeResult::yieldNow(); };
+    implementations["length"] = [](NativeContext&, std::span<const Value> arguments) {
+        return NativeResult::returnValue(Value::fromFloat(std::hypot(arguments[0].vec2X(), arguments[0].vec2Y())));
+    };
+    implementations["distance"] = [](NativeContext&, std::span<const Value> arguments) {
+        return NativeResult::returnValue(Value::fromFloat(
+            std::hypot(arguments[1].vec2X() - arguments[0].vec2X(), arguments[1].vec2Y() - arguments[0].vec2Y())));
+    };
+    implementations["normalize"] = [](NativeContext&, std::span<const Value> arguments) {
+        const double x = arguments[0].vec2X();
+        const double y = arguments[0].vec2Y();
+        const double length = std::hypot(x, y);
+        if (!(length > 0.0) || !std::isfinite(length)) {
+            return returnVec2(0.0, 0.0);
+        }
+        return returnVec2(x / length, y / length);
+    };
+    implementations["lerp"] = [](NativeContext&, std::span<const Value> arguments) {
+        const double t = arguments[2].asFloat();
+        const Value& a = arguments[0];
+        const Value& b = arguments[1];
+        return returnVec2(a.vec2X() + (b.vec2X() - a.vec2X()) * t, a.vec2Y() + (b.vec2Y() - a.vec2Y()) * t);
+    };
+    return registry.bind(coreInterface(), std::move(implementations));
 }
 
 } // namespace schuimm::script

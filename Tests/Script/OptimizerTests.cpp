@@ -37,7 +37,7 @@ std::size_t blockCount(const Optimized& o, std::size_t function = 0)
 
 SCHUIMM_TEST(Optimizer_ConstantFolding)
 {
-    const Optimized o = optimizeSource("func main():\n\tresult = 10 + 20\n\tprint(result)\n");
+    const Optimized o = optimizeSource("func main():\n\tvar result = 10 + 20\n\tprint(result)\n");
     CHECK(contains(o.before, "AddInt"));
     CHECK(!contains(o.after, "AddInt"));
     CHECK(contains(o.after, "LoadInt 30"));
@@ -49,24 +49,24 @@ SCHUIMM_TEST(Optimizer_ConstantFolding)
 
 SCHUIMM_TEST(Optimizer_ConstantPropagationAcrossBlocks)
 {
-    const Optimized o = optimizeSource("func main():\n\ta = 4\n\tif a > 1:\n\t\tb = a * 2\n\t\tprint(b)\n");
+    const Optimized o = optimizeSource("func main():\n\tvar a = 4\n\tif a > 1:\n\t\tvar b = a * 2\n\t\tprint(b)\n");
     CHECK(contains(o.after, "LoadInt 8"));
     CHECK(!contains(o.after, "MulInt"));
     CHECK(!contains(o.after, "Branch"));
     // A variable changed in a loop is not constant.
-    const Optimized loop = optimizeSource("func main():\n\tx = 0\n\twhile x < 3:\n\t\tx = x + 1\n\tprint(x)\n");
+    const Optimized loop = optimizeSource("func main():\n\tvar x = 0\n\twhile x < 3:\n\t\tx = x + 1\n\tprint(x)\n");
     CHECK(contains(loop.after, "AddInt"));
     CHECK(contains(loop.after, "Branch"));
 }
 
 SCHUIMM_TEST(Optimizer_DeadCodeElimination)
 {
-    const Optimized o = optimizeSource("func main():\n\tunused = 5.0 * 3.0\n\talso = \"x\" + \"y\"\n\tprint(1)\n");
+    const Optimized o = optimizeSource("func main():\n\tvar unused = 5.0 * 3.0\n\tvar also = \"x\" + \"y\"\n\tprint(1)\n");
     CHECK(!contains(o.after, "15.0"));
     CHECK(!contains(o.after, "\"xy\""));
     CHECK(contains(o.after, "CallNative print"));
     // Pass by pass: eliminateDeadCode alone removes the unused pure computation.
-    Compiled c = compileSource("func main(a: int):\n\tx = a < 3\n\tprint(a)\n", false);
+    Compiled c = compileSource("func main(a: int):\n\tvar x = a < 3\n\tprint(a)\n", false);
     REQUIRE(c.result.success);
     IrModule module = c.result.ir;
     CHECK(contains(dumpIr(module), "LtInt"));
@@ -109,18 +109,18 @@ SCHUIMM_TEST(Optimizer_PreservesSideEffectsAndTraps)
 {
     // Calls are kept even when their results are unused.
     const Optimized calls = optimizeSource("func side() -> int:\n\tprint(\"side\")\n\treturn 1\n"
-                                           "func main():\n\tunused = side()\n\twait(0.5)\n");
+                                           "func main():\n\tvar unused = side()\n\twait(0.5)\n");
     CHECK(contains(calls.after, "Call side"));
     CHECK(contains(calls.after, "CallNative wait"));
     // Operations that would trap are neither folded nor removed: the error still happens at run time.
-    const Optimized traps = optimizeSource("func main():\n\ta = 9223372036854775807 + 1\n\tb = 1 // 0\n\tc = 1.0 % 0.0\n"
-                                           "\td = int(1e300)\n\tfor i in range(0, 5, 0):\n\t\tpass\n");
+    const Optimized traps = optimizeSource("func main():\n\tvar a = 9223372036854775807 + 1\n\tvar b = 1 // 0\n\tvar c = 1.0 % 0.0\n"
+                                           "\tvar d = int(1e300)\n\tfor i in range(0, 5, 0):\n\t\tpass\n");
     CHECK(contains(traps.after, "AddInt"));
     CHECK(contains(traps.after, "DivInt"));
     CHECK(contains(traps.after, "ModFloat"));
     CHECK(contains(traps.after, "FloatToInt"));
     CHECK(contains(traps.after, "CheckRangeStep"));
-    const ScriptRun run = runScript("func main():\n\ta = 9223372036854775807 + 1\n\tprint(\"unreachable\")\n");
+    const ScriptRun run = runScript("func main():\n\tvar a = 9223372036854775807 + 1\n\tprint(\"unreachable\")\n");
     REQUIRE(run.errors.size() == 1);
     CHECK(run.errors[0].message.find("Integer overflow") != std::string::npos);
     CHECK(run.output.empty());
@@ -128,7 +128,7 @@ SCHUIMM_TEST(Optimizer_PreservesSideEffectsAndTraps)
 
 SCHUIMM_TEST(Optimizer_CanBeDisabledAndIsDeterministic)
 {
-    const std::string source = "func main():\n\tresult = 10 + 20\n\tprint(result)\n";
+    const std::string source = "func main():\n\tvar result = 10 + 20\n\tprint(result)\n";
     const Compiled off = compileSource(source, false);
     REQUIRE(off.result.success);
     CHECK_EQ(dumpIr(off.result.ir), dumpIr(off.result.optimizedIr));

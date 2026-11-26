@@ -20,7 +20,7 @@ CompileResult compile(const SourceFile& source, const CompileOptions& options)
     if (result.diagnostics.hasErrors()) {
         return result;
     }
-    result.semantics = checkTypes(*result.ast, result.diagnostics);
+    result.semantics = checkTypes(*result.ast, result.diagnostics, options.interfaces);
     if (result.diagnostics.hasErrors()) {
         return result;
     }

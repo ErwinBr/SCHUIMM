@@ -14,20 +14,28 @@ std::string reg(std::uint16_t value)
     return value == noRegister ? std::string("-") : concat("r", value);
 }
 
-std::string signature(const Module& module, std::uint32_t nameIndex, const std::vector<ScriptType>& parameters,
-                      ScriptType returnType)
+std::string signature(const Module& module, std::uint32_t nameIndex, const std::vector<TypeRef>& parameters,
+                      TypeRef returnType)
 {
     std::string text = module.strings[nameIndex] + "(";
     for (std::size_t i = 0; i < parameters.size(); ++i) {
         text += (i == 0 ? "" : ", ");
-        text += toString(parameters[i]);
+        text += formatType(module, parameters[i]);
     }
     text += ") -> ";
-    text += toString(returnType);
+    text += formatType(module, returnType);
     return text;
 }
 
 } // namespace
+
+std::string formatType(const Module& module, TypeRef type)
+{
+    if (type.kind == ScriptType::Enum && type.enumIndex < module.enums.size()) {
+        return module.strings[module.enums[type.enumIndex].nameIndex];
+    }
+    return toString(type.kind);
+}
 
 std::string quoteString(const std::string& text)
 {
@@ -84,6 +92,15 @@ std::string formatInstruction(const Module& module, const Instruction& instructi
         case OperandKind::Native: operand(concat("n", value, " (", module.strings[module.imports[value].nameIndex], ")")); break;
         case OperandKind::ArgWindow: operand(concat("args r", value)); break;
         case OperandKind::Target: operand(concat("@", instruction.target())); break;
+        case OperandKind::Enum: operand(concat("e", value, " (", module.strings[module.enums[value].nameIndex], ")")); break;
+        case OperandKind::Immediate:
+            if (instruction.opcode == Opcode::LoadEnum && instruction.b < module.enums.size() &&
+                value < module.enums[instruction.b].members.size()) {
+                operand(concat("#", value, " (", module.strings[module.enums[instruction.b].members[value]], ")"));
+            } else {
+                operand(concat("#", value));
+            }
+            break;
         }
     };
     describe(info.a, instruction.a);
@@ -113,6 +130,18 @@ std::string disassemble(const Module& module)
             out += concat("  n", i, " ", signature(module, import.nameIndex, import.parameters, import.returnType), "\n");
         }
     }
+    if (!module.enums.empty()) {
+        out += "enums:\n";
+        for (std::size_t e = 0; e < module.enums.size(); ++e) {
+            const EnumEntry& entry = module.enums[e];
+            out += concat("  e", e, " ", entry.isEngine() ? module.strings[entry.qualifierIndex] + "." : std::string(),
+                          module.strings[entry.nameIndex], ":");
+            for (const std::uint32_t member : entry.members) {
+                out += " " + module.strings[member];
+            }
+            out += "\n";
+        }
+    }
     // Handlers are listed as "object.handler"; their parameter 0 is self.
     std::vector<std::string> prefix(module.functions.size());
     if (!module.objects.empty()) {
@@ -131,7 +160,14 @@ std::string disassemble(const Module& module)
         const Function& function = module.functions[f];
         out += concat("\nfunction f", f, " ", prefix[f],
                       signature(module, function.nameIndex, function.parameters, function.returnType), "  ; ",
-                      function.registerCount, " registers\n");
+                      function.registerCount(), " registers\n");
+        if (function.registerCount() > 0) {
+            std::string types = "  ; register types:";
+            for (std::size_t r = 0; r < function.registerTypes.size(); ++r) {
+                types += concat(" r", r, ":", formatType(module, function.registerTypes[r]));
+            }
+            out += types + "\n";
+        }
         std::uint32_t lastLine = 0;
         for (std::size_t ip = 0; ip < function.code.size(); ++ip) {
             std::string line = concat("  ", ip < 10 ? "   " : (ip < 100 ? "  " : (ip < 1000 ? " " : "")), ip, "  ",

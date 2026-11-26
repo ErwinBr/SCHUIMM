@@ -147,7 +147,7 @@ SCHUIMM_TEST(Lexer_IndentationErrors)
 
 SCHUIMM_TEST(Lexer_ParenthesesJoinLines)
 {
-    const Lexed l = lex("func f():\n\tx = g(1,\n  2,\n\t\t\t3)\n\tpass\n");
+    const Lexed l = lex("func f():\n\tvar x = g(1,\n  2,\n\t\t\t3)\n\tpass\n");
     REQUIRE(!l.diagnostics.hasErrors());
     int newlines = 0;
     for (const Token& t : l.tokens) newlines += t.kind == K::Newline ? 1 : 0;
@@ -172,16 +172,17 @@ SCHUIMM_TEST(Lexer_InvalidCharactersAreReportedAndSkipped)
 
 SCHUIMM_TEST(Lexer_SourceLocations)
 {
-    const Lexed l = lex("func main():\n\tname = \"Alex\"\n");
-    const Token& name = l.tokens[7];
+    const Lexed l = lex("func main():\n\tvar name = \"Alex\"\n");
+    CHECK(l.tokens[7].kind == K::KwVar);
+    const Token& name = l.tokens[8];
     REQUIRE(name.kind == K::Identifier);
     CHECK_EQ(name.range.begin.line, std::uint32_t{2});
-    CHECK_EQ(name.range.begin.column, std::uint32_t{2});
-    CHECK_EQ(name.range.begin.offset, std::uint32_t{14});
-    CHECK_EQ(name.range.end, std::uint32_t{18});
-    CHECK_EQ(l.tokens[9].range.begin.column, std::uint32_t{9});
+    CHECK_EQ(name.range.begin.column, std::uint32_t{6});
+    CHECK_EQ(name.range.begin.offset, std::uint32_t{18});
+    CHECK_EQ(name.range.end, std::uint32_t{22});
+    CHECK_EQ(l.tokens[9].range.begin.column, std::uint32_t{11});
     // \r\n line endings count as one line break.
     const Lexed crlf = lex("a\r\nb\r\n");
     CHECK_EQ(crlf.tokens[2].range.begin.line, std::uint32_t{2});
-    CHECK(dumpTokens(l.tokens).find("2:2 Identifier name") != std::string::npos);
+    CHECK(dumpTokens(l.tokens).find("2:6 Identifier name") != std::string::npos);
 }

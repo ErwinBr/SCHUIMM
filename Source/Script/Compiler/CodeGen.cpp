@@ -61,8 +61,20 @@ Opcode opcodeFor(IrOp op)
     case IrOp::FloatToString: return Opcode::FloatToString;
     case IrOp::BoolToString: return Opcode::BoolToString;
     case IrOp::CheckRangeStep: return Opcode::CheckRangeStep;
-    case IrOp::EqObject: return Opcode::EqObject;
-    case IrOp::NeObject: return Opcode::NeObject;
+    case IrOp::EqRef: return Opcode::EqRef;
+    case IrOp::NeRef: return Opcode::NeRef;
+    case IrOp::EqEnum: return Opcode::EqEnum;
+    case IrOp::NeEnum: return Opcode::NeEnum;
+    case IrOp::MakeVec2: return Opcode::MakeVec2;
+    case IrOp::Vec2X: return Opcode::Vec2X;
+    case IrOp::Vec2Y: return Opcode::Vec2Y;
+    case IrOp::AddVec2: return Opcode::AddVec2;
+    case IrOp::SubVec2: return Opcode::SubVec2;
+    case IrOp::MulVec2: return Opcode::MulVec2;
+    case IrOp::DivVec2: return Opcode::DivVec2;
+    case IrOp::NegVec2: return Opcode::NegVec2;
+    case IrOp::EqVec2: return Opcode::EqVec2;
+    case IrOp::NeVec2: return Opcode::NeVec2;
     default: return Opcode::Nop;
     }
 }
@@ -82,9 +94,9 @@ public:
             Function out;
             out.nameIndex = intern(function.name);
             for (const Type type : function.parameters) {
-                out.parameters.push_back(toScriptType(type));
+                out.parameters.push_back(typeRef(type));
             }
-            out.returnType = toScriptType(function.returnType);
+            out.returnType = typeRef(function.returnType);
             module_.functions.push_back(std::move(out));
         }
         for (std::size_t i = 0; i < ir_.functions.size(); ++i) {
@@ -149,13 +161,41 @@ private:
         NativeImport import;
         import.nameIndex = intern(native.name);
         for (const Type type : native.parameters) {
-            import.parameters.push_back(toScriptType(type));
+            import.parameters.push_back(typeRef(type));
         }
-        import.returnType = toScriptType(native.returnType);
+        import.returnType = typeRef(native.returnType);
         const auto index = static_cast<std::uint16_t>(module_.imports.size());
         module_.imports.push_back(std::move(import));
         imports_.emplace(nativeIndex, index);
         return index;
+    }
+
+    // The bytecode enum of IR enum `index`: modules list only the enums they use, in order of
+    // first use.
+    std::uint16_t enumIndex(std::uint32_t index)
+    {
+        if (const auto found = enums_.find(index); found != enums_.end()) {
+            return found->second;
+        }
+        const IrEnum& declaration = ir_.enums[index];
+        EnumEntry entry;
+        entry.nameIndex = intern(declaration.name);
+        entry.qualifierIndex = declaration.qualifier.empty() ? noString : intern(declaration.qualifier);
+        for (const std::string& member : declaration.members) {
+            entry.members.push_back(intern(member));
+        }
+        const auto result = static_cast<std::uint16_t>(module_.enums.size());
+        module_.enums.push_back(std::move(entry));
+        enums_.emplace(index, result);
+        return result;
+    }
+
+    TypeRef typeRef(Type type)
+    {
+        if (isEnum(type)) {
+            return TypeRef::enumType(enumIndex(enumIndexOf(type)));
+        }
+        return toTypeRef(type);
     }
 
     void generate(const IrFunction& function, Function& out)
@@ -169,7 +209,6 @@ private:
         const auto use = [&](VReg value) {
             if (value != noVReg && map[value] == noVReg) map[value] = next++;
         };
-        std::size_t window = 0;
         for (const IrBlock& block : function.blocks) {
             for (const IrInstruction& instruction : block.instructions) {
                 for (const VReg operand : instruction.operands) use(operand);
@@ -177,30 +216,49 @@ private:
             }
             use(block.terminator.value);
         }
+        // Every register has one static type: register map[v] has the type of virtual register v.
+        std::vector<Type> types(next, Type::Error);
+        for (std::size_t v = 0; v < map.size(); ++v) {
+            if (map[v] != noVReg) types[map[v]] = function.registerTypes[v];
+        }
         // Calls whose arguments are not consecutive registers copy them into a scratch window.
+        // A window is shared by calls with the same argument types, so its registers keep one
+        // type each.
         const auto consecutive = [&](const std::vector<VReg>& arguments) {
             for (std::size_t i = 1; i < arguments.size(); ++i) {
                 if (map[arguments[i]] != map[arguments[0]] + i) return false;
             }
             return true;
         };
+        std::map<std::vector<Type>, std::uint32_t> windows;
+        const auto argumentTypes = [&](const std::vector<VReg>& arguments) {
+            std::vector<Type> key;
+            for (const VReg argument : arguments) key.push_back(function.registerTypes[argument]);
+            return key;
+        };
         for (const IrBlock& block : function.blocks) {
             for (const IrInstruction& instruction : block.instructions) {
                 if ((instruction.op == IrOp::Call || instruction.op == IrOp::CallNative) && !consecutive(instruction.operands)) {
-                    window = std::max(window, instruction.operands.size());
+                    std::vector<Type> key = argumentTypes(instruction.operands);
+                    if (windows.count(key) == 0) {
+                        windows.emplace(key, static_cast<std::uint32_t>(types.size()));
+                        types.insert(types.end(), key.begin(), key.end());
+                    }
                 }
             }
         }
-        const std::size_t total = next + window;
+        const std::size_t total = types.size();
         if (total > maxRegisters) {
             fail(concat("Function '", displayName(function, ir_), "' needs ", total, " registers; the limit is ", maxRegisters, "."));
             return;
         }
-        out.registerCount = static_cast<std::uint16_t>(total);
+        out.registerTypes.clear();
+        for (const Type type : types) {
+            out.registerTypes.push_back(typeRef(type));
+        }
         const auto r = [&](VReg value) {
             return value == noVReg ? noRegister : static_cast<std::uint16_t>(map[value]);
         };
-        const auto windowBase = static_cast<std::uint16_t>(next);
 
         std::vector<std::uint32_t> blockStart(function.blocks.size(), 0);
         std::vector<std::pair<std::size_t, BlockId>> patches; // instruction index -> target block
@@ -243,6 +301,7 @@ private:
                         if (consecutive(arguments)) {
                             first = r(arguments[0]);
                         } else {
+                            const auto windowBase = static_cast<std::uint16_t>(windows.at(argumentTypes(arguments)));
                             first = windowBase;
                             for (std::size_t i = 0; i < arguments.size(); ++i) {
                                 emit(Opcode::Move, static_cast<std::uint16_t>(windowBase + i), r(arguments[i]), 0, position);
@@ -256,6 +315,21 @@ private:
                     break;
                 }
                 case IrOp::CheckRangeStep: emit(Opcode::CheckRangeStep, r(instruction.operands[0]), 0, 0, position); break;
+                case IrOp::LoadEnum:
+                    emit(Opcode::LoadEnum, r(instruction.dest), enumIndex(instruction.callee),
+                         static_cast<std::uint16_t>(instruction.intValue), position);
+                    break;
+                case IrOp::SetVec2X:
+                case IrOp::SetVec2Y: {
+                    // The bytecode instruction sets the component in place.
+                    const std::uint16_t dest = r(instruction.dest);
+                    if (dest != r(instruction.operands[0])) {
+                        emit(Opcode::Move, dest, r(instruction.operands[0]), 0, position);
+                    }
+                    emit(instruction.op == IrOp::SetVec2X ? Opcode::SetVec2X : Opcode::SetVec2Y, dest,
+                         r(instruction.operands[1]), 0, position);
+                    break;
+                }
                 default: {
                     const Opcode opcode = opcodeFor(instruction.op);
                     const std::uint16_t a = r(instruction.dest);
@@ -299,6 +373,7 @@ private:
     std::unordered_map<std::string, std::uint32_t> strings_;
     std::map<std::pair<int, std::uint64_t>, std::uint16_t> constants_;
     std::unordered_map<std::uint32_t, std::uint16_t> imports_;
+    std::unordered_map<std::uint32_t, std::uint16_t> enums_;
 };
 
 } // namespace

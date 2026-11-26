@@ -2,6 +2,7 @@
 
 #include "Core/Common/StringBuilder.h"
 #include "Script/Bytecode/BytecodeReader.h"
+#include "Script/Bytecode/Disassembler.h"
 
 #include <algorithm>
 
@@ -24,19 +25,53 @@ Result<std::shared_ptr<const Program>> Program::link(Module module, const Native
     }
     std::shared_ptr<Program> program(new Program());
     program->name_ = name.empty() ? module.sourceName() : std::move(name);
+    // Engine enums: the module's ordinals must mean what the engine's do, so the registered enum
+    // of that qualified name must have the same members in the same order.
+    std::vector<std::string> qualifiedEnums(module.enums.size());
+    for (std::size_t e = 0; e < module.enums.size(); ++e) {
+        const EnumEntry& entry = module.enums[e];
+        if (!entry.isEngine()) {
+            continue;
+        }
+        qualifiedEnums[e] = qualifiedEnumName(module.string(entry.qualifierIndex), module.string(entry.nameIndex));
+        const std::vector<std::string>* members = natives.findEnum(qualifiedEnums[e]);
+        if (members == nullptr) {
+            return makeError(ErrorCode::NotFound, concat("Script '", program->name_, "' uses engine enum '", qualifiedEnums[e],
+                                                         "', which the engine does not provide"));
+        }
+        bool same = members->size() == entry.members.size();
+        for (std::size_t m = 0; same && m < entry.members.size(); ++m) {
+            same = (*members)[m] == module.string(entry.members[m]);
+        }
+        if (!same) {
+            return makeError(ErrorCode::InvalidData,
+                             concat("Script '", program->name_, "' was compiled against a different version of enum '",
+                                    qualifiedEnums[e], "' than the engine provides; recompile the script from its source"));
+        }
+    }
+    const auto sameType = [&](TypeRef imported, const NativeType& provided) {
+        if (imported.kind != provided.kind) return false;
+        return imported.kind != ScriptType::Enum || qualifiedEnums[imported.enumIndex] == provided.enumName;
+    };
     for (const NativeImport& import : module.imports) {
         const std::string& nativeName = module.string(import.nameIndex);
         auto function = natives.find(nativeName);
-        const std::string expected = formatSignature(nativeName, import.parameters, import.returnType);
+        std::string expected = nativeName + "(";
+        for (std::size_t i = 0; i < import.parameters.size(); ++i) {
+            expected += concat(i == 0 ? "" : ", ", formatType(module, import.parameters[i]));
+        }
+        expected += concat(") -> ", formatType(module, import.returnType));
         if (!function) {
             return makeError(ErrorCode::NotFound, concat("Script '", program->name_, "' calls native function ", expected,
                                                          ", which the engine does not provide"));
         }
-        if (function->parameters != import.parameters || function->returnType != import.returnType) {
-            return makeError(ErrorCode::InvalidData,
-                             concat("Script '", program->name_, "' declares native function ", expected,
-                                    ", but the engine provides ",
-                                    formatSignature(nativeName, function->parameters, function->returnType)));
+        bool same = function->parameters.size() == import.parameters.size() && sameType(import.returnType, function->returnType);
+        for (std::size_t i = 0; same && i < import.parameters.size(); ++i) {
+            same = sameType(import.parameters[i], function->parameters[i]);
+        }
+        if (!same) {
+            return makeError(ErrorCode::InvalidData, concat("Script '", program->name_, "' declares native function ", expected,
+                                                            ", but the engine provides ", formatSignature(*function)));
         }
         program->natives_.push_back(std::move(function));
     }

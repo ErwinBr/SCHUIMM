@@ -152,14 +152,14 @@ SCHUIMM_TEST(EndToEnd_ProgramsAgreeWithAndWithoutOptimization)
     // A battery of small programs, including ones that fail: output, error message and error
     // location must not depend on the optimizer.
     const std::vector<std::string> programs{
-        "func main():\n\tx = 3\n\ty = x * 4 - 2\n\tif y > 5 and not (x == 2):\n\t\tprint(y)\n",
-        "func main():\n\ts = \"\"\n\tfor i in range(5):\n\t\ts = s + str(i)\n\tprint(s)\n",
-        "func main():\n\tk = 0\n\twhile k < 10:\n\t\tk = k + 3\n\tprint(k)\n\tprint(k // 4)\n\tprint(k % 4)\n",
-        "func main():\n\tbig = 4611686018427387904\n\tprint(big + big)\n",
-        "func main():\n\tprint(\"start\")\n\tx = 10 // (5 - 5)\n",
-        "func main():\n\ta = 1.5\n\tb = 2\n\tprint(a * b)\n\tprint(b / 4)\n\tprint(int(a * 3))\n",
-        "func f(n: int) -> int:\n\treturn n * n\nfunc main():\n\tt = 0\n\tfor i in range(1, 4):\n\t\tt = t + f(i)\n\tprint(t)\n",
-        "func main():\n\tflag = 1 < 2\n\tif flag:\n\t\tprint(\"a\")\n\telif 2 < 3:\n\t\tprint(\"b\")\n\telse:\n\t\tprint(\"c\")\n",
+        "func main():\n\tvar x = 3\n\tvar y = x * 4 - 2\n\tif y > 5 and not (x == 2):\n\t\tprint(y)\n",
+        "func main():\n\tvar s = \"\"\n\tfor i in range(5):\n\t\ts = s + str(i)\n\tprint(s)\n",
+        "func main():\n\tvar k = 0\n\twhile k < 10:\n\t\tk = k + 3\n\tprint(k)\n\tprint(k // 4)\n\tprint(k % 4)\n",
+        "func main():\n\tvar big = 4611686018427387904\n\tprint(big + big)\n",
+        "func main():\n\tprint(\"start\")\n\tvar x = 10 // (5 - 5)\n",
+        "func main():\n\tvar a = 1.5\n\tvar b = 2\n\tprint(a * b)\n\tprint(b / 4)\n\tprint(int(a * 3))\n",
+        "func f(n: int) -> int:\n\treturn n * n\nfunc main():\n\tvar t = 0\n\tfor i in range(1, 4):\n\t\tt = t + f(i)\n\tprint(t)\n",
+        "func main():\n\tvar flag = 1 < 2\n\tif flag:\n\t\tprint(\"a\")\n\telif 2 < 3:\n\t\tprint(\"b\")\n\telse:\n\t\tprint(\"c\")\n",
         "func main():\n\tfor i in range(3, 0, -1):\n\t\tprint(i)\n\t\twait(0.5)\n\tprint(\"go\")\n",
         "func main():\n\tprint(int(1e300))\n",
     };
@@ -178,13 +178,13 @@ SCHUIMM_TEST(EndToEnd_ProgramsAgreeWithAndWithoutOptimization)
 
 SCHUIMM_TEST(EndToEnd_DiagnosticsFormat)
 {
-    const Compiled c = compileSource("func main():\n\tplayer_speed = 2\n\tprint(player_sped)\n", true, "scripts/main.sch");
+    const Compiled c = compileSource("func main():\n\tvar player_speed = 2\n\tprint(player_sped)\n", true, "scripts/main.sch");
     REQUIRE(!c.result.success);
     const std::string text = c.diagnostics();
     CHECK(text.find("scripts/main.sch:3:8: error: Undefined variable 'player_sped'.") != std::string::npos);
     CHECK(text.find("\tprint(player_sped)") != std::string::npos);
     CHECK(text.find("^^^^^^^^^^^") != std::string::npos);
-    const Compiled d = compileSource("func main():\n\tcount: int = 1\n\tcount = \"many\"\n", true, "scripts/player.sch");
+    const Compiled d = compileSource("func main():\n\tvar count: int = 1\n\tcount = \"many\"\n", true, "scripts/player.sch");
     CHECK(d.diagnostics().find("scripts/player.sch:3:10: error: Cannot assign a value of type 'string' to variable 'count' of type 'int'.") !=
           std::string::npos);
 }

@@ -5,6 +5,7 @@ schuimm_add_test(ScriptTests
         BytecodeTests.cpp
         EndToEndTests.cpp
         IrTests.cpp
+        LanguageTypesTests.cpp
         LexerTests.cpp
         NativeTests.cpp
         ObjectTests.cpp

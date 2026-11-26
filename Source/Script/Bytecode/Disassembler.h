@@ -18,5 +18,7 @@ namespace schuimm::script {
 
 // Quotes and escapes text for listings and dumps.
 [[nodiscard]] std::string quoteString(const std::string& text);
+// "int", "vec2", or the enum name for enum types.
+[[nodiscard]] std::string formatType(const Module& module, TypeRef type);
 
 } // namespace schuimm::script

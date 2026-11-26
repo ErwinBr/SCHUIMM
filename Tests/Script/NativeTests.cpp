@@ -8,12 +8,12 @@ using namespace schuimm::script::test;
 
 namespace {
 
-NativeFunction native(std::string name, std::vector<ScriptType> parameters, ScriptType returnType,
+NativeFunction native(std::string name, std::vector<NativeType> parameters, NativeType returnType,
                       NativeImplementation implementation = [](NativeContext&, std::span<const Value>) {
                           return NativeResult::returnValue();
                       })
 {
-    return {std::move(name), std::move(parameters), returnType, std::move(implementation), {}};
+    return {std::move(name), std::move(parameters), std::move(returnType), std::move(implementation), {}};
 }
 
 } // namespace
@@ -33,7 +33,9 @@ SCHUIMM_TEST(Native_RegistrationIsValidated)
     CHECK(!registry.add({"bad", {}, ScriptType::None, {}, {}}).has_value()); // no implementation
     CHECK(registry.add(native("log_any", {ScriptType::Any}, ScriptType::None)).has_value());
     CHECK(registry.names() == std::vector<std::string>({"log_any", "play_sound"}));
-    CHECK_EQ(formatSignature("wait", {ScriptType::Float}, ScriptType::None), std::string("wait(float) -> None"));
+    CHECK(!registry.add(native("bad", {}, ScriptType::Entity)).has_value());
+    CHECK(!registry.add(native("bad", {NativeType(ScriptType::Enum, "test.Missing")}, ScriptType::None)).has_value());
+    CHECK_EQ(formatSignature(native("wait", {ScriptType::Float}, ScriptType::None)), std::string("wait(float) -> None"));
 }
 
 SCHUIMM_TEST(Native_ExternFunctionsAreCalledWithTypedArguments)
@@ -51,7 +53,7 @@ SCHUIMM_TEST(Native_ExternFunctionsAreCalledWithTypedArguments)
                             }))
                 .has_value());
     const ScriptRun run = runScript("extern func move_character(name: string, x: int, speed: float) -> bool\n"
-                                    "func main():\n\tok = move_character(\"Alex\", 3, 2)\n\tprint(ok)\n"
+                                    "func main():\n\tvar ok = move_character(\"Alex\", 3, 2)\n\tprint(ok)\n"
                                     "\tprint(move_character(\"Bo\", -1, 0.5))\n",
                                     {}, &registry);
     REQUIRE(run.errors.empty());
@@ -148,8 +150,8 @@ SCHUIMM_TEST(Native_NativesWithResultsCannotSuspend)
                             [](NativeContext&, std::span<const Value>) { return NativeResult::yieldNow(); }))
                 .has_value());
     const ScriptRun run = runScript("extern func wait_for_choice() -> int\nextern func yield_flag() -> bool\n"
-                                    "func first():\n\tprint(\"a\")\n\tchoice = wait_for_choice()\n\tprint(choice)\n"
-                                    "func second():\n\tflag = yield_flag()\n",
+                                    "func first():\n\tprint(\"a\")\n\tvar choice = wait_for_choice()\n\tprint(choice)\n"
+                                    "func second():\n\tvar flag = yield_flag()\n",
                                     RunConfig{.entries = {"first", "second"}}, &registry);
     REQUIRE(run.errors.size() == 2);
     CHECK(run.errors[0].kind == ScriptErrorKind::Native);

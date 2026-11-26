@@ -4,6 +4,7 @@ namespace schuimm::script {
 
 const char* toString(Type type) noexcept
 {
+    if (isEnum(type)) return "enum";
     switch (type) {
     case Type::Error: return "<error>";
     case Type::None: return "None";
@@ -13,12 +14,20 @@ const char* toString(Type type) noexcept
     case Type::String: return "string";
     case Type::Any: return "any";
     case Type::Object: return "object";
+    case Type::Actor: return "actor";
+    case Type::Entity: return "entity";
+    case Type::Vec2: return "vec2";
+    case Type::Coroutine: return "coroutine";
+    case Type::Operation: return "operation";
+    case Type::Named: return "<unresolved>";
+    case Type::EnumBase: return "enum";
     }
     return "?";
 }
 
-ScriptType toScriptType(Type type) noexcept
+TypeRef toTypeRef(Type type) noexcept
 {
+    if (isEnum(type)) return TypeRef::enumType(static_cast<std::uint16_t>(enumIndexOf(type)));
     switch (type) {
     case Type::Bool: return ScriptType::Bool;
     case Type::Int: return ScriptType::Int;
@@ -26,24 +35,13 @@ ScriptType toScriptType(Type type) noexcept
     case Type::String: return ScriptType::String;
     case Type::Any: return ScriptType::Any;
     case Type::Object: return ScriptType::Object;
-    case Type::Error:
-    case Type::None: return ScriptType::None;
+    case Type::Actor: return ScriptType::Actor;
+    case Type::Entity: return ScriptType::Entity;
+    case Type::Vec2: return ScriptType::Vec2;
+    case Type::Coroutine: return ScriptType::Coroutine;
+    case Type::Operation: return ScriptType::Operation;
+    default: return ScriptType::None;
     }
-    return ScriptType::None;
-}
-
-Type fromScriptType(ScriptType type) noexcept
-{
-    switch (type) {
-    case ScriptType::None: return Type::None;
-    case ScriptType::Bool: return Type::Bool;
-    case ScriptType::Int: return Type::Int;
-    case ScriptType::Float: return Type::Float;
-    case ScriptType::String: return Type::String;
-    case ScriptType::Any: return Type::Any;
-    case ScriptType::Object: return Type::Object;
-    }
-    return Type::Error;
 }
 
 std::optional<Type> typeFromName(std::string_view name) noexcept
@@ -52,6 +50,11 @@ std::optional<Type> typeFromName(std::string_view name) noexcept
     if (name == "float") return Type::Float;
     if (name == "bool") return Type::Bool;
     if (name == "string") return Type::String;
+    if (name == "entity") return Type::Entity;
+    if (name == "actor") return Type::Actor;
+    if (name == "vec2") return Type::Vec2;
+    if (name == "coroutine") return Type::Coroutine;
+    if (name == "operation") return Type::Operation;
     return std::nullopt;
 }
 
@@ -60,6 +63,7 @@ bool isAssignable(Type from, Type to) noexcept
     if (from == Type::Error || to == Type::Error) return true;
     if (from == to) return from != Type::None;
     if (from == Type::Int && to == Type::Float) return true;
+    if (to == Type::Entity) return from == Type::Actor || from == Type::Object;
     if (to == Type::Any) return from != Type::None;
     return false;
 }

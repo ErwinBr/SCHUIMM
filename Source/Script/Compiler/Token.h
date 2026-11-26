@@ -36,6 +36,10 @@ namespace schuimm::script {
     X(KwNone, "'None'")                                                                             \
     X(KwObject, "'object'")                                                                         \
     X(KwSelf, "'self'")                                                                             \
+    X(KwVar, "'var'")                                                                               \
+    X(KwEnum, "'enum'")                                                                             \
+    X(KwSpawn, "'spawn'")                                                                           \
+    X(Dot, "'.'")                                                                                   \
     X(LeftParen, "'('")                                                                             \
     X(RightParen, "')'")                                                                            \
     X(Comma, "','")                                                                                 \

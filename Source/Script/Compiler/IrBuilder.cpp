@@ -2,6 +2,8 @@
 
 #include "Core/Common/Assert.h"
 
+#include <utility>
+
 namespace schuimm::script {
 
 namespace {
@@ -22,12 +24,12 @@ public:
         const FunctionDecl& declaration = *function_.declaration;
         out_.name = declaration.name;
         out_.object = function_.isHandler() ? function_.object : noObject;
-        out_.returnType = declaration.returnType;
+        out_.returnType = function_.returnType;
         if (function_.isHandler()) {
             out_.parameters.push_back(Type::Object); // Hidden "self" (variable 0).
         }
-        for (const Parameter& parameter : declaration.parameters) {
-            out_.parameters.push_back(parameter.type);
+        for (const Type type : function_.parameters) {
+            out_.parameters.push_back(type);
         }
         // Variable i lives in virtual register i (parameters first).
         for (const VariableInfo& variable : function_.variables) {
@@ -37,7 +39,7 @@ public:
         block(*declaration.body);
         if (!terminated()) {
             const SourcePosition end = positionOf(declaration.body->range);
-            terminate({declaration.returnType == Type::None ? TerminatorKind::Return : TerminatorKind::Unreachable,
+            terminate({function_.returnType == Type::None ? TerminatorKind::Return : TerminatorKind::Unreachable,
                        noVReg, 0, 0, end});
         }
     }
@@ -114,7 +116,12 @@ private:
         case StmtKind::Expression: expression(*s.value, true); return;
         case StmtKind::Assign: {
             const VReg value = expression(*s.value);
-            emit(IrOp::Move, semantics_.statement(s).variable, {value}, position);
+            const StatementInfo& info = semantics_.statement(s);
+            if (info.component) {
+                emit(info.componentIndex == 0 ? IrOp::SetVec2X : IrOp::SetVec2Y, info.variable, {info.variable, value}, position);
+            } else {
+                emit(IrOp::Move, info.variable, {value}, position);
+            }
             return;
         }
         case StmtKind::If: {
@@ -278,10 +285,26 @@ private:
         // expression is evaluated. Values that must outlive a statement (range bounds) are copied.
         case ExprKind::Name:
         case ExprKind::Self: return info.variable;
+        case ExprKind::Member: {
+            if (info.isEnumMember) {
+                const VReg dest = temporary(info.type);
+                IrInstruction& load = emit(IrOp::LoadEnum, dest, {}, position);
+                load.callee = enumIndexOf(info.type);
+                load.intValue = info.enumMember;
+                return dest;
+            }
+            const VReg vector = expression(*e.left);
+            const VReg dest = temporary(Type::Float);
+            emit(info.component == 0 ? IrOp::Vec2X : IrOp::Vec2Y, dest, {vector}, position);
+            return dest;
+        }
         case ExprKind::Unary: {
             const VReg operand = expression(*e.left);
             const VReg dest = temporary(info.type);
-            const IrOp op = e.unaryOp == UnaryOp::Not ? IrOp::Not : (info.type == Type::Float ? IrOp::NegFloat : IrOp::NegInt);
+            const IrOp op = e.unaryOp == UnaryOp::Not  ? IrOp::Not
+                            : info.type == Type::Vec2  ? IrOp::NegVec2
+                            : info.type == Type::Float ? IrOp::NegFloat
+                                                       : IrOp::NegInt;
             emit(op, dest, {operand}, position);
             return dest;
         }
@@ -323,18 +346,31 @@ private:
         case Type::Int: return static_cast<IrOp>(static_cast<int>(IrOp::EqInt) + index);
         case Type::Float: return static_cast<IrOp>(static_cast<int>(IrOp::EqFloat) + index);
         case Type::String: return static_cast<IrOp>(static_cast<int>(IrOp::EqString) + index);
-        case Type::Object: return op == BinaryOp::Equal ? IrOp::EqObject : IrOp::NeObject;
-        default: return op == BinaryOp::Equal ? IrOp::EqBool : IrOp::NeBool;
+        case Type::Vec2: return op == BinaryOp::Equal ? IrOp::EqVec2 : IrOp::NeVec2;
+        default:
+            if (isReference(type)) return op == BinaryOp::Equal ? IrOp::EqRef : IrOp::NeRef;
+            if (isEnum(type)) return op == BinaryOp::Equal ? IrOp::EqEnum : IrOp::NeEnum;
+            return op == BinaryOp::Equal ? IrOp::EqBool : IrOp::NeBool;
         }
     }
 
     VReg binary(const Expr& e, const ExprInfo& info, SourcePosition position)
     {
-        const VReg left = expression(*e.left);
-        const VReg right = expression(*e.right);
+        VReg left = expression(*e.left);
+        VReg right = expression(*e.right);
         IrOp op = IrOp::AddInt;
         Type type = info.type;
-        if (isComparison(e.binaryOp)) {
+        if (info.type == Type::Vec2) {
+            switch (e.binaryOp) {
+            case BinaryOp::Add: op = IrOp::AddVec2; break;
+            case BinaryOp::Subtract: op = IrOp::SubVec2; break;
+            case BinaryOp::Divide: op = IrOp::DivVec2; break;
+            default: op = IrOp::MulVec2; break;
+            }
+            if (info.swapOperands) {
+                std::swap(left, right); // scalar * vector: both are evaluated, left to right, already.
+            }
+        } else if (isComparison(e.binaryOp)) {
             op = comparison(e.binaryOp, operandType(*e.left));
             type = Type::Bool;
         } else if (info.type == Type::String) {
@@ -362,6 +398,11 @@ private:
         for (const auto& argument : e.arguments) {
             arguments.push_back(expression(*argument));
         }
+        if (info.callKind == CallKind::Intrinsic && info.intrinsic == Intrinsic::MakeVec2) {
+            const VReg dest = temporary(Type::Vec2);
+            emit(IrOp::MakeVec2, dest, {arguments.at(0), arguments.at(1)}, position);
+            return dest;
+        }
         if (info.callKind == CallKind::Intrinsic) {
             const VReg argument = arguments.at(0);
             const Type from = semantics_.expression(*e.arguments[0]).type;
@@ -379,6 +420,7 @@ private:
                 if (from == Type::String) return argument;
                 op = from == Type::Int ? IrOp::IntToString : (from == Type::Float ? IrOp::FloatToString : IrOp::BoolToString);
                 break;
+            case Intrinsic::MakeVec2: break;
             }
             const VReg dest = temporary(info.type);
             emit(op, dest, {argument}, position);
@@ -407,6 +449,9 @@ IrModule buildIr(const SourceUnit& unit, const SemanticModel& semantics, std::st
     module.sourceName = std::move(sourceName);
     for (const NativeSignature& native : semantics.natives()) {
         module.natives.push_back({native.name, native.parameters, native.returnType, native.pure});
+    }
+    for (const EnumInfo& declaration : semantics.enums()) {
+        module.enums.push_back({declaration.name, declaration.qualifier, declaration.members});
     }
     for (const FunctionSemantics& function : semantics.functions()) {
         module.functions.emplace_back();

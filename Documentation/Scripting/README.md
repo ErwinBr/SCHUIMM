@@ -9,6 +9,16 @@ the engine dispatches an event by object identifier and event name, and the hand
 the object as `self` ([Language.md §8](Language.md#8-objects-and-handlers),
 [Runtime.md](Runtime.md#object-handlers-and-dispatch), [Examples/kitchen.sch](Examples/kitchen.sch)).
 
+Language 2.0 (Milestone 4.4) adds:
+- required `var` declarations;
+- the entity reference types `actor`, `object` and `entity`;
+- scoped enums;
+- the `vec2` type;
+- native API interfaces: engine functions and enums declared once in C++ and used by both the
+  compiler and the runtime ([Runtime.md](Runtime.md#native-interfaces)).
+
+Bytecode is format 2.0, with typed registers.
+
 | Document | Contents |
 |---|---|
 | [Language.md](Language.md) | Language specification: syntax, types, operators, scopes, functions, objects and handlers, coroutines, runtime errors, differences from Python |

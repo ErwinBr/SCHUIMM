@@ -162,7 +162,7 @@ SCHUIMM_TEST(Scheduler_Cancellation)
     Fixture f;
     const std::int64_t stringsBefore = StringObject::liveCount();
     {
-        const auto program = f.load("func main():\n\tlabel = \"x\" + str(5)\n\twait(10.0)\n\tprint(label)\n");
+        const auto program = f.load("func main():\n\tvar label = \"x\" + str(5)\n\twait(10.0)\n\tprint(label)\n");
         const auto handle = f.start(program);
         f.scheduler.update(0.0);
         CHECK(f.scheduler.state(handle) == std::optional<CoroutineState>(CoroutineState::Waiting));
@@ -182,7 +182,7 @@ SCHUIMM_TEST(Scheduler_Cancellation)
 SCHUIMM_TEST(Scheduler_RuntimeErrorsFailOnlyTheirCoroutine)
 {
     Fixture f;
-    const auto program = f.load("func bad():\n\tzero = 0\n\tprint(1 // zero)\nfunc good():\n\tyield()\n\tprint(\"still running\")\n");
+    const auto program = f.load("func bad():\n\tvar zero = 0\n\tprint(1 // zero)\nfunc good():\n\tyield()\n\tprint(\"still running\")\n");
     const auto bad = f.start(program, "bad");
     const auto good = f.start(program, "good");
     f.scheduler.update(0.0);
@@ -200,7 +200,7 @@ SCHUIMM_TEST(Scheduler_InstructionBudgetStopsRunawayScripts)
     SchedulerSettings settings;
     settings.instructionBudget = 1000;
     Fixture f(settings);
-    const auto program = f.load("func spin():\n\tx = 0\n\twhile True:\n\t\tx = x + 1\n"
+    const auto program = f.load("func spin():\n\tvar x = 0\n\twhile True:\n\t\tx = x + 1\n"
                                 "func calls():\n\twhile True:\n\t\thelper()\nfunc helper():\n\tpass\n"
                                 "func fine():\n\tprint(\"fine\")\n");
     const auto spin = f.start(program, "spin");
@@ -229,7 +229,7 @@ SCHUIMM_TEST(Scheduler_PreemptPolicyContinuesNextUpdate)
     settings.instructionBudget = 500;
     settings.budgetPolicy = BudgetPolicy::Preempt;
     Fixture f(settings);
-    const auto program = f.load("func busy():\n\ttotal = 0\n\tfor i in range(1000):\n\t\ttotal = total + i\n\tprint(total)\n"
+    const auto program = f.load("func busy():\n\tvar total = 0\n\tfor i in range(1000):\n\t\ttotal = total + i\n\tprint(total)\n"
                                 "func other():\n\tfor i in range(3):\n\t\tprint(\"other\")\n\t\tyield()\n");
     const auto busy = f.start(program, "busy");
     f.start(program, "other");
@@ -306,7 +306,7 @@ SCHUIMM_TEST(Scheduler_ScriptHostLogsAndReleases)
     host.setOutputCallback([&](std::string_view program, std::string_view text) {
         output.push_back(std::string(program) + ": " + std::string(text));
     });
-    const Compiled c = compileSource("func main():\n\tprint(\"hi\")\n\twait(1.0)\nfunc broken():\n\tzero = 0\n\tprint(1 // zero)\n");
+    const Compiled c = compileSource("func main():\n\tprint(\"hi\")\n\twait(1.0)\nfunc broken():\n\tvar zero = 0\n\tprint(1 // zero)\n");
     REQUIRE(c.result.success);
     auto bytes = writeBytecode(c.result.module);
     REQUIRE(bytes.has_value());

@@ -29,9 +29,19 @@ bytecode lives exactly as long as it is needed.
 
 ## Values and strings
 
-`Value` is a 16-byte tagged union: None, bool, int (`int64_t`), float (`double`), string or
-object. An object value is an `ObjectRef { std::uint64_t id; }`: an opaque handle chosen by the
-engine (see [Object handlers](#object-handlers-and-dispatch)); it owns nothing.
+`Value` is a 24-byte tagged union:
+- None, bool, int (`int64_t`), float (`double`), string;
+- `vec2`: two doubles (`Value::fromVec2`, `vec2X()`, `vec2Y()`), a plain value;
+- enum: the enum's index in the module's enum table and the member ordinal
+  (`Value::fromEnum`, `enumIndex()`, `enumOrdinal()`);
+- references: `actor` (`Value::fromActor`) or `object` (`Value::fromObject`), each holding an
+  `ObjectRef { std::uint64_t id; }`. That is an opaque handle chosen by the engine (see
+  [Object handlers](#object-handlers-and-dispatch)); it owns nothing, and id 0 is the null
+  reference. A register declared `entity` holds either kind.
+
+`Value::matches(TypeRef)` decides whether a value fits a declared type: `any` takes everything
+but None, `entity` takes actor and object references, and an enum value must belong to the
+declared enum.
 Strings are `StringObject`s: immutable, with an intrusive, **non-atomic** reference count; a
 string `Value` holds one reference, so registers contain a pointer, not a `std::string`.
 Ownership rules:
@@ -56,9 +66,13 @@ plain `switch` dispatch (no computed goto or platform-specific tricks).
   caller and shrinks the register stack (releasing the frame's values).
 * **Limits** (`CoroutineLimits`): call depth (200), register stack (2²⁰ values), string length
   (16 MiB). Exceeding one is a runtime error.
-* **Safety:** typed instructions check the tags of their operands (`AddInt` needs two ints);
-  a mismatch — impossible for compiler output, possible for hand-made bytecode — is an
-  `InvalidBytecode` error. Uninitialised registers are None, which no typed instruction accepts.
+* **Safety:** the validator checks every instruction against the function's register types
+  ([Bytecode.md](Bytecode.md#typed-registers)). The VM also checks the tags of the operands
+  (`AddInt` needs two ints); a mismatch is an `InvalidBytecode` error. That is impossible for
+  compiler output, but it catches a read of an uninitialised register, which holds None and is
+  accepted by no typed instruction.
+* **Vectors** follow float arithmetic per component; `DivVec2` by zero is the "Division by zero"
+  error, like float division.
 * **Arithmetic** uses `Script/Bytecode/Semantics.h`, shared with the optimizer:
   checked int operations, floored division/modulo, IEEE float, the conversions and the text of
   values ([Language.md §4.2, §6.3](Language.md#42-arithmetic)). Float text uses streams with the
@@ -92,8 +106,51 @@ Tracing is off unless a callback is set; `schuimm-run --trace` enables it.
 
 ## Native functions
 
-The VM knows how to call an engine function, not what it does. A native is registered with a
-name, parameter types, return type, implementation and documentation:
+The VM knows how to call an engine function, not what it does.
+
+### Native interfaces
+
+Engine APIs are declared once, as a `NativeInterface` (`Script/Bytecode/NativeInterface.h`):
+- a name, which also qualifies its enums (`adventure.Direction`);
+- its enums (`EnumDeclaration`: a name and members);
+- its functions (`NativeDeclaration`):
+  - a name;
+  - typed parameters and result (`NativeType`, which names an enum of the interface for enum
+    types);
+  - an execution category: `Immediate`, `Suspending` or `Background`;
+  - whether it is pure (no side effects; the optimizer may drop unused calls);
+  - documentation.
+
+An interface holds no implementations and needs no engine subsystem. The compiler reads it to
+resolve calls (`CompileOptions::interfaces`, `schuimmc --interface NAME`), and the runtime binds
+implementations to it. Both work from the same declaration, so they cannot disagree:
+
+```cpp
+std::unordered_map<std::string, NativeImplementation> implementations;
+implementations["describe_mood"] = [](NativeContext&, std::span<const Value> arguments) { ... };
+// ... one per declared function
+REQUIRE(registry.bind(myInterface(), std::move(implementations)));
+```
+
+`NativeRegistry::bind` fails, and registers nothing, if:
+- the interface is malformed (`checkInterface`);
+- a declaration has no implementation, or an implementation matches no declaration;
+- a function name is already registered;
+- an enum of that qualified name is registered with different members.
+
+Enum values cross the boundary as ordinals:
+- an enum argument arrives as a `Value` whose `enumOrdinal()` is the member;
+- a native returns `Value::fromEnum(0, ordinal)`. The VM sets the calling module's enum index and
+  fails the call ("invalid enum ordinal") if the ordinal is out of range.
+
+**The core interface** (`coreInterface()`, bound by `registerStandardNatives`) is what every
+script sees: `print(any)`, `wait(float)`, `yield()`, and the vector functions `length`,
+`distance`, `normalize` and `lerp` ([Language.md §6.2](Language.md#62-built-in-functions)).
+
+### Single natives
+
+A native that no interface declares is registered on its own, with a name, parameter types,
+return type, implementation and documentation. Scripts declare it with `extern func`:
 
 ```cpp
 host.natives().add({"play_sound", {ScriptType::String, ScriptType::Float}, ScriptType::None,
@@ -111,9 +168,10 @@ extern func play_sound(name: string, volume: float)   # in the script
 * Arguments arrive already checked against the declared types; the return value is checked
   against the declared return type (a mismatch is a `Native` error).
 * `ScriptType::Any` accepts every value but None (used by `print`).
-* `ScriptType::Object` parameters and results carry `ObjectRef` handles (`arguments[0].asObject()`,
-  `Value::fromObject(ref)`). This is how scripts reach object state: the engine resolves the
-  handle to its own object.
+* `ScriptType::Actor` and `ScriptType::Object` parameters and results carry `ObjectRef` handles
+  (`arguments[0].asReference()`, `Value::fromActor(ref)`, `Value::fromObject(ref)`). An `Entity`
+  parameter accepts either; `value.type()` tells which. This is how scripts reach entity state:
+  the engine resolves the handle to its own entity. A native cannot return `entity` or `any`.
 * An implementation returns `NativeResult::returnValue(v)`, `waitFor(nanoseconds)`,
   `yieldNow()` or `error(message)`. `waitFor` and `yieldNow` suspend the coroutine — this is how
   `wait`/`yield` are implemented, and how future natives such as `wait_until`, `say` or
@@ -130,7 +188,14 @@ extern func play_sound(name: string, volume: float)   # in the script
 * Natives must not call back into the VM. They typically capture engine objects by reference;
   those must outlive every program using the native (destroy or `stopAll()` the host first).
 
-The prelude (`registerStandardNatives`): `print(any)`, `wait(float)`, `yield()`.
+### Linking
+
+`Program::link` resolves every native import by name and compares its signature with the
+registered function, including the identity of enum types. It also checks every engine enum of
+the module against the registry: same qualified name, same members in the same order.
+- A missing function or enum fails with `NotFound`.
+- A different signature, or an enum with other members, fails with `InvalidData` ("recompile the
+  script from its source").
 
 ## Object handlers and dispatch
 
@@ -272,7 +337,7 @@ Either way the game loop continues.
 
 ## ScriptHost and the game loop
 
-`ScriptHost` bundles the registry (with the prelude), program loading and the scheduler and
+`ScriptHost` bundles the registry (with the core interface), program loading and the scheduler and
 reports through the engine `Logger`:
 
 * `natives()` — register game natives before loading programs that use them;
@@ -322,5 +387,5 @@ schuimmc Tests/Script/Data/objects.sch -o objects.schb
 schuimm-run objects.schb --dispatch lamp.look_at=7 --dispatch lamp.use --dt 0.25
 ```
 
-`schuimm-run` registers only the prelude natives, so scripts using game natives (like
+`schuimm-run` registers only the core interface, so scripts using game natives (like
 `kitchen.sch`) cannot be run with it.

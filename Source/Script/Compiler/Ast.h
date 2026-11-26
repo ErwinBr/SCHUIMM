@@ -26,6 +26,7 @@ enum class ExprKind : std::uint8_t {
     Unary,
     Binary,
     Call,
+    Member, // left.text: an enum member ("Direction.NORTH") or a vec2 component ("v.x").
 };
 
 enum class UnaryOp : std::uint8_t { Negate, Not };
@@ -46,11 +47,11 @@ struct Expr {
     std::int64_t intValue = 0;
     double floatValue = 0.0;
     bool boolValue = false;
-    std::string text; // StringLiteral value, Name or Call callee name.
-    SourceRange nameRange; // Call: the callee name.
+    std::string text; // StringLiteral value, Name, Call callee name or Member member name.
+    SourceRange nameRange; // Call: the callee name. Member: the member name.
     UnaryOp unaryOp = UnaryOp::Negate;
     BinaryOp binaryOp = BinaryOp::Add;
-    std::unique_ptr<Expr> left;  // Unary operand or left operand.
+    std::unique_ptr<Expr> left;  // Unary operand, left operand or the object of a Member.
     std::unique_ptr<Expr> right;
     std::vector<std::unique_ptr<Expr>> arguments;
 };
@@ -69,14 +70,26 @@ struct IfBranch {
     std::unique_ptr<Block> body;
 };
 
+// A type written in the source. `type` is Type::Named for a name that is not a built-in type
+// (an enum); the type checker resolves it.
+struct TypeSyntax {
+    Type type = Type::Error;
+    std::string name;
+    SourceRange range;
+};
+
 struct Stmt {
     StmtKind kind = StmtKind::Pass;
     SourceRange range;
     // Assign / For: the variable.
     std::string name;
     SourceRange nameRange;
-    std::optional<Type> annotation; // Assign: "name: type = value".
-    SourceRange annotationRange;
+    // Assign: "var name[: type] = value" declares the variable; "name = value" assigns it and
+    // "name.member = value" assigns a vec2 component (member: "x" or "y").
+    bool declaration = false;
+    std::optional<TypeSyntax> annotation;
+    std::string member;
+    SourceRange memberRange;
     // Expression, Assign, Return (may be null), While (condition).
     std::unique_ptr<Expr> value;
     // If: the "if" branch followed by every "elif".
@@ -91,8 +104,7 @@ struct Stmt {
 struct Parameter {
     std::string name;
     SourceRange nameRange;
-    Type type = Type::Error;
-    SourceRange typeRange;
+    TypeSyntax type;
 };
 
 struct FunctionDecl {
@@ -100,8 +112,7 @@ struct FunctionDecl {
     std::string name;
     SourceRange nameRange;
     std::vector<Parameter> parameters;
-    Type returnType = Type::None;
-    SourceRange returnTypeRange;
+    TypeSyntax returnType{Type::None, {}, {}};
     bool isExtern = false;        // "extern func": a native function implemented by the engine.
     bool isHandler = false;       // Declared inside an "object" block (see ObjectDecl).
     std::unique_ptr<Block> body;  // Null for extern declarations.
@@ -117,10 +128,24 @@ struct ObjectDecl {
     std::vector<std::unique_ptr<FunctionDecl>> handlers; // isHandler is set on each.
 };
 
+// "enum Name:" followed by an indented list of member names, one per line.
+struct EnumMember {
+    std::string name;
+    SourceRange range;
+};
+
+struct EnumDecl {
+    SourceRange range;
+    std::string name;
+    SourceRange nameRange;
+    std::vector<EnumMember> members;
+};
+
 // The root: one source file.
 struct SourceUnit {
     std::vector<std::unique_ptr<FunctionDecl>> functions; // Room-level functions and extern declarations.
     std::vector<std::unique_ptr<ObjectDecl>> objects;     // In declaration order.
+    std::vector<std::unique_ptr<EnumDecl>> enums;         // In declaration order.
 };
 
 } // namespace schuimm::script

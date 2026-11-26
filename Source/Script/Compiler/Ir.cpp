@@ -29,6 +29,14 @@ std::vector<BlockId> successors(const Terminator& terminator)
     }
 }
 
+std::string typeName(Type type, const IrModule& module)
+{
+    if (isEnum(type) && enumIndexOf(type) < module.enums.size()) {
+        return module.enums[enumIndexOf(type)].name;
+    }
+    return toString(type);
+}
+
 std::string displayName(const IrFunction& function, const IrModule& module)
 {
     if (function.object < module.objects.size()) {
@@ -49,6 +57,15 @@ std::string formatIrInstruction(const IrInstruction& instruction, const IrModule
     case IrOp::LoadFloat: text += " " + formatFloat(instruction.floatValue); break;
     case IrOp::LoadBool: text += concat(" ", formatBool(instruction.boolValue)); break;
     case IrOp::LoadString: text += " " + quoteString(instruction.stringValue); break;
+    case IrOp::LoadEnum: {
+        const IrEnum* declaration = instruction.callee < module.enums.size() ? &module.enums[instruction.callee] : nullptr;
+        if (declaration != nullptr && static_cast<std::size_t>(instruction.intValue) < declaration->members.size()) {
+            text += concat(" ", declaration->name, ".", declaration->members[static_cast<std::size_t>(instruction.intValue)]);
+        } else {
+            text += concat(" enum", instruction.callee, ".", instruction.intValue);
+        }
+        break;
+    }
     case IrOp::Call:
         text += " " + (instruction.callee < module.functions.size() ? module.functions[instruction.callee].name
                                                                      : concat("f", instruction.callee));
@@ -69,9 +86,9 @@ std::string dumpIr(const IrFunction& function, const IrModule& module)
 {
     std::string out = concat("func ", displayName(function, module), "(");
     for (std::size_t i = 0; i < function.parameters.size(); ++i) {
-        out += concat(i == 0 ? "" : ", ", "r", i, ": ", toString(function.parameters[i]));
+        out += concat(i == 0 ? "" : ", ", "r", i, ": ", typeName(function.parameters[i], module));
     }
-    out += concat(") -> ", toString(function.returnType), "\n");
+    out += concat(") -> ", typeName(function.returnType, module), "\n");
     for (std::size_t b = 0; b < function.blocks.size(); ++b) {
         const IrBlock& block = function.blocks[b];
         out += concat("bb", b, ":\n");
@@ -96,9 +113,16 @@ std::string dumpIr(const IrModule& module)
     for (const IrNative& native : module.natives) {
         out += concat("native ", native.name, "(");
         for (std::size_t i = 0; i < native.parameters.size(); ++i) {
-            out += concat(i == 0 ? "" : ", ", toString(native.parameters[i]));
+            out += concat(i == 0 ? "" : ", ", typeName(native.parameters[i], module));
         }
-        out += concat(") -> ", toString(native.returnType), "\n");
+        out += concat(") -> ", typeName(native.returnType, module), "\n");
+    }
+    for (const IrEnum& declaration : module.enums) {
+        out += concat("enum ", declaration.qualifier.empty() ? "" : declaration.qualifier + ".", declaration.name, ":");
+        for (const std::string& member : declaration.members) {
+            out += " " + member;
+        }
+        out += "\n";
     }
     for (const IrObject& object : module.objects) {
         out += concat("object ", object.name, ":");

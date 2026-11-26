@@ -47,12 +47,17 @@ struct Compiled {
     }
 };
 
-inline Compiled compileSource(std::string text, bool optimize = true, std::string name = "test.sch")
+inline Compiled compileSource(std::string text, const CompileOptions& options, std::string name = "test.sch")
 {
     Compiled compiled;
     compiled.source = std::make_unique<SourceFile>(std::move(name), std::move(text));
-    compiled.result = compile(*compiled.source, CompileOptions{optimize});
+    compiled.result = compile(*compiled.source, options);
     return compiled;
+}
+
+inline Compiled compileSource(std::string text, bool optimize = true, std::string name = "test.sch")
+{
+    return compileSource(std::move(text), CompileOptions{.optimize = optimize, .interfaces = {}}, std::move(name));
 }
 
 struct RunConfig {
@@ -63,6 +68,7 @@ struct RunConfig {
     BudgetPolicy policy = BudgetPolicy::Fail;
     std::vector<std::string> entries{"main"};
     bool throughBytecodeFile = true; // Serialise and re-read (as the game does).
+    std::vector<const NativeInterface*> interfaces{}; // Besides the core interface.
 };
 
 struct ScriptRun {
@@ -85,7 +91,7 @@ struct ScriptRun {
 inline ScriptRun runScript(std::string source, RunConfig config = {}, NativeRegistry* extraNatives = nullptr)
 {
     ScriptRun run;
-    Compiled compiled = compileSource(std::move(source), config.optimize);
+    Compiled compiled = compileSource(std::move(source), CompileOptions{.optimize = config.optimize, .interfaces = config.interfaces});
     run.diagnostics = compiled.diagnostics();
     if (!compiled.result.success) {
         return run;

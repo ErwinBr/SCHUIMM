@@ -54,11 +54,20 @@ bool fitsU32(std::size_t value) noexcept { return value <= std::numeric_limits<s
 
 Status tooLarge(const char* what) { return makeError(ErrorCode::InvalidArgument, concat("Bytecode: too many ", what)); }
 
-void writeTypes(ByteWriter& out, const std::vector<ScriptType>& types)
+// A type: its kind, and for enums the u16 enum index.
+void writeType(ByteWriter& out, TypeRef type)
+{
+    out.u8(static_cast<std::uint8_t>(type.kind));
+    if (type.kind == ScriptType::Enum) {
+        out.u16(type.enumIndex);
+    }
+}
+
+void writeTypes(ByteWriter& out, const std::vector<TypeRef>& types)
 {
     out.u8(static_cast<std::uint8_t>(types.size()));
-    for (const ScriptType type : types) {
-        out.u8(static_cast<std::uint8_t>(type));
+    for (const TypeRef type : types) {
+        writeType(out, type);
     }
 }
 
@@ -74,6 +83,9 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     for (const Function& function : module.functions) {
         if (function.parameters.size() > format::maxParameters) {
             return std::unexpected(tooLarge("parameters").error());
+        }
+        if (function.registerTypes.size() > 0xFFFF) {
+            return std::unexpected(tooLarge("registers").error());
         }
         if (function.positions.size() != function.code.size()) {
             return makeError(ErrorCode::InvalidArgument, "Bytecode: debug positions do not match the code");
@@ -153,7 +165,7 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     out.u32(static_cast<std::uint32_t>(module.imports.size()));
     for (const NativeImport& import : module.imports) {
         out.u32(import.nameIndex);
-        out.u8(static_cast<std::uint8_t>(import.returnType));
+        writeType(out, import.returnType);
         writeTypes(out, import.parameters);
     }
     endSection();
@@ -163,9 +175,12 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     std::uint32_t codeOffset = 0;
     for (const Function& function : module.functions) {
         out.u32(function.nameIndex);
-        out.u8(static_cast<std::uint8_t>(function.returnType));
+        writeType(out, function.returnType);
         writeTypes(out, function.parameters);
-        out.u16(function.registerCount);
+        out.u16(function.registerCount());
+        for (const TypeRef type : function.registerTypes) {
+            writeType(out, type);
+        }
         out.u32(codeOffset);
         out.u32(static_cast<std::uint32_t>(function.code.size()));
         out.u32(codeOffset); // Debug entries parallel the code.
@@ -186,7 +201,7 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     }
     endSection();
 
-    // Objects: section 7, written after Debug so sections 1-6 keep the 1.0 order.
+    // Objects and Enums (sections 7 and 8) follow Debug.
     const auto writeObjects = [&]() -> Status {
         if (!fitsU32(module.objects.size())) {
             return tooLarge("objects");
@@ -220,6 +235,24 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     beginSection(); // Objects
     if (auto status = writeObjects(); !status) {
         return std::unexpected(status.error());
+    }
+    endSection();
+
+    beginSection(); // Enums
+    if (!fitsU32(module.enums.size())) {
+        return std::unexpected(tooLarge("enums").error());
+    }
+    out.u32(static_cast<std::uint32_t>(module.enums.size()));
+    for (const EnumEntry& entry : module.enums) {
+        if (!fitsU32(entry.members.size())) {
+            return std::unexpected(tooLarge("enum members").error());
+        }
+        out.u32(entry.nameIndex);
+        out.u32(entry.qualifierIndex);
+        out.u32(static_cast<std::uint32_t>(entry.members.size()));
+        for (const std::uint32_t member : entry.members) {
+            out.u32(member);
+        }
     }
     endSection();
 

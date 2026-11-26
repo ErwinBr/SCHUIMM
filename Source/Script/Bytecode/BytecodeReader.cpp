@@ -155,24 +155,38 @@ bool plausibleCount(const ByteReader& reader, std::uint32_t count, std::size_t m
     return bytes && *bytes <= reader.remaining();
 }
 
-Result<std::vector<ScriptType>> readTypes(ByteReader& reader, const char* what)
+// A type: its kind byte, followed by a u16 enum index for enum types.
+bool readType(ByteReader& reader, TypeRef& out, std::string& problem)
+{
+    std::uint8_t raw = 0;
+    if (!reader.u8(raw)) {
+        problem = concat("truncated type at offset ", reader.offset());
+        return false;
+    }
+    const auto type = scriptTypeFromByte(raw);
+    if (!type) {
+        problem = concat("unknown type ", static_cast<unsigned>(raw), " at offset ", reader.offset() - 1);
+        return false;
+    }
+    std::uint16_t index = 0;
+    if (*type == ScriptType::Enum && !reader.u16(index)) {
+        problem = concat("truncated enum type at offset ", reader.offset());
+        return false;
+    }
+    out = TypeRef(*type, index);
+    return true;
+}
+
+Result<std::vector<TypeRef>> readTypes(ByteReader& reader, const char* what)
 {
     std::uint8_t count = 0;
     if (!reader.u8(count)) {
         return invalid(concat("truncated ", what, " signature at offset ", reader.offset()));
     }
-    std::vector<ScriptType> types;
-    types.reserve(count);
-    for (std::uint8_t i = 0; i < count; ++i) {
-        std::uint8_t raw = 0;
-        if (!reader.u8(raw)) {
-            return invalid(concat("truncated ", what, " signature at offset ", reader.offset()));
-        }
-        const auto type = scriptTypeFromByte(raw);
-        if (!type) {
-            return invalid(concat("unknown type ", static_cast<unsigned>(raw), " at offset ", reader.offset() - 1));
-        }
-        types.push_back(*type);
+    std::vector<TypeRef> types(count);
+    for (TypeRef& type : types) {
+        std::string problem;
+        if (!readType(reader, type, problem)) return invalid(problem);
     }
     return types;
 }
@@ -217,12 +231,46 @@ struct Validator {
         return name;
     }
 
-    [[nodiscard]] bool hasObjects() const noexcept { return module.formatMinor >= format::objectsMinorVersion; }
-
-    static bool usesObjectType(const std::vector<ScriptType>& parameters, ScriptType returnType)
+    [[nodiscard]] std::string typeName(TypeRef type) const
     {
-        return returnType == ScriptType::Object ||
-               std::find(parameters.begin(), parameters.end(), ScriptType::Object) != parameters.end();
+        if (type.kind == ScriptType::Enum && type.enumIndex < module.enums.size()) {
+            return module.strings[module.enums[type.enumIndex].nameIndex];
+        }
+        return toString(type.kind);
+    }
+
+    Status checkType(TypeRef type) const
+    {
+        if (type.kind == ScriptType::Enum && type.enumIndex >= module.enums.size()) {
+            return bad(concat("enum type ", type.enumIndex, " does not exist"));
+        }
+        return {};
+    }
+
+    // Script-declared enums have unique names; engine enums are unique per qualifier and name.
+    Status checkEnums()
+    {
+        std::set<std::pair<std::uint32_t, std::string_view>> names;
+        for (std::size_t e = 0; e < module.enums.size(); ++e) {
+            const EnumEntry& entry = module.enums[e];
+            if (entry.nameIndex >= module.strings.size()) return invalid(concat("enum ", e, " refers to a missing name"));
+            if (entry.isEngine() && entry.qualifierIndex >= module.strings.size()) {
+                return invalid(concat("enum ", e, " refers to a missing interface name"));
+            }
+            const std::string& name = module.strings[entry.nameIndex];
+            if (!names.insert({entry.qualifierIndex, name}).second) return invalid(concat("duplicate enum '", name, "'"));
+            if (entry.members.empty() || entry.members.size() > 0x10000) {
+                return invalid(concat("enum '", name, "' must have 1 to 65536 members"));
+            }
+            std::set<std::string_view> members;
+            for (const std::uint32_t member : entry.members) {
+                if (member >= module.strings.size()) return invalid(concat("enum '", name, "' refers to a missing member name"));
+                if (!members.insert(module.strings[member]).second) {
+                    return invalid(concat("duplicate member '", module.strings[member], "' in enum '", name, "'"));
+                }
+            }
+        }
+        return {};
     }
 
     // The Objects table: unique object names that clash with no room-level function or native,
@@ -231,9 +279,6 @@ struct Validator {
     Status checkObjects()
     {
         owner.assign(module.functions.size(), noOwner);
-        if (!hasObjects() && !module.objects.empty()) {
-            return invalid(concat("object declarations require bytecode format 1.", format::objectsMinorVersion));
-        }
         std::set<std::string_view> objectNames;
         for (std::size_t o = 0; o < module.objects.size(); ++o) {
             const ObjectEntry& object = module.objects[o];
@@ -273,7 +318,7 @@ struct Validator {
                     return invalid(concat("handler '", name, ".", handlerName, "' refers to function ", handler.function,
                                           ", which has a different name"));
                 }
-                if (function.parameters.empty() || function.parameters[0] != ScriptType::Object) {
+                if (function.parameters.empty() || function.parameters[0] != TypeRef(ScriptType::Object)) {
                     return invalid(concat("handler '", name, ".", handlerName,
                                           "' must take the object (self) as its first parameter"));
                 }
@@ -314,6 +359,12 @@ struct Validator {
                 return invalid(concat("constant ", i, " refers to missing string ", constant.stringIndex));
             }
         }
+        if (module.enums.size() > 0x10000) {
+            return invalid("more than 65536 enums");
+        }
+        if (auto status = checkEnums(); !status) {
+            return status;
+        }
         std::set<std::string_view> names;
         for (std::size_t i = 0; i < module.imports.size(); ++i) {
             const NativeImport& import = module.imports[i];
@@ -333,14 +384,6 @@ struct Validator {
         if (auto status = checkObjects(); !status) {
             return status;
         }
-        if (!hasObjects()) {
-            for (const NativeImport& import : module.imports) {
-                if (usesObjectType(import.parameters, import.returnType)) {
-                    return invalid(concat("native import '", module.strings[import.nameIndex],
-                                          "' uses type object, which requires bytecode format 1.", format::objectsMinorVersion));
-                }
-            }
-        }
         names.clear();
         for (std::size_t i = 0; i < module.functions.size(); ++i) {
             const Function& function = module.functions[i];
@@ -351,15 +394,29 @@ struct Validator {
             if (owner[i] == noOwner && !names.insert(module.strings[function.nameIndex]).second) {
                 return invalid(concat("duplicate function '", module.strings[function.nameIndex], "'"));
             }
-            if (!hasObjects() && usesObjectType(function.parameters, function.returnType)) {
-                return invalid(concat("function '", functionName(i), "' uses type object, which requires bytecode format 1.",
-                                      format::objectsMinorVersion));
-            }
             if (auto status = checkSignature(function.parameters, function.returnType, false); !status) {
                 return invalid(concat("function '", functionName(i), "': ", status.error().message));
             }
-            if (function.parameters.size() > function.registerCount) {
+            if (function.registerTypes.size() > 0xFFFF) {
+                return invalid(concat("function '", functionName(i), "' has more than 65535 registers"));
+            }
+            if (function.parameters.size() > function.registerTypes.size()) {
                 return invalid(concat("function '", functionName(i), "' has fewer registers than parameters"));
+            }
+            for (std::size_t p = 0; p < function.parameters.size(); ++p) {
+                if (function.registerTypes[p] != function.parameters[p]) {
+                    return invalid(concat("function '", functionName(i), "': register ", p,
+                                          " does not have the type of parameter ", p + 1));
+                }
+            }
+            for (std::size_t reg = 0; reg < function.registerTypes.size(); ++reg) {
+                const TypeRef type = function.registerTypes[reg];
+                if (type.kind == ScriptType::Any) {
+                    return invalid(concat("function '", functionName(i), "': register ", reg, " has type any"));
+                }
+                if (auto status = checkType(type); !status) {
+                    return invalid(concat("function '", functionName(i), "': register ", reg, ": ", status.error().message));
+                }
             }
             if (function.code.empty()) {
                 return invalid(concat("function '", functionName(i), "' has no code"));
@@ -380,20 +437,21 @@ struct Validator {
         return {};
     }
 
-    static Status checkSignature(const std::vector<ScriptType>& parameters, ScriptType returnType, bool native)
+    Status checkSignature(const std::vector<TypeRef>& parameters, TypeRef returnType, bool native) const
     {
         if (parameters.size() > format::maxParameters) {
             return bad("too many parameters");
         }
-        for (const ScriptType type : parameters) {
-            if (type == ScriptType::None || (type == ScriptType::Any && !native)) {
-                return bad(concat("invalid parameter type ", toString(type)));
+        for (const TypeRef type : parameters) {
+            if (type.kind == ScriptType::None || (type.kind == ScriptType::Any && !native)) {
+                return bad(concat("invalid parameter type ", toString(type.kind)));
             }
+            if (auto status = checkType(type); !status) return status;
         }
-        if (returnType == ScriptType::Any) {
+        if (returnType.kind == ScriptType::Any) {
             return bad("invalid return type any");
         }
-        return {};
+        return checkType(returnType);
     }
 
     Status checkOperand(const Function& function, OperandKind kind, std::uint16_t value, const char* field) const
@@ -403,13 +461,13 @@ struct Validator {
             if (value != 0) return bad(concat("unused operand ", field, " is ", value, ", expected 0"));
             return {};
         case OperandKind::Register:
-            if (value >= function.registerCount) {
-                return bad(concat("register ", value, " in ", field, " out of range (", function.registerCount, " registers)"));
+            if (value >= function.registerCount()) {
+                return bad(concat("register ", value, " in ", field, " out of range (", function.registerCount(), " registers)"));
             }
             return {};
         case OperandKind::OptRegister:
-            if (value != noRegister && value >= function.registerCount) {
-                return bad(concat("register ", value, " in ", field, " out of range (", function.registerCount, " registers)"));
+            if (value != noRegister && value >= function.registerCount()) {
+                return bad(concat("register ", value, " in ", field, " out of range (", function.registerCount(), " registers)"));
             }
             return {};
         case OperandKind::Constant:
@@ -421,37 +479,164 @@ struct Validator {
         case OperandKind::Native:
             if (value >= module.imports.size()) return bad(concat("native import ", value, " does not exist"));
             return {};
+        case OperandKind::Enum:
+            if (value >= module.enums.size()) return bad(concat("enum ", value, " does not exist"));
+            return {};
         case OperandKind::ArgWindow:
         case OperandKind::Target:
+        case OperandKind::Immediate:
             return {}; // Checked with the whole instruction.
         }
         return bad("unknown operand kind");
     }
 
-    Status checkResult(std::uint16_t destination, ScriptType returnType) const
+    Status checkResult(const Function& function, std::uint16_t destination, TypeRef returnType) const
     {
-        if (returnType == ScriptType::None) {
+        if (returnType.kind == ScriptType::None) {
             if (destination != noRegister) return bad("call of a function without result stores a result");
-        } else if (destination == noRegister) {
+            return {};
+        }
+        if (destination == noRegister) {
             return bad("call result has no destination register");
         }
+        if (!isAssignableType(returnType, function.registerTypes[destination])) {
+            return bad(concat("result of type ", typeName(returnType), " stored in register ", destination, " of type ",
+                              typeName(function.registerTypes[destination])));
+        }
         return {};
+    }
+
+    // Register type rules of each instruction (Bytecode.md, "Instructions").
+    Status checkTypes(const Function& function, const Instruction& in) const
+    {
+        const auto& types = function.registerTypes;
+        const auto expect = [&](std::uint16_t reg, TypeRef type, const char* field) -> Status {
+            if (types[reg] != type) {
+                return bad(concat("register ", reg, " in ", field, " has type ", typeName(types[reg]), ", expected ",
+                                  typeName(type)));
+            }
+            return {};
+        };
+        const auto all = [&](TypeRef a, TypeRef b, TypeRef c) -> Status {
+            if (auto s = expect(in.a, a, "a"); !s) return s;
+            if (auto s = expect(in.b, b, "b"); !s) return s;
+            return expect(in.c, c, "c");
+        };
+        const auto unary = [&](TypeRef a, TypeRef b) -> Status {
+            if (auto s = expect(in.a, a, "a"); !s) return s;
+            return expect(in.b, b, "b");
+        };
+        using enum ScriptType;
+        switch (in.opcode) {
+        case Opcode::Nop:
+        case Opcode::Jump:
+        case Opcode::Unreachable: return {};
+        case Opcode::LoadConst: return expect(in.a, module.constants[in.b].type, "a");
+        case Opcode::LoadTrue:
+        case Opcode::LoadFalse: return expect(in.a, Bool, "a");
+        case Opcode::LoadNone: return expect(in.a, None, "a");
+        case Opcode::Move:
+            if (!isAssignableType(types[in.b], types[in.a])) {
+                return bad(concat("cannot move a ", typeName(types[in.b]), " into a register of type ", typeName(types[in.a])));
+            }
+            return {};
+        case Opcode::NegInt: return unary(Int, Int);
+        case Opcode::NegFloat: return unary(Float, Float);
+        case Opcode::Not: return unary(Bool, Bool);
+        case Opcode::AddInt:
+        case Opcode::SubInt:
+        case Opcode::MulInt:
+        case Opcode::DivInt:
+        case Opcode::ModInt:
+        case Opcode::AddIntSat: return all(Int, Int, Int);
+        case Opcode::AddFloat:
+        case Opcode::SubFloat:
+        case Opcode::MulFloat:
+        case Opcode::DivFloat:
+        case Opcode::FloorDivFloat:
+        case Opcode::ModFloat: return all(Float, Float, Float);
+        case Opcode::Concat: return all(String, String, String);
+        case Opcode::EqInt:
+        case Opcode::NeInt:
+        case Opcode::LtInt:
+        case Opcode::LeInt:
+        case Opcode::GtInt:
+        case Opcode::GeInt: return all(Bool, Int, Int);
+        case Opcode::EqFloat:
+        case Opcode::NeFloat:
+        case Opcode::LtFloat:
+        case Opcode::LeFloat:
+        case Opcode::GtFloat:
+        case Opcode::GeFloat: return all(Bool, Float, Float);
+        case Opcode::EqBool:
+        case Opcode::NeBool: return all(Bool, Bool, Bool);
+        case Opcode::EqString:
+        case Opcode::NeString:
+        case Opcode::LtString:
+        case Opcode::LeString:
+        case Opcode::GtString:
+        case Opcode::GeString: return all(Bool, String, String);
+        case Opcode::IntToFloat: return unary(Float, Int);
+        case Opcode::FloatToInt: return unary(Int, Float);
+        case Opcode::BoolToInt: return unary(Int, Bool);
+        case Opcode::IntToString: return unary(String, Int);
+        case Opcode::FloatToString: return unary(String, Float);
+        case Opcode::BoolToString: return unary(String, Bool);
+        case Opcode::CheckRangeStep: return expect(in.a, Int, "a");
+        case Opcode::JumpIfTrue:
+        case Opcode::JumpIfFalse: return expect(in.a, Bool, "a");
+        case Opcode::EqRef:
+        case Opcode::NeRef: {
+            if (auto s = expect(in.a, Bool, "a"); !s) return s;
+            const ScriptType left = types[in.b].kind;
+            const ScriptType right = types[in.c].kind;
+            if (!isEntityReference(left) || !isEntityReference(right)) return bad("operands must be entity references");
+            if ((left == Actor && right == Object) || (left == Object && right == Actor)) {
+                return bad("an actor reference is compared with an object reference");
+            }
+            return {};
+        }
+        case Opcode::LoadEnum:
+            if (auto s = expect(in.a, TypeRef::enumType(in.b), "a"); !s) return s;
+            if (in.c >= module.enums[in.b].members.size()) {
+                return bad(concat("enum '", typeName(TypeRef::enumType(in.b)), "' has no member ", in.c));
+            }
+            return {};
+        case Opcode::EqEnum:
+        case Opcode::NeEnum:
+            if (auto s = expect(in.a, Bool, "a"); !s) return s;
+            if (types[in.b].kind != Enum || types[in.b] != types[in.c]) return bad("operands must be values of the same enum");
+            return {};
+        case Opcode::MakeVec2: return all(Vec2, Float, Float);
+        case Opcode::Vec2X:
+        case Opcode::Vec2Y: return unary(Float, Vec2);
+        case Opcode::SetVec2X:
+        case Opcode::SetVec2Y: return unary(Vec2, Float);
+        case Opcode::AddVec2:
+        case Opcode::SubVec2: return all(Vec2, Vec2, Vec2);
+        case Opcode::MulVec2:
+        case Opcode::DivVec2: return all(Vec2, Vec2, Float);
+        case Opcode::NegVec2: return unary(Vec2, Vec2);
+        case Opcode::EqVec2:
+        case Opcode::NeVec2: return all(Bool, Vec2, Vec2);
+        case Opcode::Call:
+        case Opcode::CallNative:
+        case Opcode::Return: return {}; // Checked with the signature (checkInstruction).
+        }
+        return bad("unknown opcode");
     }
 
     Status checkInstruction(const Function& function, std::size_t ip) const
     {
         const Instruction& instruction = function.code[ip];
         const OpcodeInfo& info = opcodeInfo(instruction.opcode);
-        if (!hasObjects() && (instruction.opcode == Opcode::EqObject || instruction.opcode == Opcode::NeObject)) {
-            return bad(concat("opcode requires bytecode format 1.", format::objectsMinorVersion));
-        }
         if (auto s = checkOperand(function, info.a, instruction.a, "a"); !s) return s;
         if (info.b == OperandKind::Target) {
             if (instruction.target() >= function.code.size()) {
                 return bad(concat("branch target ", instruction.target(), " outside the function (", function.code.size(),
                                       " instructions)"));
             }
-            return {};
+            return checkTypes(function, instruction);
         }
         if (auto s = checkOperand(function, info.b, instruction.b, "b"); !s) return s;
         if (auto s = checkOperand(function, info.c, instruction.c, "c"); !s) return s;
@@ -464,30 +649,41 @@ struct Validator {
                 return bad(concat("calls handler '", functionName(instruction.b),
                                   "'; handlers are only started by event dispatch"));
             }
-            const std::vector<ScriptType>& parameters =
+            const std::vector<TypeRef>& parameters =
                 native ? module.imports[instruction.b].parameters : module.functions[instruction.b].parameters;
-            const ScriptType returnType =
+            const TypeRef returnType =
                 native ? module.imports[instruction.b].returnType : module.functions[instruction.b].returnType;
-            if (auto s = checkResult(instruction.a, returnType); !s) return s;
             const std::size_t end = static_cast<std::size_t>(instruction.c) + parameters.size();
-            if (!parameters.empty() && end > function.registerCount) {
+            if (!parameters.empty() && end > function.registerCount()) {
                 return bad(concat("argument registers ", instruction.c, "..", end - 1, " out of range (",
-                                      function.registerCount, " registers)"));
+                                      function.registerCount(), " registers)"));
             }
             if (parameters.empty() && instruction.c != 0) {
                 return bad("argument window of a call without arguments must be 0");
             }
+            if (auto s = checkResult(function, instruction.a, returnType); !s) return s;
+            for (std::size_t i = 0; i < parameters.size(); ++i) {
+                const TypeRef argument = function.registerTypes[instruction.c + i];
+                if (!isAssignableType(argument, parameters[i])) {
+                    return bad(concat("argument ", i + 1, " has type ", typeName(argument), ", expected ",
+                                      typeName(parameters[i])));
+                }
+            }
             return {};
         }
         case Opcode::Return:
-            if (function.returnType == ScriptType::None && instruction.a != noRegister) {
+            if (function.returnType.kind == ScriptType::None && instruction.a != noRegister) {
                 return bad("function without result returns a value");
             }
-            if (function.returnType != ScriptType::None && instruction.a == noRegister) {
-                return bad("function with a result returns no value");
+            if (function.returnType.kind != ScriptType::None) {
+                if (instruction.a == noRegister) return bad("function with a result returns no value");
+                if (!isAssignableType(function.registerTypes[instruction.a], function.returnType)) {
+                    return bad(concat("returns a ", typeName(function.registerTypes[instruction.a]), " from a function returning ",
+                                      typeName(function.returnType)));
+                }
             }
             return {};
-        default: return {};
+        default: return checkTypes(function, instruction);
         }
     }
 };
@@ -513,7 +709,8 @@ Result<Module> readBytecode(std::span<const std::byte> data)
     if (formatMajor != bytecodeFormatMajor || formatMinor > bytecodeFormatMinor) {
         return makeError(ErrorCode::Unsupported, concat("Bytecode format ", formatMajor, ".", formatMinor,
                                                         " is not supported (this runtime reads ", bytecodeFormatMajor,
-                                                        ".0 to ", bytecodeFormatMajor, ".", bytecodeFormatMinor, ")"));
+                                                        ".0 to ", bytecodeFormatMajor, ".", bytecodeFormatMinor,
+                                                        "); recompile the script from its source"));
     }
     Module module;
     module.formatMinor = formatMinor;
@@ -532,8 +729,7 @@ Result<Module> readBytecode(std::span<const std::byte> data)
         return invalid(concat("header declares ", fileSize, " bytes but the file has ", data.size()));
     }
     const std::uint32_t sectionCount = loadU32(data, 24);
-    const bool hasObjects = formatMinor >= format::objectsMinorVersion;
-    const std::uint32_t expectedSections = hasObjects ? format::sectionCount : format::sectionCountVersion10;
+    const std::uint32_t expectedSections = format::sectionCount;
     if (sectionCount != expectedSections) {
         return invalid(concat("expected ", expectedSections, " sections, header declares ", sectionCount));
     }
@@ -625,11 +821,9 @@ Result<Module> readBytecode(std::span<const std::byte> data)
         if (!r.u32(count) || !plausibleCount(r, count, 6)) return truncated(r, "import table");
         module.imports.resize(count);
         for (NativeImport& import : module.imports) {
-            std::uint8_t returnType = 0;
-            if (!r.u32(import.nameIndex) || !r.u8(returnType)) return truncated(r, "native import");
-            const auto type = scriptTypeFromByte(returnType);
-            if (!type) return invalid(concat("unknown return type at offset ", r.offset() - 1));
-            import.returnType = *type;
+            if (!r.u32(import.nameIndex)) return truncated(r, "native import");
+            std::string problem;
+            if (!readType(r, import.returnType, problem)) return invalid(problem);
             auto parameters = readTypes(r, "native import");
             if (!parameters) return std::unexpected(parameters.error());
             import.parameters = std::move(*parameters);
@@ -645,23 +839,26 @@ Result<Module> readBytecode(std::span<const std::byte> data)
         rawFunctions.resize(count);
         for (std::uint32_t i = 0; i < count; ++i) {
             Function& function = module.functions[i];
-            std::uint8_t returnType = 0;
-            if (!r.u32(function.nameIndex) || !r.u8(returnType)) return truncated(r, "function");
-            const auto type = scriptTypeFromByte(returnType);
-            if (!type) return invalid(concat("unknown return type at offset ", r.offset() - 1));
-            function.returnType = *type;
+            if (!r.u32(function.nameIndex)) return truncated(r, "function");
+            std::string problem;
+            if (!readType(r, function.returnType, problem)) return invalid(problem);
             auto parameters = readTypes(r, "function");
             if (!parameters) return std::unexpected(parameters.error());
             function.parameters = std::move(*parameters);
+            std::uint16_t registers = 0;
+            if (!r.u16(registers) || !plausibleCount(r, registers, 1)) return truncated(r, "function");
+            function.registerTypes.resize(registers);
+            for (TypeRef& type : function.registerTypes) {
+                if (!readType(r, type, problem)) return invalid(problem);
+            }
             RawFunction& raw = rawFunctions[i];
-            if (!r.u16(function.registerCount) || !r.u32(raw.codeOffset) || !r.u32(raw.codeLength) ||
-                !r.u32(raw.debugOffset)) {
+            if (!r.u32(raw.codeOffset) || !r.u32(raw.codeLength) || !r.u32(raw.debugOffset)) {
                 return truncated(r, "function");
             }
         }
         if (auto s = checkEnd(r, "function"); !s) return std::unexpected(s.error());
     }
-    if (hasObjects) {   // Objects
+    {   // Objects
         ByteReader r = reader(format::SectionId::Objects);
         std::uint32_t count = 0;
         if (!r.u32(count) || !plausibleCount(r, count, 8)) return truncated(r, "object table");
@@ -677,6 +874,24 @@ Result<Module> readBytecode(std::span<const std::byte> data)
             }
         }
         if (auto s = checkEnd(r, "object"); !s) return std::unexpected(s.error());
+    }
+    {   // Enums
+        ByteReader r = reader(format::SectionId::Enums);
+        std::uint32_t count = 0;
+        if (!r.u32(count) || !plausibleCount(r, count, 12)) return truncated(r, "enum table");
+        module.enums.resize(count);
+        for (EnumEntry& entry : module.enums) {
+            std::uint32_t members = 0;
+            if (!r.u32(entry.nameIndex) || !r.u32(entry.qualifierIndex) || !r.u32(members) ||
+                !plausibleCount(r, members, 4)) {
+                return truncated(r, "enum");
+            }
+            entry.members.resize(members);
+            for (std::uint32_t& member : entry.members) {
+                if (!r.u32(member)) return truncated(r, "enum member");
+            }
+        }
+        if (auto s = checkEnd(r, "enum"); !s) return std::unexpected(s.error());
     }
     std::vector<Instruction> code;
     {   // Code

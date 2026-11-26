@@ -7,14 +7,12 @@
 
 namespace schuimm::script {
 
-const std::vector<NativeSignature>& preludeNatives()
+std::string SemanticModel::typeName(Type type) const
 {
-    static const std::vector<NativeSignature> prelude{
-        {"print", {Type::Any}, Type::None, false},
-        {"wait", {Type::Float}, Type::None, false},
-        {"yield", {}, Type::None, false},
-    };
-    return prelude;
+    if (isEnum(type) && enumIndexOf(type) < enums_.size()) {
+        return enums_[enumIndexOf(type)].name;
+    }
+    return toString(type);
 }
 
 const ExprInfo& SemanticModel::expression(const Expr& expression) const
@@ -50,24 +48,42 @@ std::optional<Intrinsic> intrinsicFromName(std::string_view name) noexcept
     if (name == "int") return Intrinsic::ToInt;
     if (name == "float") return Intrinsic::ToFloat;
     if (name == "str") return Intrinsic::ToString;
+    if (name == "vec2") return Intrinsic::MakeVec2;
     return std::nullopt;
 }
 
-std::string quoted(Type type) { return concat("'", toString(type), "'"); }
+SourceRange noRange()
+{
+    SourceRange range;
+    range.begin = {0, 1, 1};
+    return range;
+}
+
+bool isEqualityType(Type type) noexcept
+{
+    return type == Type::Bool || type == Type::String || type == Type::Vec2 || isEnum(type) || isReference(type);
+}
 
 } // namespace
 
 class TypeCheckerImpl {
 public:
-    TypeCheckerImpl(const SourceUnit& unit, Diagnostics& diagnostics)
+    TypeCheckerImpl(const SourceUnit& unit, Diagnostics& diagnostics, std::span<const NativeInterface* const> interfaces)
         : unit_(unit)
         , diagnostics_(diagnostics)
     {
+        interfaces_.push_back(&coreInterface());
+        for (const NativeInterface* interface : interfaces) {
+            if (interface != nullptr && interface != &coreInterface()) {
+                interfaces_.push_back(interface);
+            }
+        }
     }
 
     SemanticModel run()
     {
-        model_.natives_ = preludeNatives();
+        declareInterfaces();
+        declareEnums();
         declareFunctions();
         declareObjects();
         for (std::size_t i = 0; i < model_.functions_.size(); ++i) {
@@ -87,12 +103,154 @@ private:
         return intrinsicFromName(name) || typeFromName(name) || name == "range";
     }
 
+    [[nodiscard]] std::string quoted(Type type) const { return concat("'", model_.typeName(type), "'"); }
+
+    // --- Pass 0: interfaces and enums ---------------------------------------------------------
+    // Interface functions and engine enums. They have no source position (line 0), which the
+    // messages below use to say "built-in".
+    void declareInterfaces()
+    {
+        std::unordered_map<std::string, std::string> interfaceNames;
+        for (const NativeInterface* interface : interfaces_) {
+            if (const std::string problem = checkInterface(*interface); !problem.empty()) {
+                error(noRange(), concat("Native interface '", interface->name, "' is invalid: ", problem, "."));
+                continue;
+            }
+            if (!interfaceNames.emplace(interface->name, interface->name).second) {
+                error(noRange(), concat("Native interface '", interface->name, "' is supplied twice."));
+                continue;
+            }
+            std::unordered_map<std::string, std::uint32_t> localEnums;
+            for (const EnumDeclaration& declaration : interface->enums) {
+                if (const auto existing = enumNames_.find(declaration.name); existing != enumNames_.end()) {
+                    error(noRange(), concat("Enum '", declaration.name, "' is declared by both native interface '",
+                                            model_.enums_[existing->second].qualifier, "' and '", interface->name, "'."));
+                    continue;
+                }
+                const auto index = static_cast<std::uint32_t>(model_.enums_.size());
+                model_.enums_.push_back({declaration.name, interface->name, declaration.members, {}});
+                enumNames_.emplace(declaration.name, index);
+                localEnums.emplace(declaration.name, index);
+            }
+            const auto convert = [&](const NativeType& type) {
+                if (type.kind == ScriptType::Enum) {
+                    const auto found = localEnums.find(type.enumName);
+                    return found != localEnums.end() ? enumType(found->second) : Type::Error;
+                }
+                return fromNativeKind(type.kind);
+            };
+            for (const NativeDeclaration& declaration : interface->functions) {
+                if (const auto existing = symbols_.find(declaration.name); existing != symbols_.end()) {
+                    error(noRange(), concat("Function '", declaration.name, "' is declared by both native interface '",
+                                            model_.natives_[existing->second.index].interfaceName, "' and '",
+                                            interface->name, "'."));
+                    continue;
+                }
+                NativeSignature native;
+                native.name = declaration.name;
+                for (const NativeType& type : declaration.parameters) {
+                    native.parameters.push_back(convert(type));
+                }
+                native.returnType = convert(declaration.returnType);
+                native.pure = declaration.pure;
+                native.interfaceName = interface->name;
+                const auto index = static_cast<std::uint32_t>(model_.natives_.size());
+                model_.natives_.push_back(std::move(native));
+                symbols_[declaration.name] = {CallKind::Native, index, {}};
+            }
+        }
+    }
+
+    static Type fromNativeKind(ScriptType kind) noexcept
+    {
+        switch (kind) {
+        case ScriptType::None: return Type::None;
+        case ScriptType::Bool: return Type::Bool;
+        case ScriptType::Int: return Type::Int;
+        case ScriptType::Float: return Type::Float;
+        case ScriptType::String: return Type::String;
+        case ScriptType::Any: return Type::Any;
+        case ScriptType::Object: return Type::Object;
+        case ScriptType::Actor: return Type::Actor;
+        case ScriptType::Entity: return Type::Entity;
+        case ScriptType::Vec2: return Type::Vec2;
+        case ScriptType::Coroutine: return Type::Coroutine;
+        case ScriptType::Operation: return Type::Operation;
+        case ScriptType::Enum: return Type::Error;
+        }
+        return Type::Error;
+    }
+
+    // Where a name is already used at the top level, for "X has the same name as ..." notes;
+    // empty if it is free. Functions and natives are in symbols_, enums in enumNames_.
+    [[nodiscard]] std::string describeExisting(const std::string& name) const
+    {
+        if (const auto symbol = symbols_.find(name); symbol != symbols_.end()) {
+            if (symbol->second.declaration.begin.line == 0) return concat("'", name, "' is a built-in function.");
+            return concat("A function '", name, "' was declared on line ", symbol->second.declaration.begin.line, ".");
+        }
+        if (const auto found = enumNames_.find(name); found != enumNames_.end()) {
+            const EnumInfo& info = model_.enums_[found->second];
+            if (info.isEngine()) return concat("'", name, "' is a built-in enum.");
+            return concat("An enum '", name, "' was declared on line ", info.declaration.begin.line, ".");
+        }
+        return {};
+    }
+
+    void declareEnums()
+    {
+        for (const auto& declaration : unit_.enums) {
+            const std::string& name = declaration->name;
+            if (isReservedName(name)) {
+                error(declaration->nameRange, concat("'", name, "' is a built-in name and cannot be used as an enum name."));
+                continue;
+            }
+            if (const std::string existing = describeExisting(name); !existing.empty()) {
+                error(declaration->nameRange, concat("Duplicate declaration of '", name, "'."), {existing});
+                continue;
+            }
+            if (declaration->members.empty()) {
+                error(declaration->nameRange, concat("Enum '", name, "' has no members."));
+            }
+            EnumInfo info;
+            info.name = name;
+            info.declaration = declaration->nameRange;
+            std::unordered_map<std::string, SourceRange> members;
+            for (const EnumMember& member : declaration->members) {
+                if (const auto existing = members.find(member.name); existing != members.end()) {
+                    error(member.range, concat("Duplicate member '", member.name, "' in enum '", name, "'."),
+                          {concat("'", member.name, "' was first declared on line ", existing->second.begin.line, ".")});
+                    continue;
+                }
+                members.emplace(member.name, member.range);
+                info.members.push_back(member.name);
+            }
+            if (model_.enums_.size() >= maxEnumTypes) {
+                error(declaration->nameRange, "Too many enums.");
+                continue;
+            }
+            enumNames_.emplace(name, static_cast<std::uint32_t>(model_.enums_.size()));
+            model_.enums_.push_back(std::move(info));
+        }
+    }
+
+    // A type annotation: built-in types as written, names as enums.
+    Type resolve(const TypeSyntax& syntax)
+    {
+        if (syntax.type != Type::Named) {
+            return syntax.type;
+        }
+        if (const auto found = enumNames_.find(syntax.name); found != enumNames_.end()) {
+            return enumType(found->second);
+        }
+        error(syntax.range, concat("Unknown type '", syntax.name, "'."),
+              {"The types are int, float, bool, string, vec2, entity, actor, object, coroutine, operation and enums."});
+        return Type::Error;
+    }
+
     // --- Pass 1: function and extern signatures ----------------------------------------------
     void declareFunctions()
     {
-        for (std::uint32_t i = 0; i < model_.natives_.size(); ++i) {
-            symbols_[model_.natives_[i].name] = {CallKind::Native, i, {}};
-        }
         std::uint32_t functionIndex = 0;
         for (const auto& function : unit_.functions) {
             const std::string& name = function->name;
@@ -102,21 +260,30 @@ private:
                 valid = false;
             } else if (const auto existing = symbols_.find(name); existing != symbols_.end()) {
                 if (existing->second.kind == CallKind::Native && existing->second.declaration.begin.line == 0) {
-                    error(function->nameRange, concat("'", name, "' is a built-in function and cannot be redefined."));
+                    error(function->nameRange, concat("'", name, "' is a built-in function and cannot be redefined."),
+                          {concat("It is declared by the native interface '",
+                                  model_.natives_[existing->second.index].interfaceName,
+                                  "', which every script of this kind can call without declaring it.")});
                 } else {
                     error(function->nameRange, concat("Duplicate declaration of function '", name, "'."),
                           {concat("'", name, "' was first declared on line ", existing->second.declaration.begin.line, ".")});
                 }
                 valid = false;
+            } else if (const std::string other = describeExisting(name); !other.empty()) {
+                error(function->nameRange, concat("Function '", name, "' has the same name as an enum."), {other});
+                valid = false;
             }
             checkParameterNames(*function);
+            std::vector<Type> parameters;
+            for (const Parameter& parameter : function->parameters) {
+                parameters.push_back(resolve(parameter.type));
+            }
+            const Type returnType = resolve(function->returnType);
             if (function->isExtern) {
                 NativeSignature native;
                 native.name = name;
-                for (const Parameter& parameter : function->parameters) {
-                    native.parameters.push_back(parameter.type);
-                }
-                native.returnType = function->returnType;
+                native.parameters = parameters;
+                native.returnType = returnType;
                 const auto index = static_cast<std::uint32_t>(model_.natives_.size());
                 model_.natives_.push_back(std::move(native));
                 if (valid) {
@@ -125,6 +292,8 @@ private:
             } else {
                 FunctionSemantics semantics;
                 semantics.declaration = function.get();
+                semantics.parameters = std::move(parameters);
+                semantics.returnType = returnType;
                 model_.functions_.push_back(std::move(semantics));
                 if (valid) {
                     symbols_[name] = {CallKind::Function, functionIndex, function->nameRange};
@@ -159,11 +328,11 @@ private:
                 error(object.nameRange, concat("Duplicate declaration of object '", object.name, "'."),
                       {concat("'", object.name, "' was first declared on line ", existing->second.begin.line,
                               "; put all handlers of an object in one declaration.")});
-            } else if (const auto symbol = symbols_.find(object.name); symbol != symbols_.end()) {
-                error(object.nameRange, concat("Object '", object.name, "' has the same name as a function."),
-                      {symbol->second.declaration.begin.line == 0
-                           ? concat("'", object.name, "' is a built-in function.")
-                           : concat("The function was declared on line ", symbol->second.declaration.begin.line, ".")});
+            } else if (const std::string other = describeExisting(object.name); !other.empty()) {
+                error(object.nameRange,
+                      concat("Object '", object.name, "' has the same name as ",
+                             symbols_.count(object.name) != 0 ? "a function." : "an enum."),
+                      {other});
             } else {
                 objectNames.emplace(object.name, object.nameRange);
             }
@@ -176,6 +345,10 @@ private:
                 FunctionSemantics function;
                 function.declaration = handler.get();
                 function.object = objectIndex;
+                for (const Parameter& parameter : handler->parameters) {
+                    function.parameters.push_back(resolve(parameter.type));
+                }
+                function.returnType = resolve(handler->returnType);
                 model_.functions_.push_back(std::move(function));
                 if (isReservedName(handler->name)) {
                     error(handler->nameRange, concat("'", handler->name, "' is a built-in name and cannot be used as a handler name."));
@@ -210,17 +383,18 @@ private:
         if (current_->isHandler()) {
             declareVariable("self", Type::Object, function.nameRange, true); // Variable 0: the hidden parameter.
         }
-        for (const Parameter& parameter : function.parameters) {
+        for (std::size_t p = 0; p < function.parameters.size(); ++p) {
+            const Parameter& parameter = function.parameters[p];
             if (scopes_.back().count(parameter.name) == 0) {
-                declareVariable(parameter.name, parameter.type, parameter.nameRange, true);
+                declareVariable(parameter.name, current_->parameters[p], parameter.nameRange, true);
             }
         }
         if (function.body) {
+            const Type returnType = current_->returnType;
             checkBlock(*function.body, function);
-            if (function.returnType != Type::None && function.returnType != Type::Error &&
-                !alwaysReturns(*function.body)) {
+            if (returnType != Type::None && returnType != Type::Error && !alwaysReturns(*function.body)) {
                 error(function.nameRange,
-                      concat("Function '", displayName(function), "' must return a value of type ", quoted(function.returnType),
+                      concat("Function '", displayName(function), "' must return a value of type ", quoted(returnType),
                              " on every path."),
                       {"Add a 'return' statement at the end of the function."});
             }
@@ -232,6 +406,8 @@ private:
     {
         if (symbols_.count(name) != 0 || isReservedName(name)) {
             error(range, concat("'", name, "' is the name of a function and cannot be used as a variable name."));
+        } else if (enumNames_.count(name) != 0) {
+            error(range, concat("'", name, "' is the name of an enum and cannot be used as a variable name."));
         }
         const auto index = static_cast<std::uint32_t>(current_->variables.size());
         current_->variables.push_back({name, type, range, isParameter});
@@ -332,24 +508,25 @@ private:
             return;
         }
         case StmtKind::Return: {
+            const Type returnType = current_->returnType;
             if (!statement.value) {
-                if (function.returnType != Type::None && function.returnType != Type::Error) {
+                if (returnType != Type::None && returnType != Type::Error) {
                     error(statement.range, concat("Function '", function.name, "' must return a value of type ",
-                                                  quoted(function.returnType), "."));
+                                                  quoted(returnType), "."));
                 }
                 return;
             }
             const Type type = checkExpression(*statement.value);
-            if (function.returnType == Type::None) {
+            if (returnType == Type::None) {
                 if (type != Type::None && type != Type::Error) {
                     error(statement.value->range, concat("Function '", function.name, "' has no return type and cannot return a value."),
-                          {concat("Declare the return type: 'func ", function.name, "(...) -> ", toString(type), ":'.")});
+                          {concat("Declare the return type: 'func ", function.name, "(...) -> ", model_.typeName(type), ":'.")});
                 }
                 return;
             }
-            if (!convertTo(*statement.value, type, function.returnType)) {
+            if (!convertTo(*statement.value, type, returnType)) {
                 error(statement.value->range, concat("Cannot return a value of type ", quoted(type), " from function '",
-                                                     function.name, "', which returns ", quoted(function.returnType), "."));
+                                                     function.name, "', which returns ", quoted(returnType), "."));
             }
             return;
         }
@@ -361,18 +538,22 @@ private:
         const Type type = checkExpression(*statement.value);
         StatementInfo info;
         const auto existing = lookupVariable(statement.name);
-        if (statement.annotation) {
+        const auto noValue = [&]() {
+            error(statement.value->range, "Cannot assign a value of type 'None': the expression has no value.");
+        };
+        if (statement.declaration) {
             if (existing) {
                 const VariableInfo& previous = current_->variables[*existing];
                 error(statement.nameRange,
                       concat(previous.isParameter ? "Parameter '" : "Variable '", statement.name, "' is already declared."),
                       {concat("It was declared on line ", previous.declaration.begin.line,
-                              "; assign without a type annotation to change it, or choose another name.")});
+                              "; assign it without 'var' to change it, or choose another name.")});
                 return;
             }
-            const Type declared = *statement.annotation;
+            Type declared = statement.annotation ? resolve(*statement.annotation) : type;
             if (type == Type::None) {
-                error(statement.value->range, "Cannot assign a value of type 'None': the expression has no value.");
+                noValue();
+                if (!statement.annotation) declared = Type::Error;
             } else if (!convertTo(*statement.value, type, declared)) {
                 error(statement.value->range, concat("Cannot assign a value of type ", quoted(type), " to variable '",
                                                      statement.name, "' of type ", quoted(declared), "."));
@@ -382,27 +563,45 @@ private:
             model_.statements_[&statement] = info;
             return;
         }
-        if (existing) {
-            const VariableInfo& variable = current_->variables[*existing];
-            if (type == Type::None) {
-                error(statement.value->range, "Cannot assign a value of type 'None': the expression has no value.");
-            } else if (!convertTo(*statement.value, type, variable.type)) {
-                error(statement.value->range, concat("Cannot assign a value of type ", quoted(type), " to variable '",
-                                                     statement.name, "' of type ", quoted(variable.type), "."),
-                      {concat("'", statement.name, "' was declared as ", quoted(variable.type), " on line ",
-                              variable.declaration.begin.line, ".")});
+        if (!existing) {
+            std::vector<std::string> notes;
+            if (statement.member.empty()) {
+                notes.push_back(concat("Declare a new variable with 'var ", statement.name, " = ...'."));
             }
-            info.variable = *existing;
+            error(statement.nameRange, concat("Undefined variable '", statement.name, "'."), std::move(notes));
+            // Declared anyway (as the value's type), so later uses do not report it again.
+            info.variable = declareVariable(statement.name, type == Type::None ? Type::Error : type, statement.nameRange, false);
+            info.declares = true;
             model_.statements_[&statement] = info;
             return;
         }
-        Type declared = type;
-        if (type == Type::None) {
-            error(statement.value->range, "Cannot assign a value of type 'None': the expression has no value.");
-            declared = Type::Error;
+        const VariableInfo& variable = current_->variables[*existing];
+        info.variable = *existing;
+        if (!statement.member.empty()) {
+            if (variable.type != Type::Vec2 && variable.type != Type::Error) {
+                error(statement.memberRange, concat("Variable '", statement.name, "' of type ", quoted(variable.type),
+                                                    " has no component '", statement.member, "'."));
+            } else if (statement.member != "x" && statement.member != "y") {
+                error(statement.memberRange, concat("A vec2 has components 'x' and 'y', not '", statement.member, "'."));
+            } else if (type == Type::None) {
+                noValue();
+            } else if (!convertTo(*statement.value, type, Type::Float)) {
+                error(statement.value->range, concat("Cannot assign a value of type ", quoted(type), " to component '",
+                                                     statement.member, "' of type 'float'."));
+            }
+            info.component = true;
+            info.componentIndex = statement.member == "y" ? 1 : 0;
+            model_.statements_[&statement] = info;
+            return;
         }
-        info.variable = declareVariable(statement.name, declared, statement.nameRange, false);
-        info.declares = true;
+        if (type == Type::None) {
+            noValue();
+        } else if (!convertTo(*statement.value, type, variable.type)) {
+            error(statement.value->range, concat("Cannot assign a value of type ", quoted(type), " to variable '",
+                                                 statement.name, "' of type ", quoted(variable.type), "."),
+                  {concat("'", statement.name, "' was declared as ", quoted(variable.type), " on line ",
+                          variable.declaration.begin.line, ".")});
+        }
         model_.statements_[&statement] = info;
     }
 
@@ -441,6 +640,7 @@ private:
         case ExprKind::Unary: return checkUnary(expression);
         case ExprKind::Binary: return checkBinary(expression);
         case ExprKind::Call: return checkCall(expression);
+        case ExprKind::Member: return checkMember(expression);
         }
         return record(expression, info);
     }
@@ -460,10 +660,61 @@ private:
         if (name == "none" || name == "null" || name == "nil") notes.push_back("Did you mean 'None'?");
         if (symbols_.count(name) != 0 || intrinsicFromName(name)) {
             error(expression.range, concat("'", name, "' is a function; call it with ", name, "(...)."));
+        } else if (enumNames_.count(name) != 0) {
+            error(expression.range, concat("'", name, "' is an enum; name one of its members, e.g. '", name, ".",
+                                           model_.enums_[enumNames_.at(name)].members.empty()
+                                               ? std::string("MEMBER")
+                                               : model_.enums_[enumNames_.at(name)].members.front(),
+                                           "'."));
         } else {
             error(expression.range, concat("Undefined variable '", name, "'."), std::move(notes));
         }
         info.type = Type::Error;
+        return record(expression, info);
+    }
+
+    // "Enum.MEMBER" (when the left side names an enum, not a variable) or "vector.x" / ".y".
+    Type checkMember(const Expr& expression)
+    {
+        ExprInfo info;
+        const Expr& object = *expression.left;
+        if (object.kind == ExprKind::Name && !lookupVariable(object.text)) {
+            if (const auto found = enumNames_.find(object.text); found != enumNames_.end()) {
+                const EnumInfo& declaration = model_.enums_[found->second];
+                info.type = enumType(found->second);
+                info.isEnumMember = true;
+                bool known = false;
+                for (std::size_t m = 0; m < declaration.members.size(); ++m) {
+                    if (declaration.members[m] == expression.text) {
+                        info.enumMember = static_cast<std::uint32_t>(m);
+                        known = true;
+                    }
+                }
+                if (!known) {
+                    std::string members;
+                    for (std::size_t m = 0; m < declaration.members.size(); ++m) {
+                        members += concat(m == 0 ? "" : ", ", declaration.members[m]);
+                    }
+                    error(expression.nameRange, concat("Enum '", declaration.name, "' has no member '", expression.text, "'."),
+                          {concat("The members are ", members, ".")});
+                    info.type = Type::Error;
+                }
+                return record(expression, info);
+            }
+        }
+        const Type type = checkExpression(object);
+        if (type == Type::Error) {
+            info.type = Type::Error;
+        } else if (type != Type::Vec2) {
+            error(expression.nameRange, concat("A value of type ", quoted(type), " has no member '", expression.text, "'."));
+            info.type = Type::Error;
+        } else if (expression.text != "x" && expression.text != "y") {
+            error(expression.nameRange, concat("A vec2 has components 'x' and 'y', not '", expression.text, "'."));
+            info.type = Type::Error;
+        } else {
+            info.type = Type::Float;
+            info.component = expression.text == "y" ? 1 : 0;
+        }
         return record(expression, info);
     }
 
@@ -478,7 +729,7 @@ private:
             if (operand != Type::Bool) {
                 error(expression.range, concat("Operator 'not' requires a 'bool' operand, got ", quoted(operand), "."));
             }
-        } else if (isNumeric(operand)) {
+        } else if (isNumeric(operand) || operand == Type::Vec2) {
             info.type = operand;
         } else {
             error(expression.range, concat("Operator '-' cannot be applied to ", quoted(operand), "."));
@@ -496,6 +747,11 @@ private:
         if (left == Type::Int) model_.expressions_[expression.left.get()].widenToFloat = true;
         if (right == Type::Int) model_.expressions_[expression.right.get()].widenToFloat = true;
         return Type::Float;
+    }
+
+    void widen(const Expr& operand, Type type)
+    {
+        if (type == Type::Int) model_.expressions_[&operand].widenToFloat = true;
     }
 
     Type checkBinary(const Expr& expression)
@@ -527,6 +783,8 @@ private:
         case BinaryOp::Add:
             if (left == Type::String && right == Type::String) {
                 info.type = Type::String;
+            } else if (left == Type::Vec2 && right == Type::Vec2) {
+                info.type = Type::Vec2;
             } else if (isNumeric(left) && isNumeric(right)) {
                 info.type = unifyNumeric(expression, left, right);
             } else if (left == Type::String || right == Type::String) {
@@ -536,13 +794,35 @@ private:
             }
             break;
         case BinaryOp::Subtract:
+            if (left == Type::Vec2 && right == Type::Vec2) {
+                info.type = Type::Vec2;
+                break;
+            }
+            info.type = (isNumeric(left) && isNumeric(right)) ? unifyNumeric(expression, left, right) : incompatible();
+            break;
         case BinaryOp::Multiply:
+            if (left == Type::Vec2 && isNumeric(right)) {
+                widen(*expression.right, right);
+                info.type = Type::Vec2;
+                break;
+            }
+            if (isNumeric(left) && right == Type::Vec2) {
+                widen(*expression.left, left);
+                info.type = Type::Vec2;
+                info.swapOperands = true;
+                break;
+            }
+            info.type = (isNumeric(left) && isNumeric(right)) ? unifyNumeric(expression, left, right) : incompatible();
+            break;
         case BinaryOp::FloorDivide:
         case BinaryOp::Modulo:
             info.type = (isNumeric(left) && isNumeric(right)) ? unifyNumeric(expression, left, right) : incompatible();
             break;
         case BinaryOp::Divide:
-            if (isNumeric(left) && isNumeric(right)) {
+            if (left == Type::Vec2 && isNumeric(right)) {
+                widen(*expression.right, right);
+                info.type = Type::Vec2;
+            } else if (isNumeric(left) && isNumeric(right)) {
                 if (left == Type::Int) model_.expressions_[expression.left.get()].widenToFloat = true;
                 if (right == Type::Int) model_.expressions_[expression.right.get()].widenToFloat = true;
                 info.type = Type::Float;
@@ -555,7 +835,11 @@ private:
             info.type = Type::Bool;
             if (isNumeric(left) && isNumeric(right)) {
                 unifyNumeric(expression, left, right);
-            } else if (left != right || left == Type::None) {
+            } else if (isReference(left) && isReference(right)) {
+                if ((left == Type::Actor && right == Type::Object) || (left == Type::Object && right == Type::Actor)) {
+                    incompatible({"An actor is never the same entity as a room object."});
+                }
+            } else if (left != right || !isEqualityType(left)) {
                 incompatible();
             }
             break;
@@ -613,10 +897,8 @@ private:
             parameters = &native.parameters;
             info.type = native.returnType;
         } else {
-            const FunctionDecl& function = *model_.functions_[symbol->second.index].declaration;
-            for (const Parameter& parameter : function.parameters) {
-                userParameters.push_back(parameter.type);
-            }
+            const FunctionSemantics& function = model_.functions_[symbol->second.index];
+            userParameters = function.parameters;
             parameters = &userParameters;
             info.type = function.returnType;
         }
@@ -656,6 +938,22 @@ private:
         ExprInfo info;
         info.callKind = CallKind::Intrinsic;
         info.intrinsic = intrinsic;
+        if (intrinsic == Intrinsic::MakeVec2) {
+            info.type = Type::Vec2;
+            if (arguments.size() != 2) {
+                error(call.range, concat("vec2() takes exactly 2 arguments (x, y), got ", arguments.size(), "."));
+                return record(call, info);
+            }
+            for (std::size_t i = 0; i < 2; ++i) {
+                if (isNumeric(arguments[i])) {
+                    widen(*call.arguments[i], arguments[i]);
+                } else if (arguments[i] != Type::Error) {
+                    error(call.arguments[i]->range, concat("Argument ", i + 1, " of vec2() must be a number, got ",
+                                                           quoted(arguments[i]), "."));
+                }
+            }
+            return record(call, info);
+        }
         info.type = intrinsic == Intrinsic::ToInt ? Type::Int : (intrinsic == Intrinsic::ToFloat ? Type::Float : Type::String);
         if (arguments.size() != 1) {
             error(call.range, concat(call.text, "() takes exactly 1 argument, got ", arguments.size(), "."));
@@ -669,6 +967,7 @@ private:
         case Intrinsic::ToString:
             valid = valid || argument == Type::Int || argument == Type::Float || argument == Type::Bool || argument == Type::String;
             break;
+        case Intrinsic::MakeVec2: break;
         }
         if (!valid) {
             error(call.arguments[0]->range, concat(call.text, "() cannot convert a value of type ", quoted(argument), "."));
@@ -707,14 +1006,16 @@ private:
     const SourceUnit& unit_;
     Diagnostics& diagnostics_;
     SemanticModel model_;
+    std::vector<const NativeInterface*> interfaces_;
     std::unordered_map<std::string, FunctionSymbol> symbols_;
+    std::unordered_map<std::string, std::uint32_t> enumNames_;
     std::vector<std::unordered_map<std::string, std::uint32_t>> scopes_;
     FunctionSemantics* current_ = nullptr;
 };
 
-SemanticModel checkTypes(const SourceUnit& unit, Diagnostics& diagnostics)
+SemanticModel checkTypes(const SourceUnit& unit, Diagnostics& diagnostics, std::span<const NativeInterface* const> interfaces)
 {
-    return TypeCheckerImpl(unit, diagnostics).run();
+    return TypeCheckerImpl(unit, diagnostics, interfaces).run();
 }
 
 } // namespace schuimm::script

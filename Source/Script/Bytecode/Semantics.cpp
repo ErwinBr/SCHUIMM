@@ -1,5 +1,6 @@
 #include "Script/Bytecode/Semantics.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -186,6 +187,7 @@ std::string formatFloat(double value)
     // std::to_chars for floating point needs macOS 13.3, so: the shortest %g-style precision
     // that reads back exactly. Streams with the classic locale never use a ',' separator.
     std::string text;
+    int digits = 17;
     for (int precision = 1; precision <= 17; ++precision) {
         std::ostringstream out;
         out.imbue(std::locale::classic());
@@ -197,7 +199,21 @@ std::string formatFloat(double value)
         double parsed = 0.0;
         in >> parsed;
         if (parsed == value && std::signbit(parsed) == std::signbit(value)) {
+            digits = precision;
             break;
+        }
+    }
+    // %g switches to an exponent as soon as the exponent reaches the precision ("1e+01" for
+    // 10.0). Like Python, use positional notation for decimal exponents from -4 to 15.
+    if (const std::size_t e = text.find('e'); e != std::string::npos) {
+        const int exponent = std::stoi(text.substr(e + 1));
+        if (exponent >= -4 && exponent < 16) {
+            std::ostringstream out;
+            out.imbue(std::locale::classic());
+            out << std::fixed;
+            out.precision(std::max(0, digits - 1 - exponent));
+            out << value;
+            text = std::move(out).str();
         }
     }
     if (text.find_first_of(".e") == std::string::npos) {

@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using namespace schuimm;
 using namespace schuimm::script;
@@ -33,6 +34,10 @@ constexpr const char* usage =
     "  -O1            Enable the optimizer (default)\n"
     "  --name NAME    Source name recorded in diagnostics and debug information\n"
     "                 (default: the input path as given)\n"
+    "  --interface N  Let the script call the native interface N besides the core\n"
+    "                 interface (repeatable); see --list-interfaces\n"
+    "  --list-interfaces\n"
+    "                 Print the native interfaces this compiler knows and exit\n"
     "  --tokens       Print the token stream\n"
     "  --ast          Print the syntax tree\n"
     "  --types        Print the syntax tree with types (after semantic analysis)\n"
@@ -42,7 +47,27 @@ constexpr const char* usage =
     "  --verify       Re-read the written file and validate it\n"
     "  -h, --help     Show this help\n";
 
+// The native interfaces scripts can be compiled against. Interfaces are pure declarations, so
+// the compiler links them without any engine subsystem. The core interface is always included.
+struct KnownInterface {
+    const char* name;
+    const NativeInterface& (*get)();
+};
+
+constexpr KnownInterface knownInterfaces[] = {
+    {"core", &coreInterface},
+};
+
+const NativeInterface* findInterface(std::string_view name)
+{
+    for (const KnownInterface& known : knownInterfaces) {
+        if (name == known.name) return &known.get();
+    }
+    return nullptr;
+}
+
 struct Options {
+    std::vector<const NativeInterface*> interfaces;
     std::string input;
     std::string output;
     std::string name;
@@ -77,6 +102,31 @@ int main(int argc, char** argv)
                 return 2;
             }
             (argument == "-o" ? options.output : options.name) = argv[++i];
+        } else if (argument == "--interface") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "%s requires a value\n\n%s", argv[i], usage);
+                return 2;
+            }
+            const NativeInterface* interface = findInterface(argv[++i]);
+            if (interface == nullptr) {
+                std::fprintf(stderr, "Unknown native interface '%s' (see --list-interfaces)\n", argv[i]);
+                return 2;
+            }
+            options.interfaces.push_back(interface);
+        } else if (argument == "--list-interfaces") {
+            for (const KnownInterface& known : knownInterfaces) {
+                const NativeInterface& interface = known.get();
+                std::printf("%s\n", interface.name.c_str());
+                for (const EnumDeclaration& declaration : interface.enums) {
+                    std::string members;
+                    for (const std::string& member : declaration.members) members += " " + member;
+                    std::printf("  enum %s:%s\n", declaration.name.c_str(), members.c_str());
+                }
+                for (const NativeDeclaration& declaration : interface.functions) {
+                    std::printf("  %s  [%s]\n", formatSignature(declaration).c_str(), toString(declaration.category));
+                }
+            }
+            return 0;
         } else if (argument == "-O0") {
             options.optimize = false;
         } else if (argument == "-O1") {
@@ -117,7 +167,10 @@ int main(int argc, char** argv)
     }
     const SourceFile source(options.name.empty() ? options.input : options.name,
                             std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
-    const CompileResult result = compile(source, CompileOptions{options.optimize});
+    CompileOptions compileOptions;
+    compileOptions.optimize = options.optimize;
+    compileOptions.interfaces = options.interfaces;
+    const CompileResult result = compile(source, compileOptions);
 
     if (options.tokens) print("tokens", dumpTokens(result.tokens));
     if (options.ast && result.ast) print("ast", dumpAst(*result.ast));

@@ -1,6 +1,7 @@
 #include "Script/Runtime/Coroutine.h"
 
 #include "Core/Common/StringBuilder.h"
+#include "Script/Bytecode/Disassembler.h"
 
 namespace schuimm::script {
 
@@ -49,17 +50,17 @@ Result<std::unique_ptr<Coroutine>> Coroutine::createAt(std::shared_ptr<const Pro
         if (!arguments[i].matches(entry.parameters[i])) {
             return ::schuimm::makeError(ErrorCode::InvalidArgument,
                                         concat("Argument ", i + 1 - hidden, " of '", name, "' must be ",
-                                               toString(entry.parameters[i]), ", got ", toString(arguments[i].type())));
+                                               formatType(program->module(), entry.parameters[i]), ", got ", toString(arguments[i].type())));
         }
     }
-    if (entry.registerCount > limits.maxRegisters) {
+    if (entry.registerCount() > limits.maxRegisters) {
         return ::schuimm::makeError(ErrorCode::InvalidArgument, concat("Function '", name, "' needs more registers than allowed"));
     }
     std::unique_ptr<Coroutine> coroutine(new Coroutine());
     coroutine->program_ = std::move(program);
     coroutine->entry_ = name;
     coroutine->limits_ = limits;
-    coroutine->registers_.resize(entry.registerCount);
+    coroutine->registers_.resize(entry.registerCount());
     for (std::size_t i = 0; i < arguments.size(); ++i) {
         coroutine->registers_[i] = std::move(arguments[i]);
     }

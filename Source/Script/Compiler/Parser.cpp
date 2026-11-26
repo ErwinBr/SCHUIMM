@@ -115,6 +115,12 @@ public:
                 }
                 continue;
             }
+            if (check(TokenKind::KwEnum)) {
+                if (auto declaration = parseEnum()) {
+                    unit->enums.push_back(std::move(declaration));
+                }
+                continue;
+            }
             if (check(TokenKind::Indent)) {
                 error(current(), "Unexpected indentation.");
                 skipIndentedBlock();
@@ -124,7 +130,7 @@ public:
                 advance();
                 continue;
             }
-            error(current(), "Expected a declaration ('func', 'extern func' or 'object') at the top level.",
+            error(current(), "Expected a declaration ('func', 'extern func', 'object' or 'enum') at the top level.",
                   {"Statements must be inside a function, e.g. 'func main():'."});
             skipLine();
             if (check(TokenKind::Indent)) {
@@ -211,23 +217,29 @@ private:
     }
 
     // --- Declarations -------------------------------------------------------------------------
-    std::optional<Type> parseType(SourceRange& range)
+    // A built-in type, or a name the type checker resolves (an enum).
+    std::optional<TypeSyntax> parseType()
     {
         const Token& token = current();
-        range = token.range;
+        TypeSyntax type;
+        type.range = token.range;
         if (match(TokenKind::KwNone)) {
-            return Type::None;
+            type.type = Type::None;
+            return type;
         }
         if (match(TokenKind::KwObject)) {
-            return Type::Object;
+            type.type = Type::Object;
+            return type;
         }
         if (check(TokenKind::Identifier)) {
             advance();
-            if (const auto type = typeFromName(token.lexeme)) {
-                return type;
+            if (const auto builtIn = typeFromName(token.lexeme)) {
+                type.type = *builtIn;
+            } else {
+                type.type = Type::Named;
+                type.name = std::string(token.lexeme);
             }
-            error(token, concat("Unknown type '", token.lexeme, "'."), {"The types are int, float, bool, string and object."});
-            return Type::Error;
+            return type;
         }
         error(token, concat("Expected a type name, found ", describe(token.kind), "."));
         return std::nullopt;
@@ -256,7 +268,7 @@ private:
             return nullptr;
         }
         if (match(TokenKind::Arrow)) {
-            const auto type = parseType(function->returnTypeRange);
+            const auto type = parseType();
             if (!type) {
                 skipLine();
                 if (check(TokenKind::Indent)) skipIndentedBlock();
@@ -357,6 +369,59 @@ private:
         return object;
     }
 
+    // enum := "enum" NAME ":" NEWLINE INDENT (NAME NEWLINE)+ DEDENT
+    std::unique_ptr<EnumDecl> parseEnum()
+    {
+        auto declaration = std::make_unique<EnumDecl>();
+        const Token& first = advance(); // 'enum'
+        const Token& name = current();
+        if (!expect(TokenKind::Identifier, "for the enum name")) {
+            skipLine();
+            if (check(TokenKind::Indent)) skipIndentedBlock();
+            return nullptr;
+        }
+        declaration->name = std::string(name.lexeme);
+        declaration->nameRange = name.range;
+        declaration->range = join(first.range, name.range);
+        if (!expect(TokenKind::Colon, "after the enum name") || !expect(TokenKind::Newline, "after ':'")) {
+            skipLine();
+            if (check(TokenKind::Indent)) skipIndentedBlock();
+            return declaration;
+        }
+        if (!check(TokenKind::Indent)) {
+            panic_ = false;
+            error(current(), concat("Expected an indented list of members for enum '", declaration->name, "'."),
+                  {"Put each member name on its own line, indented by one tab."});
+            return nullptr;
+        }
+        advance();
+        while (!check(TokenKind::Dedent) && !check(TokenKind::EndOfFile)) {
+            panic_ = false;
+            if (match(TokenKind::Newline)) {
+                continue;
+            }
+            const Token& member = current();
+            if (!check(TokenKind::Identifier)) {
+                error(member, concat("Expected a member name in enum '", declaration->name, "', found ", describe(member.kind), "."),
+                      {"An enum lists one member name per line, e.g. 'NORTH'."});
+                skipLine();
+                if (check(TokenKind::Indent)) skipIndentedBlock();
+                continue;
+            }
+            advance();
+            declaration->members.push_back({std::string(member.lexeme), member.range});
+            if (!check(TokenKind::Newline) && !check(TokenKind::Dedent) && !check(TokenKind::EndOfFile)) {
+                error(current(), "Expected the end of the line after an enum member.", {"Put each member on its own line."});
+                skipLine();
+            } else {
+                match(TokenKind::Newline);
+            }
+        }
+        match(TokenKind::Dedent);
+        declaration->range = join(declaration->range, previous().range);
+        return declaration;
+    }
+
     bool parseParameters(FunctionDecl& function)
     {
         if (!expect(TokenKind::LeftParen, "after the function name")) {
@@ -372,16 +437,16 @@ private:
             parameter.nameRange = name.range;
             if (!check(TokenKind::Colon)) {
                 error(current(), concat("Parameter '", parameter.name, "' needs a type annotation."),
-                      {concat("Write '", parameter.name, ": int' (or float, bool, string).")});
+                      {concat("Write '", parameter.name, ": int' (or another type, e.g. float, string, actor, vec2).")});
                 return false;
             }
             advance();
-            const auto type = parseType(parameter.typeRange);
+            const auto type = parseType();
             if (!type) {
                 return false;
             }
-            if (*type == Type::None) {
-                diagnostics_.error(DiagnosticPhase::Parser, parameter.typeRange, "A parameter cannot have type None.");
+            if (type->type == Type::None) {
+                diagnostics_.error(DiagnosticPhase::Parser, type->range, "A parameter cannot have type None.");
             }
             parameter.type = *type;
             function.parameters.push_back(std::move(parameter));
@@ -480,14 +545,20 @@ private:
             if (check(TokenKind::Indent)) skipIndentedBlock();
             return nullptr;
         case TokenKind::KwObject:
-            error(first, "Object declarations are only allowed at the top level.");
+        case TokenKind::KwEnum:
+            error(first, first.kind == TokenKind::KwObject ? "Object declarations are only allowed at the top level."
+                                                           : "Enum declarations are only allowed at the top level.");
             skipLine();
             if (check(TokenKind::Indent)) skipIndentedBlock();
             return nullptr;
+        case TokenKind::KwVar: return parseVariable();
         default: break;
         }
-        if (first.kind == TokenKind::Identifier &&
-            (peekToken(1).kind == TokenKind::Assign || peekToken(1).kind == TokenKind::Colon)) {
+        if (first.kind == TokenKind::Identifier && peekToken(1).kind == TokenKind::Colon) {
+            error(first, concat("Variables are declared with 'var': write 'var ", first.lexeme, ": <type> = <value>'."));
+            return recover(std::move(statement));
+        }
+        if (first.kind == TokenKind::Identifier && peekToken(1).kind == TokenKind::Assign) {
             return parseAssignment();
         }
         statement->kind = StmtKind::Expression;
@@ -496,7 +567,26 @@ private:
             return recover(std::move(statement));
         }
         if (check(TokenKind::Assign)) {
-            if (statement->value->kind == ExprKind::Self) {
+            const Expr& target = *statement->value;
+            if (target.kind == ExprKind::Member && target.left->kind == ExprKind::Name) {
+                // "v.x = value": a component of a vec2 variable.
+                auto assignment = std::make_unique<Stmt>();
+                assignment->kind = StmtKind::Assign;
+                assignment->name = target.left->text;
+                assignment->nameRange = target.left->range;
+                assignment->member = target.text;
+                assignment->memberRange = target.nameRange;
+                advance(); // '='
+                assignment->value = parseExpression();
+                if (!assignment->value) {
+                    return recover(std::move(assignment));
+                }
+                assignment->range = join(target.range, assignment->value->range);
+                return endOfStatement(std::move(assignment));
+            }
+            if (target.kind == ExprKind::Member) {
+                error(current(), "Only a component of a vec2 variable can be assigned, e.g. 'position.x = 10.0'.");
+            } else if (statement->value->kind == ExprKind::Self) {
                 error(current(), "'self' cannot be assigned.",
                       {"'self' always refers to the object whose handler is running."});
             } else {
@@ -532,6 +622,45 @@ private:
         return statement;
     }
 
+    // var := "var" NAME [":" type] "=" expression
+    std::unique_ptr<Stmt> parseVariable()
+    {
+        auto statement = std::make_unique<Stmt>();
+        statement->kind = StmtKind::Assign;
+        statement->declaration = true;
+        const Token& first = advance(); // 'var'
+        const Token& name = current();
+        if (!expect(TokenKind::Identifier, "for the variable name")) {
+            return recover(std::move(statement));
+        }
+        statement->name = std::string(name.lexeme);
+        statement->nameRange = name.range;
+        if (match(TokenKind::Colon)) {
+            auto type = parseType();
+            if (!type) {
+                return recover(std::move(statement));
+            }
+            if (type->type == Type::None) {
+                diagnostics_.error(DiagnosticPhase::Parser, type->range, "A variable cannot have type None.");
+                type->type = Type::Error;
+            }
+            statement->annotation = std::move(*type);
+        }
+        if (!check(TokenKind::Assign)) {
+            error(current(), concat("Variable '", statement->name, "' must be initialised."),
+                  {concat("Write 'var ", statement->name, " = <value>'.")});
+            return recover(std::move(statement));
+        }
+        advance(); // '='
+        statement->value = parseExpression();
+        if (!statement->value) {
+            return recover(std::move(statement));
+        }
+        statement->range = join(first.range, statement->value->range);
+        return endOfStatement(std::move(statement));
+    }
+
+    // NAME "=" expression: assigns an existing variable.
     std::unique_ptr<Stmt> parseAssignment()
     {
         auto statement = std::make_unique<Stmt>();
@@ -539,23 +668,6 @@ private:
         const Token& name = advance();
         statement->name = std::string(name.lexeme);
         statement->nameRange = name.range;
-        if (match(TokenKind::Colon)) {
-            const auto type = parseType(statement->annotationRange);
-            if (!type) {
-                return recover(std::move(statement));
-            }
-            if (*type == Type::None) {
-                diagnostics_.error(DiagnosticPhase::Parser, statement->annotationRange, "A variable cannot have type None.");
-                statement->annotation = Type::Error;
-            } else {
-                statement->annotation = *type;
-            }
-            if (!check(TokenKind::Assign)) {
-                error(current(), concat("Variable '", statement->name, "' must be initialised."),
-                      {concat("Write '", statement->name, ": ", toString(*type), " = <value>'.")});
-                return recover(std::move(statement));
-            }
-        }
         advance(); // '='
         statement->value = parseExpression();
         if (!statement->value) {
@@ -673,7 +785,32 @@ private:
         return left;
     }
 
+    // A primary expression followed by any number of ".member" accesses.
     std::unique_ptr<Expr> parsePrefix()
+    {
+        auto expression = parsePrimary();
+        while (expression && check(TokenKind::Dot)) {
+            advance();
+            const Token& member = current();
+            if (!expect(TokenKind::Identifier, "after '.'")) {
+                return nullptr;
+            }
+            auto access = std::make_unique<Expr>();
+            access->kind = ExprKind::Member;
+            access->text = std::string(member.lexeme);
+            access->nameRange = member.range;
+            access->range = join(expression->range, member.range);
+            access->left = std::move(expression);
+            expression = std::move(access);
+            if (check(TokenKind::LeftParen)) {
+                error(current(), "Values have no methods; call functions by name, e.g. 'length(v)'.");
+                return nullptr;
+            }
+        }
+        return expression;
+    }
+
+    std::unique_ptr<Expr> parsePrimary()
     {
         const Token& token = current();
         auto expression = std::make_unique<Expr>();

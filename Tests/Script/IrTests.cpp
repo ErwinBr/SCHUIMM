@@ -22,7 +22,7 @@ bool contains(const std::string& text, const std::string& part) { return text.fi
 
 SCHUIMM_TEST(Ir_ThreeAddressCodeForAssignments)
 {
-    const std::string ir = irOf("func main():\n\ta = 10\n\tb = 20\n\tc = a + b\n");
+    const std::string ir = irOf("func main():\n\tvar a = 10\n\tvar b = 20\n\tvar c = a + b\n");
     CHECK(contains(ir, "func main() -> None"));
     CHECK(contains(ir, "= LoadInt 10"));
     CHECK(contains(ir, "= LoadInt 20"));
@@ -42,7 +42,7 @@ SCHUIMM_TEST(Ir_ParametersAndReturnValues)
 
 SCHUIMM_TEST(Ir_BranchesAndLoops)
 {
-    const std::string ir = irOf("func main():\n\tx = 0\n\twhile x < 3:\n\t\tx = x + 1\n\tif x == 3:\n\t\tprint(\"three\")\n"
+    const std::string ir = irOf("func main():\n\tvar x = 0\n\twhile x < 3:\n\t\tx = x + 1\n\tif x == 3:\n\t\tprint(\"three\")\n"
                                 "\telif x > 3:\n\t\tprint(\"more\")\n\telse:\n\t\tprint(\"less\")\n");
     CHECK(contains(ir, "LtInt"));
     CHECK(contains(ir, "Branch r"));
@@ -59,7 +59,7 @@ SCHUIMM_TEST(Ir_BranchesAndLoops)
 
 SCHUIMM_TEST(Ir_ShortCircuitUsesControlFlow)
 {
-    const Compiled c = compileSource("func t() -> bool:\n\treturn True\nfunc main():\n\tx = t() and t()\n\ty = t() or t()\n", false);
+    const Compiled c = compileSource("func t() -> bool:\n\treturn True\nfunc main():\n\tvar x = t() and t()\n\tvar y = t() or t()\n", false);
     REQUIRE(c.result.success);
     const IrFunction& main = c.result.ir.functions[1];
     int branches = 0;
@@ -71,7 +71,7 @@ SCHUIMM_TEST(Ir_FunctionAndNativeCalls)
 {
     const std::string ir =
         irOf("extern func play(name: string) -> bool\nfunc helper(n: int) -> int:\n\treturn n\n"
-             "func main():\n\tv = helper(2)\n\tok = play(\"x\")\n\tprint(v)\n\twait(1)\n\tyield()\n");
+             "func main():\n\tvar v = helper(2)\n\tvar ok = play(\"x\")\n\tprint(v)\n\twait(1)\n\tyield()\n");
     CHECK(contains(ir, "native play(string) -> bool"));
     CHECK(contains(ir, "= Call helper r"));
     CHECK(contains(ir, "= CallNative play r"));
@@ -82,12 +82,12 @@ SCHUIMM_TEST(Ir_FunctionAndNativeCalls)
 
 SCHUIMM_TEST(Ir_SourcePositionsAndVerification)
 {
-    const Compiled c = compileSource("func main():\n\tx = 1\n\n\ty = x * 2\n", false);
+    const Compiled c = compileSource("func main():\n\tvar x = 1\n\n\tvar y = x * 2\n", false);
     REQUIRE(c.result.success);
     bool sawLine4 = false;
     for (const IrBlock& block : c.result.ir.functions[0].blocks) {
         for (const IrInstruction& instruction : block.instructions) {
-            if (instruction.op == IrOp::MulInt) sawLine4 = instruction.position.line == 4 && instruction.position.column == 6;
+            if (instruction.op == IrOp::MulInt) sawLine4 = instruction.position.line == 4 && instruction.position.column == 10;
         }
     }
     CHECK(sawLine4);

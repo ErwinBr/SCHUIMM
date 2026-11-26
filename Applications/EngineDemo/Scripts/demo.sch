@@ -8,7 +8,7 @@ extern func play_chime()
 func main():
 	print("Welcome to SCHUIMM!")
 
-	counter = 0
+	var counter = 0
 
 	while counter < 3:
 		print(counter)

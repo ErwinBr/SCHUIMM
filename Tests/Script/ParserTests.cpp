@@ -37,7 +37,7 @@ Parsed parseSource(std::string text)
 // The expression of "func f():\n\tx = <expression>".
 std::string expressionOf(const std::string& expression)
 {
-    const Parsed p = parseSource("func f():\n\tx = " + expression + "\n");
+    const Parsed p = parseSource("func f():\n\tvar x = " + expression + "\n");
     if (p.diagnostics.hasErrors() || p.unit->functions.empty()) return "<parse error>";
     return formatExpression(*p.unit->functions[0]->body->statements[0]->value);
 }
@@ -53,14 +53,14 @@ SCHUIMM_TEST(Parser_FunctionDeclarations)
     const FunctionDecl& damage = *p.unit->functions[1];
     CHECK_EQ(damage.name, std::string("damage"));
     REQUIRE(damage.parameters.size() == 2);
-    CHECK(damage.parameters[0].type == Type::Int);
-    CHECK(damage.parameters[1].type == Type::Float);
-    CHECK(damage.returnType == Type::Float);
+    CHECK(damage.parameters[0].type.type == Type::Int);
+    CHECK(damage.parameters[1].type.type == Type::Float);
+    CHECK(damage.returnType.type == Type::Float);
     CHECK(!damage.isExtern);
-    CHECK(p.unit->functions[0]->returnType == Type::None);
+    CHECK(p.unit->functions[0]->returnType.type == Type::None);
     CHECK(p.unit->functions[2]->isExtern);
     CHECK(p.unit->functions[2]->body == nullptr);
-    CHECK(p.unit->functions[3]->returnType == Type::Float);
+    CHECK(p.unit->functions[3]->returnType.type == Type::Float);
 }
 
 SCHUIMM_TEST(Parser_PrecedenceAndAssociativity)
@@ -82,7 +82,7 @@ SCHUIMM_TEST(Parser_PrecedenceAndAssociativity)
 
 SCHUIMM_TEST(Parser_ChainedComparisonsAreRejected)
 {
-    const Parsed p = parseSource("func f():\n\tx = a < b < c\n");
+    const Parsed p = parseSource("func f():\n\tvar x = a < b < c\n");
     CHECK(p.hasError("cannot be chained", 2));
 }
 
@@ -90,7 +90,7 @@ SCHUIMM_TEST(Parser_StatementsAndNestedBlocks)
 {
     const Parsed p = parseSource(
         "func main():\n"
-        "\tcount: int = 0\n"
+        "\tvar count: int = 0\n"
         "\tif count == 0:\n"
         "\t\tprint(\"zero\")\n"
         "\telif count > 0:\n"
@@ -105,7 +105,9 @@ SCHUIMM_TEST(Parser_StatementsAndNestedBlocks)
     const Block& body = *p.unit->functions[0]->body;
     REQUIRE(body.statements.size() == 4);
     CHECK(body.statements[0]->kind == StmtKind::Assign);
-    CHECK(body.statements[0]->annotation == std::optional<Type>(Type::Int));
+    REQUIRE(body.statements[0]->annotation.has_value());
+    CHECK(body.statements[0]->annotation->type == Type::Int);
+    CHECK(body.statements[0]->declaration);
     const Stmt& ifStatement = *body.statements[1];
     CHECK(ifStatement.kind == StmtKind::If);
     CHECK_EQ(ifStatement.branches.size(), std::size_t{2});
@@ -127,17 +129,17 @@ SCHUIMM_TEST(Parser_SyntaxErrorsAreReportedWithRecovery)
     // Independent errors in one file: the parser resynchronises after each.
     const Parsed p = parseSource(
         "func main():\n"
-        "\ty = 1 +\n"
-        "\tz = 2\n"
+        "\tvar y = 1 +\n"
+        "\tvar z = 2\n"
         "\tif z:\n"
         "\tprint(z)\n"
-        "\tw = = 3\n"
+        "\tvar w = = 3\n"
         "func broken(a):\n"
         "\tpass\n"
         "func fine():\n"
         "\tpass\n"
         "func last():\n"
-        "\tx = (1 +\n");
+        "\tvar x = (1 +\n");
     CHECK(p.hasError("Expected an expression before the end of the line", 2));
     CHECK(p.hasError("Expected an indented block", 5));
     CHECK(p.hasError("Expected an expression, found '='", 6));
@@ -148,7 +150,7 @@ SCHUIMM_TEST(Parser_SyntaxErrorsAreReportedWithRecovery)
     for (const auto& function : p.unit->functions) sawFine = sawFine || function->name == "fine";
     CHECK(sawFine); // A well-formed function after errors is still parsed.
     // Statements after an error in the same block are parsed too.
-    const Parsed q = parseSource("func a():\n\tx = )\n\ty = 2\n");
+    const Parsed q = parseSource("func a():\n\tvar x = )\n\tvar y = 2\n");
     REQUIRE(q.unit->functions.size() == 1);
     CHECK_EQ(q.unit->functions[0]->body->statements.size(), std::size_t{1});
 }
@@ -164,13 +166,14 @@ SCHUIMM_TEST(Parser_MoreSyntaxErrors)
     CHECK(parseSource("func f():\n\telse:\n\t\tpass\n").hasError("without a matching 'if'"));
     CHECK(parseSource("func f():\n\tfor i in items:\n\t\tpass\n").hasError("iterates over range"));
     CHECK(parseSource("func f():\n\tfor i in range():\n\t\tpass\n").hasError("1 to 3 arguments"));
-    CHECK(parseSource("func f():\n\tx: int\n").hasError("must be initialised"));
-    CHECK(parseSource("func f():\n\tx: vector = 1\n").hasError("Unknown type 'vector'"));
+    CHECK(parseSource("func f():\n\tvar x: int\n").hasError("must be initialised"));
+    CHECK(parseSource("func f():\n\tx: int = 1\n").hasError("Variables are declared with 'var'"));
+    CHECK(compileSource("func f():\n\tvar x: vector = 1\n").has("Unknown type 'vector'"));
     CHECK(parseSource("func f(a: None):\n\tpass\n").hasError("cannot have type None"));
     CHECK(parseSource("func f():\n\tf() = 3\n").hasError("Only a variable name"));
-    CHECK(parseSource("func f():\n\tx = 1 2\n").hasError("Expected the end of the line"));
+    CHECK(parseSource("func f():\n\tvar x = 1 2\n").hasError("Expected the end of the line"));
     CHECK(parseSource("func f():\n\tfunc g():\n\t\tpass\n").hasError("inside other functions"));
     CHECK(parseSource("extern func f():\n\tpass\n").hasError("no body"));
-    CHECK(parseSource("func f():\n\tx = 9223372036854775808\n").hasError("too large"));
-    CHECK(parseSource("func f():\n\tx = f()(1)\n").hasError("Only named functions"));
+    CHECK(parseSource("func f():\n\tvar x = 9223372036854775808\n").hasError("too large"));
+    CHECK(parseSource("func f():\n\tvar x = f()(1)\n").hasError("Only named functions"));
 }

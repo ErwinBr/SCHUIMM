@@ -125,12 +125,16 @@ See [Navigation.md](Navigation.md) and [Actors.md](Actors.md#movement).
 
 ## Scripting
 
-Language scope (version 1.1, see [Language.md](../Scripting/Language.md#12-limitations-version-11)):
-* no `break`/`continue`, augmented assignment, lists, dictionaries, structures, modules/imports,
-  global variables or exception handling;
+Language scope (version 2.0, see [Language.md](../Scripting/Language.md#12-limitations-version-20)):
+* no `break`/`continue`, augmented assignment, lists, dictionaries, structures (besides `vec2`),
+  modules/imports, global variables or exception handling;
+* `spawn`, coroutine handles and engine operations are reserved but not available yet;
+* `str()` does not convert vectors, enums or references (only `print` shows them);
 * object handlers reach object state only through natives (no `self.property` syntax yet), and
   the adventure runtime that dispatches events to them is not part of this milestone;
-* one source file is one program; natives are linked by exact signature.
+* one source file is one program; natives are linked by exact signature, and engine enums by
+  qualified name and members.
+* Format 2.0 does not read 1.x bytecode: scripts are recompiled from source.
 
 Runtime:
 * Coroutine state cannot be saved or restored (no save games of running scripts yet).
@@ -142,8 +146,9 @@ Runtime:
   rebuild EngineDemo after editing a script.
 * Waits use the engine's clamped frame delta, so after a stall longer than 0.25 s waits run
   late by the clamped amount (as all game time does).
-* The VM checks register types per instruction instead of verifying them at load time; this
-  costs a little speed but keeps execution memory-safe for any bytecode.
+* Register types are verified at load time, but whether a register is written before it is read
+  is not; the VM therefore still checks operand tags per instruction. This costs a little speed
+  but keeps execution memory-safe for any bytecode.
 * String values use a non-atomic reference count: scripts and their values belong to the game
   thread.
 

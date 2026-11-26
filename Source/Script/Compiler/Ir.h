@@ -24,6 +24,9 @@ using BlockId = std::uint32_t;
 inline constexpr VReg noVReg = 0xFFFFFFFFu;
 
 // X(name, operand count (-1: variable), removable when unused, may trap)
+//   LoadEnum: enum `callee` (an index into IrModule::enums), member ordinal `intValue`.
+//   SetVec2X/Y: dest = operand 0 with component x/y replaced by operand 1 (a float).
+//   MulVec2/DivVec2: vector operand 0, float operand 1.
 //   removable: no side effect and cannot fail, so an unused result may be deleted.
 //   may trap:  can raise a runtime error, which is observable; never removed or folded into one.
 #define SCHUIMM_IR_OPS(X)                                                                           \
@@ -76,8 +79,23 @@ inline constexpr VReg noVReg = 0xFFFFFFFFu;
     X(FloatToString, 1, true, false)                                                                \
     X(BoolToString, 1, true, false)                                                                 \
     X(CheckRangeStep, 1, false, true)                                                               \
-    X(EqObject, 2, true, false)                                                                     \
-    X(NeObject, 2, true, false)                                                                     \
+    X(EqRef, 2, true, false)                                                                        \
+    X(NeRef, 2, true, false)                                                                        \
+    X(LoadEnum, 0, true, false)                                                                     \
+    X(EqEnum, 2, true, false)                                                                       \
+    X(NeEnum, 2, true, false)                                                                       \
+    X(MakeVec2, 2, true, false)                                                                     \
+    X(Vec2X, 1, true, false)                                                                        \
+    X(Vec2Y, 1, true, false)                                                                        \
+    X(SetVec2X, 2, true, false)                                                                     \
+    X(SetVec2Y, 2, true, false)                                                                     \
+    X(AddVec2, 2, true, false)                                                                      \
+    X(SubVec2, 2, true, false)                                                                      \
+    X(MulVec2, 2, true, false)                                                                      \
+    X(DivVec2, 2, false, true)                                                                      \
+    X(NegVec2, 1, true, false)                                                                      \
+    X(EqVec2, 2, true, false)                                                                       \
+    X(NeVec2, 2, true, false)                                                                       \
     X(Call, -1, false, true)                                                                        \
     X(CallNative, -1, false, true)
 
@@ -105,7 +123,7 @@ struct IrInstruction {
     double floatValue = 0.0;
     bool boolValue = false;
     std::string stringValue;
-    std::uint32_t callee = 0; // Call: function index; CallNative: index into IrModule::natives.
+    std::uint32_t callee = 0; // Call: function index; CallNative: index into IrModule::natives; LoadEnum: enum.
     SourcePosition position;
 };
 
@@ -163,12 +181,23 @@ struct IrObject {
     std::vector<IrHandler> handlers;
 };
 
+// An enum type (Type enumType(i) is enums[i]). Engine enums have a qualifier (the interface).
+struct IrEnum {
+    std::string name;
+    std::string qualifier;
+    std::vector<std::string> members;
+};
+
 struct IrModule {
     std::string sourceName;
     std::vector<IrFunction> functions;
     std::vector<IrNative> natives;
     std::vector<IrObject> objects;
+    std::vector<IrEnum> enums;
 };
+
+// The source spelling of a type, with enum names.
+[[nodiscard]] std::string typeName(Type type, const IrModule& module);
 
 // "blender.look_at" for a handler, the plain name otherwise (dumps and messages only).
 [[nodiscard]] std::string displayName(const IrFunction& function, const IrModule& module);

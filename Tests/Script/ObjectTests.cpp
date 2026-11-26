@@ -152,7 +152,7 @@ SCHUIMM_TEST(Objects_OneHandler)
                                                  "      Call print\n        String \"A blender.\"\n"));
     // The handler is an ordinary function whose hidden parameter 0 is self.
     REQUIRE(c.result.module.functions.size() == 1);
-    CHECK(c.result.module.functions[0].parameters == std::vector<ScriptType>{ScriptType::Object});
+    CHECK(c.result.module.functions[0].parameters == std::vector<TypeRef>{ScriptType::Object});
     REQUIRE(c.result.module.objects.size() == 1);
     CHECK_EQ(c.result.module.string(c.result.module.objects[0].nameIndex), std::string("blender"));
 }
@@ -209,7 +209,7 @@ SCHUIMM_TEST(Objects_HandlersWithParametersAndControlFlow)
 {
     const Compiled c = compileSource("object a:\n"
                                      "\tfunc count(n: int, label: string) -> int:\n"
-                                     "\t\ttotal = 0\n"
+                                     "\t\tvar total = 0\n"
                                      "\t\tfor i in range(n):\n"
                                      "\t\t\tif i % 2 == 0:\n"
                                      "\t\t\t\ttotal = total + i\n"
@@ -266,11 +266,11 @@ SCHUIMM_TEST(Objects_SelfOnlyInsideHandlers)
     CHECK(compileSource("object a:\n\tfunc f(self: object):\n\t\tpass\n").has("for a parameter name", 2));
     CHECK(compileSource("object a:\n\tfunc f():\n\t\tself: int = 1\n").has("Expected the end of the line", 3));
     // self is an object: comparable with == and !=, nothing else.
-    CHECK(compileSource("object a:\n\tfunc f(o: object) -> bool:\n\t\tother = self\n\t\treturn self == o or other != o\n")
+    CHECK(compileSource("object a:\n\tfunc f(o: object) -> bool:\n\t\tvar other = self\n\t\treturn self == o or other != o\n")
               .result.success);
-    CHECK(compileSource("object a:\n\tfunc f():\n\t\tx = self + 1\n").has("cannot be applied to 'object' and 'int'"));
-    CHECK(compileSource("object a:\n\tfunc f():\n\t\tx = self < self\n").has("Operator '<' cannot be applied"));
-    CHECK(compileSource("object a:\n\tfunc f():\n\t\tx = str(self)\n").has("cannot convert a value of type 'object'"));
+    CHECK(compileSource("object a:\n\tfunc f():\n\t\tvar x = self + 1\n").has("cannot be applied to 'object' and 'int'"));
+    CHECK(compileSource("object a:\n\tfunc f():\n\t\tvar x = self < self\n").has("Operator '<' cannot be applied"));
+    CHECK(compileSource("object a:\n\tfunc f():\n\t\tvar x = str(self)\n").has("cannot convert a value of type 'object'"));
     CHECK(compileSource("object a:\n\tfunc f():\n\t\tif self:\n\t\t\tpass\n").has("must be of type 'bool'"));
 }
 
@@ -279,10 +279,10 @@ SCHUIMM_TEST(Objects_UnsupportedLocations)
     CHECK(compileSource("func main():\n\tobject a:\n\t\tfunc f():\n\t\t\tpass\n").has("only allowed at the top level", 2));
     CHECK(compileSource("object a:\n\tobject b:\n\t\tfunc f():\n\t\t\tpass\n").has("Object declarations cannot be nested", 2));
     CHECK(compileSource("object a:\n\textern func say(text: string)\n").has("Extern functions cannot be declared inside object 'a'", 2));
-    CHECK(compileSource("object a:\n\tx = 1\n").has("Only function declarations are allowed in object 'a'", 2));
+    CHECK(compileSource("object a:\n\tvar x = 1\n").has("Only function declarations are allowed in object 'a'", 2));
     CHECK(compileSource("object a:\n\tfunc f():\n\t\tfunc g():\n\t\t\tpass\n").has("cannot be declared inside other functions", 3));
     // Errors in one object do not hide errors in the next.
-    const Compiled two = compileSource("object a:\n\tx = 1\n\tfunc f():\n\t\ty = undefined\nobject b:\n\tfunc g():\n\t\tprint(self)\n");
+    const Compiled two = compileSource("object a:\n\tvar x = 1\n\tfunc f():\n\t\tvar y = undefined\nobject b:\n\tfunc g():\n\t\tprint(self)\n");
     CHECK(two.has("Only function declarations", 2));
     CHECK(!two.result.success);
 }
@@ -295,11 +295,11 @@ SCHUIMM_TEST(Objects_ObjectTypeInSignatures)
                                      "\treturn a == b\n"
                                      "object a:\n"
                                      "\tfunc f():\n"
-                                     "\t\tother: object = find_object(\"x\")\n"
+                                     "\t\tvar other: object = find_object(\"x\")\n"
                                      "\t\tprint(same(self, other))\n");
     REQUIRE(c.result.success);
     CHECK(c.result.module.imports[0].returnType == ScriptType::Object);
-    CHECK(compileSource("func f(o: obj):\n\tpass\n").hasNote("int, float, bool, string and object"));
+    CHECK(compileSource("func f(o: obj):\n\tpass\n").hasNote("int, float, bool, string, vec2, entity, actor, object"));
 }
 
 // --- Runtime: dispatch ------------------------------------------------------------------------------

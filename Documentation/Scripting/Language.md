@@ -1,13 +1,22 @@
-# SCHUIMM Script — language specification (version 1.1)
+# SCHUIMM Script — language specification (version 2.0)
 
 SCHUIMM Script is a small, statically typed scripting language with Python-inspired syntax,
 made for 2D adventure games: readable scripts that call engine functions and wait without
 blocking the game. It is **not** Python; see [Differences from Python](#differences-from-python).
 
 This document describes the language as implemented by `schuimmc` and the SCHUIMM runtime.
-The language version (1.1) is recorded in every bytecode file and is independent of the bytecode
-format version ([Bytecode.md](Bytecode.md)). Version 1.1 added object declarations and `self`
-([§8](#8-objects-and-handlers)); `object` and `self` became keywords.
+The language version (2.0) is recorded in every bytecode file and is independent of the bytecode
+format version ([Bytecode.md](Bytecode.md)).
+
+Version 2.0 adds:
+- `var` declarations, which are now required (§7);
+- the entity reference types `actor`, `object` and `entity` (§3.3);
+- scoped enums (§3.4);
+- the vector type `vec2` (§3.5);
+- native API interfaces: engine functions and enums a script can use without declaring them
+  (§6.1).
+
+Scripts written for 1.x must be updated: add `var` to declarations and recompile them.
 
 ```python
 # A complete script.
@@ -16,7 +25,7 @@ extern func play_chime()
 func main():
 	print("Welcome to SCHUIMM!")
 
-	counter = 0
+	var counter = 0
 	while counter < 3:
 		print(counter)
 		counter = counter + 1
@@ -32,7 +41,8 @@ More examples: [Examples/](Examples/).
 
 * Source files are UTF-8. Invalid UTF-8 is an error. Line endings may be `\n`, `\r\n` or `\r`.
 * A file is one *module*: a sequence of function declarations (`func`), native function
-  declarations (`extern func`) and object declarations (`object`, [§8](#8-objects-and-handlers)).
+  declarations (`extern func`), object declarations (`object`, [§8](#8-objects-and-handlers))
+  and enum declarations (`enum`, [§3.4](#34-enums)).
   There are no global variables and no statements at the top level.
 * Diagnostics give `file:line:column`; lines and columns are 1-based and columns count bytes
   (a tab is one column).
@@ -66,10 +76,13 @@ More examples: [Examples/](Examples/).
 ### 2.3 Identifiers and keywords
 
 * Identifiers: `[A-Za-z_][A-Za-z0-9_]*` (ASCII only). Use `snake_case` by convention.
-* Keywords: `func extern object self if elif else while for in return pass and or not True False None`.
+* Keywords: `func extern object enum var self if elif else while for in return pass and or not
+  True False None spawn`. (`spawn` is reserved; it has no meaning in version 2.0 yet.)
 * Reserved names (not keywords, but they cannot be redefined or used as variable or function
-  names): the type names `int float bool string`, the conversion functions `int float str`,
-  `range`, and the built-in functions `print wait yield`.
+  names): the type names `int float bool string vec2 entity actor coroutine operation`, the
+  conversion functions `int float str`, the constructor `vec2`, and `range`.
+* The functions and enums of the native interfaces the script is compiled with (§6.1), such as
+  `print`, `wait` and `length`, cannot be redeclared either.
 * `true`, `false`, `none` are ordinary (undefined) names; the compiler suggests `True`, `False`
   or `None`.
 
@@ -91,7 +104,7 @@ More examples: [Examples/](Examples/).
 
 ### 2.5 Operators and punctuation
 
-`+ - * / // % == != < <= > >= = ( ) , : ->` and the keyword operators `and or not`.
+`+ - * / // % == != < <= > >= = ( ) , : -> .` and the keyword operators `and or not`.
 
 ## 3. Types
 
@@ -101,7 +114,12 @@ More examples: [Examples/](Examples/).
 | `float` | IEEE 754 binary64 (including ±infinity and NaN, which can arise from arithmetic) |
 | `bool` | `True`, `False` |
 | `string` | immutable UTF-8 text |
-| `object` | a handle of an engine object, e.g. an object of the current room ([§8.4](#84-self-and-the-object-type)) |
+| `vec2` | a 2D vector of two `float` components, `x` and `y` (§3.5) |
+| `actor` | a reference to an actor (§3.3) |
+| `object` | a reference to a room object, e.g. `self` in a handler (§3.3, [§8.4](#84-self-and-the-object-type)) |
+| `entity` | a reference to an actor or a room object (§3.3) |
+| enum types | the members of a scoped enum, e.g. `Direction.NORTH` (§3.4) |
+| `coroutine`, `operation` | reserved for coroutine handles and engine operations; version 2.0 has no way to create such values yet |
 | `None` | the "no value" type: the result of a function without a return type |
 
 `None` is not a value a variable can hold. It is the return type of functions declared without
@@ -109,17 +127,22 @@ More examples: [Examples/](Examples/).
 
 ### 3.1 Type inference and annotations
 
-* A variable gets the type of its initialising expression: `size = 100` is `int`,
-  `speed = 3.5` is `float`, `has_key = True` is `bool`, `name = "Alex"` is `string`.
-* An annotation states the type explicitly: `size: int = 100`. The initialiser must be
-  assignable to it (§3.2). An annotation without an initialiser is an error.
+* A variable declared without a type gets the type of its initialising expression:
+  `var size = 100` is `int`, `var speed = 3.5` is `float`, `var has_key = True` is `bool`,
+  `var name = "Alex"` is `string`, `var spot = vec2(10, 20)` is `vec2`.
+* An annotation states the type explicitly: `var size: float = 100`. The initialiser must be
+  assignable to it (§3.2). A declaration without an initialiser is an error.
 * Parameter types are mandatory: `func f(amount: int, scale: float)`.
 * The return type follows `->`; without it the function returns `None`.
 
 ### 3.2 Conversions
 
-There is exactly one implicit conversion: **int → float** (widening). It applies where a `float`
-is expected and an `int` is given:
+There are two implicit conversions, both widening: **int → float**, and **actor → entity** and
+**object → entity** (§3.3). They apply where the wider type is expected and the narrower one is
+given: assignment, arguments and `return`. There is no implicit narrowing.
+
+Int → float also applies to operands. It applies where a `float` is expected and an `int` is
+given:
 
 * assignment to a `float` variable, argument for a `float` parameter, value of `return` in a
   function returning `float`;
@@ -137,7 +160,87 @@ Every other conversion is explicit:
 | `str(x)` | `int`, `float`, `bool`, `string` | `string` (text as in §6.3) |
 
 `int(x)` of a NaN, an infinity or a float outside the `int` range is a runtime error.
-There is no conversion to `bool` and no truthiness: conditions must be `bool`.
+There is no conversion to `bool` and no truthiness: conditions must be `bool`. References, enums
+and vectors have no conversions to other types.
+
+### 3.3 Entity references: actor, object and entity
+
+Scripts refer to actors and room objects through references, which the engine hands out: `self`
+in a handler, or the result of an engine function. A script cannot make a reference up.
+
+| Type | Refers to |
+|---|---|
+| `actor` | an actor |
+| `object` | a room object |
+| `entity` | an actor or a room object |
+
+* `actor` and `object` widen implicitly to `entity`. An `entity` never narrows: it cannot be
+  assigned to an `actor` or `object` variable or passed for such a parameter.
+* An `actor` and an `object` are different types; neither is assignable to the other.
+* References can be stored in variables, passed, returned and compared with `==` and `!=`
+  (§4.3). They have no other operators, no members and no conversions.
+* A reference only names an entity. The entity's state belongs to the engine and is read and
+  changed through engine functions. A reference to an entity that no longer exists does not move
+  to another entity: an engine function given it reports an error.
+
+### 3.4 Enums
+
+```python
+enum Light:
+	RED
+	YELLOW
+	GREEN
+
+func next(light: Light) -> Light:
+	if light == Light.RED:
+		return Light.GREEN
+	return Light.RED
+```
+
+* `enum Name:` declares a scoped enum at the top level, followed by an indented list of member
+  names, one per line. An enum has at least one member; member names are unique within it.
+* Members are always written with the enum's name: `Light.RED`. There are no unqualified
+  members.
+* An enum is a type of its own. Its values compare with `==` and `!=` to values of the same enum
+  only. They have no order, no arithmetic and no conversion to or from `int`.
+* Enums may be used before their declaration. Their names share the top-level namespace with
+  functions, natives and objects.
+* Native interfaces can declare enums too (engine enums, §6.1), for example `Direction` of the
+  adventure API. Scripts use them like their own enums but cannot redeclare them. The engine
+  checks an engine enum's identity (its interface, name and members) when the script is loaded,
+  so its members always mean the same thing.
+
+### 3.5 vec2
+
+`vec2` is a value type of two `float` components:
+
+```python
+var start = vec2(100, 240)        # ints widen to float
+var step = vec2(2.5, 0) * 4
+var target = start + step
+target.y = target.y - 10
+print(target)                     # vec2(110.0, 230.0)
+print(distance(start, target))
+```
+
+* `vec2(x, y)` makes a vector; both arguments are numbers (ints widen).
+* `v.x` and `v.y` read the components (type `float`). `v.x = expression` sets a component of a
+  `vec2` variable.
+* Vectors are values: assigning or passing one copies it, so changing a copy never changes the
+  original.
+* Operators:
+
+  | Expression | Result |
+  |---|---|
+  | `a + b`, `a - b` | componentwise, both `vec2` |
+  | `v * s`, `s * v`, `v / s` | each component times / divided by the number `s` |
+  | `-v` | both components negated |
+  | `a == b`, `a != b` | componentwise float equality |
+
+  `v / 0` is the float division-by-zero error. Other results follow float arithmetic (they may
+  be infinite or NaN). There is no `v * v`, `v // s` or ordering.
+* The core interface provides `length(v)`, `distance(a, b)`, `normalize(v)` and
+  `lerp(a, b, t)` (§6.2).
 
 ## 4. Expressions
 
@@ -154,10 +257,11 @@ From lowest to highest:
 | 5 | `+ -` | left |
 | 6 | `* / // %` | left |
 | 7 | `-` (prefix negation) | — |
-| 8 | call `f(...)`, parentheses | — |
+| 8 | call `f(...)`, member `.name`, parentheses | left |
 
-So `-a * b` is `(-a) * b`, `not a == b` is `not (a == b)`, and `a or b and c` is
-`a or (b and c)`. Only named functions can be called (`f(x)`, not `f(x)(y)`).
+So `-a * b` is `(-a) * b`, `-v.x` is `-(v.x)`, `not a == b` is `not (a == b)`, and
+`a or b and c` is `a or (b and c)`. Only named functions can be called (`f(x)`, not `f(x)(y)`),
+and values have no methods (`v.length()` is an error; write `length(v)`).
 
 ### 4.2 Arithmetic
 
@@ -170,8 +274,11 @@ So `-a * b` is `(-a) * b`, `not a == b` is `not (a == b)`, and `a or b and c` is
 | `//` | numeric, at least one `float` | `float`, floored |
 | `%` | `int, int` | `int`; the result has the sign of the divisor: `a == (a // b) * b + a % b` |
 | `%` | numeric, at least one `float` | `float`, same rule |
-| `-x` | `int` / `float` | same type; `int` negation is checked |
+| `-x` | `int` / `float` / `vec2` | same type; `int` negation is checked |
 | `+` | `string, string` | concatenation |
+| `+ -` | `vec2, vec2` | `vec2` (§3.5) |
+| `*` | `vec2` and a number, either order | `vec2` |
+| `/` | `vec2, number` | `vec2` |
 
 **Integer overflow** — any `int` result outside −2⁶³ … 2⁶³−1 (including `-(-2⁶³)` and
 `-2⁶³ // -1`) — is a **runtime error** ("Integer overflow"). Integers never wrap around.
@@ -184,10 +291,14 @@ Other `float` operations follow IEEE 754 (overflow gives ±infinity; `inf - inf`
 ### 4.3 Comparisons
 
 * `==` and `!=` compare two values of the same type, or an `int` with a `float` (the `int` is
-  widened). `bool`, `string` and `object` compare only with their own type; two `object` values
-  are equal when they are handles of the same engine object. `None` cannot be compared.
+  widened). `bool`, `string`, `vec2` and each enum compare only with their own type. `None`,
+  `coroutine` and `operation` values cannot be compared.
+* References (§3.3) compare with references: two references are equal when they refer to the
+  same entity. An `entity` compares with an `actor`, an `object` or an `entity`. Comparing an
+  `actor` with an `object` is an error, since they can never be the same entity.
 * `< <= > >=` compare numbers (with widening) or two strings. Strings compare byte-wise by their
-  UTF-8 encoding (which equals code point order). Booleans and objects are not ordered.
+  UTF-8 encoding (which equals code point order). Booleans, references, enums and vectors are not
+  ordered.
 * Floats compare by IEEE rules: NaN is unequal to everything, including itself.
 * The result is `bool`.
 
@@ -216,7 +327,8 @@ statement := assignment | call | if | while | for | return | pass
 
 | Statement | Form |
 |---|---|
-| Assignment | `name = expression` or `name: type = expression` |
+| Declaration | `var name = expression` or `var name: type = expression` (§7) |
+| Assignment | `name = expression`; `name.x = expression` or `name.y = …` for a `vec2` variable |
 | Call | `function(arguments)` — the only expression allowed as a statement |
 | Conditional | `if c:` block, any number of `elif c:` blocks, optional `else:` block |
 | Loop | `while c:` block |
@@ -269,48 +381,82 @@ func calculate_damage(amount: int, multiplier: float) -> float:
 
 ### 6.1 Native (engine) functions
 
-Engine functions are declared with `extern func` and implemented in C++ by the game:
+Engine functions are implemented in C++ by the game. A script sees them in two ways.
+
+**Native interfaces.** The engine declares groups of functions, with their enums, as *native
+interfaces*. Their functions and enums can be used without any declaration:
+- the **core interface** is available to every script (§6.2);
+- further interfaces are given to the compiler for the scripts that need them, for example the
+  adventure API for room scripts (`schuimmc --interface adventure`). The build passes them
+  automatically for the scripts of a game.
+
+The compiler and the engine use the same declaration of each interface, so their signatures
+always agree. A script cannot redeclare an interface function or enum, with `func`, `extern func`,
+`object` or `enum`.
+
+**`extern func`.** A script may also declare an engine function that no interface provides:
 
 ```python
 extern func play_sound(name: string, volume: float)
 extern func player_health() -> int
 ```
 
-The declaration gives the signature the compiler checks calls against. When the bytecode is
-loaded, every *called* native is looked up by name in the engine's registry and its signature must
-match exactly; otherwise loading fails ([Runtime.md](Runtime.md#native-functions)).
+The declaration gives the signature the compiler checks calls against.
+
+**Loading.** When the bytecode is loaded, every *called* native is looked up by name in the
+engine's registry, and its signature must match exactly. Every engine enum the script uses must
+exist in the engine with the same members. Otherwise loading fails
+([Runtime.md](Runtime.md#native-functions)).
 
 ### 6.2 Built-in functions
 
-Always available without declaration:
+Always available without declaration. `int`, `float`, `str` and `vec2` are built into the
+language; the others are the core interface:
 
 | Function | Meaning |
 |---|---|
 | `print(value)` | Writes the text of any value (not `None`) to the script output (the engine log and, in the demo, the on-screen console). |
 | `wait(seconds: float)` | Suspends the current coroutine for `seconds` of game time. `wait(0)` resumes at the next update. Negative, NaN, infinite or > 10⁹ s is a runtime error. |
 | `yield()` | Suspends the current coroutine until the next scheduler update (normally the next frame). |
+| `length(v: vec2) -> float` | The length of `v`. |
+| `distance(a: vec2, b: vec2) -> float` | `length(b - a)`. |
+| `normalize(v: vec2) -> vec2` | `v` scaled to length 1; `vec2(0, 0)` if `v` has length 0 or a non-finite length (never NaN). |
+| `lerp(a: vec2, b: vec2, t: float) -> vec2` | `a + (b - a) * t`; `t` is not clamped. |
 | `int(x)`, `float(x)`, `str(x)` | Conversions (§3.2). |
+| `vec2(x, y)` | A vector (§3.5). |
 
 ### 6.3 Text of values
 
-`print` and `str` produce: integers in decimal (`-42`); floats as the shortest decimal that
-reads back to the same value, always with `.` or an exponent (`1.0`, `0.1`, `2.5e-07`, `1e+20`,
-`inf`, `-inf`, `nan`, `-0.0`), independent of the system locale; booleans as `True`/`False`;
-strings unchanged. `print` shows an object handle as `object#` and its engine id (`object#7`);
-`str()` does not accept objects.
+`print` and `str` produce:
+- integers in decimal (`-42`);
+- floats as the shortest decimal that reads back to the same value, always with `.` or an
+  exponent, independent of the system locale. Decimal exponents from −4 to 15 are written
+  positionally, others with an exponent: `1.0`, `10.0`, `0.1`, `2.5e-07`, `1e+20`, `inf`,
+  `-inf`, `nan`, `-0.0`;
+- booleans as `True`/`False`;
+- strings unchanged.
+
+Only `print` accepts these:
+- vectors as `vec2(1.0, 2.5)`;
+- enum values as `Light.RED`;
+- references as `actor#` or `object#` followed by the engine id (`object#7`).
+
+`str()` does not accept them.
 
 ## 7. Variables and scope
 
-* A variable is **declared by its first assignment** (`x = 1`) or by an annotated assignment
-  (`x: int = 1`). It always has a value: there are no uninitialised variables.
+* A variable is **declared with `var`**: `var x = 1` or `var x: float = 1`. It always has a value:
+  there are no uninitialised variables.
+* `x = expression` without `var` assigns an existing variable. Assigning a name that is not
+  declared is an error ("Undefined variable 'x'"), with a hint to declare it with `var`.
 * Scopes are **lexical and block-based**: a variable declared in a block (function body, `if`
   branch, loop body) is visible from its declaration to the end of that block, including nested
   blocks. It is *not* visible after the block.
-* `x = expression` where `x` is already visible **assigns** to that variable; the value must be
-  assignable to its type (`count = "many"` for an `int` variable is an error).
-* **No shadowing**: declaring a name that is already visible (an annotated assignment, a `for`
-  loop variable or a parameter name) is an error. Sibling blocks may reuse a name.
-* Variables cannot use the name of a function, native or reserved name.
+* The value of an assignment must be assignable to the variable's type (`count = "many"` for an
+  `int` variable is an error).
+* **No shadowing**: declaring a name that is already visible (a `var` declaration, a `for` loop
+  variable or a parameter name) is an error. Sibling blocks may reuse a name.
+* Variables cannot use the name of a function, native, enum or reserved name.
 * Each call has its own variables; coroutines never share variables.
 
 ## 8. Objects and handlers
@@ -410,18 +556,18 @@ The engine API is `ScriptHost::dispatch` ([Runtime.md](Runtime.md#object-handler
 * `self` stays valid for the whole run of the handler, also across `wait()` and `yield()`. If the
   engine destroys the object meanwhile, the handle does not move to another object: the next
   native call with it is a runtime error.
-* `object` is also the name of the type in annotations, parameters and native signatures:
-  `func use_with(item: object):`, `extern func get_flag(o: object, name: string) -> bool`.
-* Object values can be stored in variables, passed and returned, and compared with `==`/`!=`.
-  They have no operators otherwise, no conversions, and no members: object state is owned by the
-  engine and accessed through natives that take an `object` (`self.name` property syntax is not
-  part of version 1.1).
+* `object` is the type of room-object references (§3.3) in annotations, parameters and native
+  signatures: `func use_with(item: object):`, `extern func get_flag(o: object, name: string) -> bool`.
+  A handler may pass `self` where an `entity` is expected.
+* Object references follow §3.3: they can be stored, passed, returned and compared, and have no
+  members. Object state is owned by the engine and accessed through engine functions
+  (`self.name` property syntax is not part of version 2.0).
 
 ### 8.5 Scopes
 
 | Scope | Contains |
 |---|---|
-| Script (room) | room-level functions, natives (`extern func`, prelude) and object names |
+| Script (room) | room-level functions, natives (interfaces and `extern func`), enums and object names |
 | Object | the handlers of one object |
 | Function | parameters and variables (§7) |
 | Handler context | the implicit `self` |
@@ -472,18 +618,23 @@ Deliberate, so that scripts stay predictable and fast to check:
 * Only tabs indent, one tab per level.
 * `True/False/None` as in Python, but `None` is only a return type, not a value.
 * Integers are 64-bit and overflow is an error (Python integers are unbounded).
-* Variables are block-scoped and must be declared before use; no shadowing.
+* Variables are declared with `var`, are block-scoped and must be declared before use; no
+  shadowing.
 * `for` only iterates over `range(...)`; no `break`, `continue`, `else` on loops.
 * Comparisons do not chain; `and`/`or` return `bool`, not an operand.
+* Enums are scoped and not integers; `vec2` is a built-in value type.
 * No classes (`object` declarations are named groups of handlers, §8), closures, generators,
   decorators, exceptions, imports, lists, dicts, `**`, augmented assignment (`+=`), conditional
   expressions, f-strings or `global`.
 * Function parameters require types; there are no default or keyword arguments.
 * `wait`/`yield` are functions provided by the engine, not keywords.
 
-## 12. Limitations (version 1.1)
+## 12. Limitations (version 2.0)
 
-* No `break`/`continue`, no `+=`, no compound data types (lists, dictionaries, structures).
+* No `break`/`continue`, no `+=`, no compound data types (lists, dictionaries, structures)
+  besides `vec2`.
+* `spawn`, coroutine handles and engine operations are not available yet (the keyword and the
+  type names are reserved).
 * No modules or imports: one file is one program. No global (script-level) variables or
   constants, including for room scripts.
 * Objects (§8): no `self.property` access (object state goes through natives), no variables in
@@ -495,15 +646,18 @@ Deliberate, so that scripts stay predictable and fast to check:
 ## Appendix: grammar
 
 ```text
-module      := (NEWLINE | function | extern | object)* EOF
+module      := (NEWLINE | function | extern | object | enum)* EOF
 function    := "func" NAME "(" [params] ")" ["->" type] ":" block
 object      := "object" NAME ":" NEWLINE INDENT function+ DEDENT
 extern      := "extern" "func" NAME "(" [params] ")" ["->" type] NEWLINE
+enum        := "enum" NAME ":" NEWLINE INDENT (NAME NEWLINE)+ DEDENT
 params      := param ("," param)* [","]
 param       := NAME ":" type
-type        := "int" | "float" | "bool" | "string" | "object" | "None"
+type        := "int" | "float" | "bool" | "string" | "vec2" | "actor" | "object" | "entity"
+             | "coroutine" | "operation" | "None" | NAME            (NAME: an enum)
 block       := NEWLINE INDENT statement+ DEDENT
-statement   := NAME [":" type] "=" expr NEWLINE
+statement   := "var" NAME [":" type] "=" expr NEWLINE
+             | NAME ["." NAME] "=" expr NEWLINE                    (assignment)
              | expr NEWLINE                                   (a call)
              | "if" expr ":" block ("elif" expr ":" block)* ["else" ":" block]
              | "while" expr ":" block
@@ -517,7 +671,8 @@ not         := "not" not | comparison
 comparison  := sum [("==" | "!=" | "<" | "<=" | ">" | ">=") sum]
 sum         := term (("+" | "-") term)*
 term        := unary (("*" | "/" | "//" | "%") unary)*
-unary       := "-" unary | primary
+unary       := "-" unary | postfix
+postfix     := primary ("." NAME)*
 primary     := INT | FLOAT | STRING | "True" | "False" | "None" | "self"
              | NAME | NAME "(" [expr ("," expr)* [","]] ")" | "(" expr ")"
 ```

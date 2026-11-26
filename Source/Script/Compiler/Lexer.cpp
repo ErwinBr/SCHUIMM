@@ -22,6 +22,7 @@ const std::unordered_map<std::string_view, TokenKind>& keywords()
         {"pass", TokenKind::KwPass},     {"and", TokenKind::KwAnd},       {"or", TokenKind::KwOr},
         {"not", TokenKind::KwNot},       {"True", TokenKind::KwTrue},     {"False", TokenKind::KwFalse},
         {"None", TokenKind::KwNone},     {"object", TokenKind::KwObject}, {"self", TokenKind::KwSelf},
+        {"var", TokenKind::KwVar},       {"enum", TokenKind::KwEnum},     {"spawn", TokenKind::KwSpawn},
     };
     return table;
 }
@@ -277,6 +278,7 @@ private:
             emit(TokenKind::RightParen, start, position_);
             return;
         case ',': emit(TokenKind::Comma, start, position_); return;
+        case '.': emit(TokenKind::Dot, start, position_); return;
         case ':': emit(TokenKind::Colon, start, position_); return;
         case '+': emit(TokenKind::Plus, start, position_); return;
         case '-': two('>', TokenKind::Arrow, TokenKind::Minus); return;

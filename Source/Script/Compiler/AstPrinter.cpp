@@ -9,6 +9,11 @@ namespace schuimm::script {
 
 namespace {
 
+std::string syntaxName(const TypeSyntax& type)
+{
+    return type.type == Type::Named ? type.name : std::string(toString(type.type));
+}
+
 class Printer {
 public:
     explicit Printer(const SemanticModel* semantics)
@@ -30,7 +35,7 @@ public:
         if (semantics_ == nullptr) return {};
         const ExprInfo* info = semantics_->findExpression(expression);
         if (info == nullptr) return {};
-        std::string text = concat(" : ", toString(info->type));
+        std::string text = concat(" : ", semantics_->typeName(info->type));
         if (info->widenToFloat) text += " -> float";
         return text;
     }
@@ -54,6 +59,10 @@ public:
             line(depth, concat("Binary ", toString(e.binaryOp), typeSuffix(e)));
             expression(*e.left, depth + 1);
             expression(*e.right, depth + 1);
+            return;
+        case ExprKind::Member:
+            line(depth, concat("Member .", e.text, typeSuffix(e)));
+            expression(*e.left, depth + 1);
             return;
         case ExprKind::Call:
             line(depth, concat("Call ", e.text, typeSuffix(e)));
@@ -80,8 +89,9 @@ public:
             expression(*s.value, depth + 1);
             return;
         case StmtKind::Assign: {
-            std::string text = concat("Assign ", s.name);
-            if (s.annotation) text += concat(": ", toString(*s.annotation));
+            std::string text = concat(s.declaration ? "Var " : "Assign ", s.name);
+            if (!s.member.empty()) text += "." + s.member;
+            if (s.annotation) text += concat(": ", syntaxName(*s.annotation));
             if (semantics_ != nullptr) text += semantics_->statement(s).declares ? " (declare)" : " (assign)";
             line(depth, text);
             expression(*s.value, depth + 1);
@@ -132,14 +142,21 @@ std::string dumpAst(const SourceUnit& unit, const SemanticModel* semantics)
     const auto printFunction = [&](const FunctionDecl& function, int depth) {
         std::string header = concat(function.isExtern ? "ExternFunc " : "Func ", function.name, "(");
         for (std::size_t i = 0; i < function.parameters.size(); ++i) {
-            header += concat(i == 0 ? "" : ", ", function.parameters[i].name, ": ", toString(function.parameters[i].type));
+            header += concat(i == 0 ? "" : ", ", function.parameters[i].name, ": ", syntaxName(function.parameters[i].type));
         }
-        header += concat(") -> ", toString(function.returnType));
+        header += concat(") -> ", syntaxName(function.returnType));
         printer.line(depth, header);
         if (function.body) {
             printer.block(*function.body, depth + 1);
         }
     };
+    for (const auto& declaration : unit.enums) {
+        std::string text = concat("Enum ", declaration->name, ":");
+        for (const EnumMember& member : declaration->members) {
+            text += " " + member.name;
+        }
+        printer.line(0, text);
+    }
     for (const auto& function : unit.functions) {
         printFunction(*function, 0);
     }
@@ -167,6 +184,7 @@ std::string formatExpression(const Expr& e)
         return concat("(", toString(e.unaryOp), e.unaryOp == UnaryOp::Not ? " " : "", formatExpression(*e.left), ")");
     case ExprKind::Binary:
         return concat("(", formatExpression(*e.left), " ", toString(e.binaryOp), " ", formatExpression(*e.right), ")");
+    case ExprKind::Member: return concat(formatExpression(*e.left), ".", e.text);
     case ExprKind::Call: {
         std::string text = e.text + "(";
         for (std::size_t i = 0; i < e.arguments.size(); ++i) {

@@ -10,6 +10,7 @@
 // API; it does no file I/O (the schuimmc tool reads and writes files).
 
 #include "Script/Bytecode/Module.h"
+#include "Script/Bytecode/NativeInterface.h"
 #include "Script/Compiler/Ast.h"
 #include "Script/Compiler/Diagnostics.h"
 #include "Script/Compiler/Ir.h"
@@ -25,6 +26,10 @@ namespace schuimm::script {
 
 struct CompileOptions {
     bool optimize = true; // false: -O0, the IR is translated as built.
+    // Native interfaces the script may call besides the core interface (which every script
+    // sees), e.g. the adventure API. The compiler needs only their declarations; the engine binds
+    // the implementations (NativeRegistry::bind). The pointers must stay valid during compile().
+    std::vector<const NativeInterface*> interfaces{};
 };
 
 // Everything the pipeline produced, for diagnostics output and debug dumps. Later stages are

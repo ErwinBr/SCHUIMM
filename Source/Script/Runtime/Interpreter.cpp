@@ -67,7 +67,7 @@ struct Interpreter {
             Value* r = co.registers_.data() + frame.base;
             if (trace != nullptr && *trace) {
                 (*trace)(TraceEvent{program, frame.function, pc, in,
-                                    std::span<const Value>(r, function.registerCount), co.frames_.size()});
+                                    std::span<const Value>(r, function.registerCount()), co.frames_.size()});
             }
             ++result.instructions;
             frame.ip = pc + 1;
@@ -184,8 +184,82 @@ struct Interpreter {
             SCHUIMM_COMPARE(LeString, String, asString, compareStrings(x, y) <= 0)
             SCHUIMM_COMPARE(GtString, String, asString, compareStrings(x, y) > 0)
             SCHUIMM_COMPARE(GeString, String, asString, compareStrings(x, y) >= 0)
-            SCHUIMM_COMPARE(EqObject, Object, asObject, x == y)
-            SCHUIMM_COMPARE(NeObject, Object, asObject, x != y)
+            case Opcode::EqRef:
+            case Opcode::NeRef: {
+                if (!r[in.b].matches(ScriptType::Entity) || !r[in.c].matches(ScriptType::Entity)) return typeMismatch();
+                // An actor and an object are never the same entity, even with equal ids.
+                const bool same = r[in.b].type() == r[in.c].type() && r[in.b].asReference() == r[in.c].asReference();
+                r[in.a] = Value::fromBool(in.opcode == Opcode::EqRef ? same : !same);
+                break;
+            }
+            case Opcode::LoadEnum: r[in.a] = Value::fromEnum(in.b, in.c); break;
+            case Opcode::EqEnum:
+            case Opcode::NeEnum: {
+                SCHUIMM_REQUIRE(in.b, Enum);
+                SCHUIMM_REQUIRE(in.c, Enum);
+                const bool same = r[in.b].enumIndex() == r[in.c].enumIndex() && r[in.b].enumOrdinal() == r[in.c].enumOrdinal();
+                r[in.a] = Value::fromBool(in.opcode == Opcode::EqEnum ? same : !same);
+                break;
+            }
+            case Opcode::MakeVec2:
+                SCHUIMM_REQUIRE(in.b, Float);
+                SCHUIMM_REQUIRE(in.c, Float);
+                r[in.a] = Value::fromVec2(r[in.b].asFloat(), r[in.c].asFloat());
+                break;
+            case Opcode::Vec2X:
+                SCHUIMM_REQUIRE(in.b, Vec2);
+                r[in.a] = Value::fromFloat(r[in.b].vec2X());
+                break;
+            case Opcode::Vec2Y:
+                SCHUIMM_REQUIRE(in.b, Vec2);
+                r[in.a] = Value::fromFloat(r[in.b].vec2Y());
+                break;
+            case Opcode::SetVec2X:
+                SCHUIMM_REQUIRE(in.a, Vec2);
+                SCHUIMM_REQUIRE(in.b, Float);
+                r[in.a].setVec2X(r[in.b].asFloat());
+                break;
+            case Opcode::SetVec2Y:
+                SCHUIMM_REQUIRE(in.a, Vec2);
+                SCHUIMM_REQUIRE(in.b, Float);
+                r[in.a].setVec2Y(r[in.b].asFloat());
+                break;
+            case Opcode::AddVec2:
+            case Opcode::SubVec2: {
+                SCHUIMM_REQUIRE(in.b, Vec2);
+                SCHUIMM_REQUIRE(in.c, Vec2);
+                const double sign = in.opcode == Opcode::AddVec2 ? 1.0 : -1.0;
+                r[in.a] = Value::fromVec2(r[in.b].vec2X() + sign * r[in.c].vec2X(), r[in.b].vec2Y() + sign * r[in.c].vec2Y());
+                break;
+            }
+            case Opcode::MulVec2:
+                SCHUIMM_REQUIRE(in.b, Vec2);
+                SCHUIMM_REQUIRE(in.c, Float);
+                r[in.a] = Value::fromVec2(r[in.b].vec2X() * r[in.c].asFloat(), r[in.b].vec2Y() * r[in.c].asFloat());
+                break;
+            case Opcode::DivVec2: {
+                SCHUIMM_REQUIRE(in.b, Vec2);
+                SCHUIMM_REQUIRE(in.c, Float);
+                // Component-wise float division: dividing by zero is the same error as for floats.
+                const FloatResult x = divFloat(r[in.b].vec2X(), r[in.c].asFloat());
+                if (x.error != ArithmeticError::None) return arithmetic(x.error);
+                const FloatResult y = divFloat(r[in.b].vec2Y(), r[in.c].asFloat());
+                if (y.error != ArithmeticError::None) return arithmetic(y.error);
+                r[in.a] = Value::fromVec2(x.value, y.value);
+                break;
+            }
+            case Opcode::NegVec2:
+                SCHUIMM_REQUIRE(in.b, Vec2);
+                r[in.a] = Value::fromVec2(-r[in.b].vec2X(), -r[in.b].vec2Y());
+                break;
+            case Opcode::EqVec2:
+            case Opcode::NeVec2: {
+                SCHUIMM_REQUIRE(in.b, Vec2);
+                SCHUIMM_REQUIRE(in.c, Vec2);
+                const bool same = r[in.b].vec2X() == r[in.c].vec2X() && r[in.b].vec2Y() == r[in.c].vec2Y();
+                r[in.a] = Value::fromBool(in.opcode == Opcode::EqVec2 ? same : !same);
+                break;
+            }
             case Opcode::IntToFloat:
                 SCHUIMM_REQUIRE(in.b, Int);
                 r[in.a] = Value::fromFloat(static_cast<double>(r[in.b].asInt()));
@@ -240,8 +314,8 @@ struct Interpreter {
                 for (std::size_t i = 0; i < callee.parameters.size(); ++i) {
                     if (!r[in.c + i].matches(callee.parameters[i])) return typeMismatch();
                 }
-                const std::size_t newBase = static_cast<std::size_t>(frame.base) + function.registerCount;
-                const std::size_t top = newBase + callee.registerCount;
+                const std::size_t newBase = static_cast<std::size_t>(frame.base) + function.registerCount();
+                const std::size_t top = newBase + callee.registerCount();
                 if (top > co.limits_.maxRegisters) {
                     return fail(ScriptErrorKind::Runtime, "Script stack overflow (register limit exceeded)");
                 }
@@ -265,6 +339,7 @@ struct Interpreter {
                 // Natives are host code: an exception becomes a controlled error of this
                 // coroutine instead of unwinding through the VM and the scheduler.
                 NativeResult outcome;
+                context.module = &module;
                 try {
                     outcome = native.implementation(context, arguments);
                 } catch (const std::exception& exception) {
@@ -275,17 +350,26 @@ struct Interpreter {
                 // Only natives without a result may suspend: the coroutine resumes after the
                 // call, so there would be no value for the destination register.
                 if ((outcome.kind == NativeResult::Kind::Wait || outcome.kind == NativeResult::Kind::Yield) &&
-                    import.returnType != ScriptType::None) {
+                    import.returnType.kind != ScriptType::None) {
                     return fail(ScriptErrorKind::Native,
                                 concat(native.name, "(): a native function with a result cannot suspend (wait/yield)"));
                 }
                 switch (outcome.kind) {
                 case NativeResult::Kind::Return:
-                    if (import.returnType != ScriptType::None) {
+                    if (import.returnType.kind != ScriptType::None) {
+                        // Enum results carry only the ordinal: give them this module's enum index.
+                        if (import.returnType.kind == ScriptType::Enum && outcome.value.is(ScriptType::Enum)) {
+                            const std::uint32_t ordinal = outcome.value.enumOrdinal();
+                            if (ordinal >= module.enums[import.returnType.enumIndex].members.size()) {
+                                return fail(ScriptErrorKind::Native, concat("Native function '", native.name,
+                                                                            "' returned an invalid enum ordinal ", ordinal));
+                            }
+                            outcome.value = Value::fromEnum(import.returnType.enumIndex, ordinal);
+                        }
                         if (!outcome.value.matches(import.returnType)) {
                             return fail(ScriptErrorKind::Native,
                                         concat("Native function '", native.name, "' returned ", toString(outcome.value.type()),
-                                               " instead of ", toString(import.returnType)));
+                                               " instead of ", formatType(module, import.returnType)));
                         }
                         r[in.a] = std::move(outcome.value);
                     }
