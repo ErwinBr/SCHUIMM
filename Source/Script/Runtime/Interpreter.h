@@ -16,6 +16,9 @@ enum class RunOutcome : std::uint8_t {
     Yielded,         // yield(): suspended until the next update.
     Failed,          // Runtime error: RunResult::error.
     BudgetExhausted, // The instruction budget ran out; the coroutine can be resumed as is.
+    Awaiting,        // NativeResult::await on a pending token: RunResult::token.
+    Cancelled,       // The coroutine was cancelled while it ran (self-cancellation, or an
+                     // awaited token that was already cancelled), at a native call boundary.
 };
 
 struct RunResult {
@@ -23,6 +26,8 @@ struct RunResult {
     std::uint64_t instructions = 0; // Instructions executed in this run.
     std::int64_t waitNanoseconds = 0;
     ScriptError error;              // Failed, and the location for BudgetExhausted.
+    CompletionRef token;            // Awaiting.
+    bool abandonCancels = false;    // Awaiting.
 };
 
 // Called before each instruction when tracing is enabled (debugging only).

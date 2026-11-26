@@ -27,7 +27,7 @@ Room resources keep the authored data those systems will use.
 |---|---|---|---|
 | `RoomResource` (`Room/RoomResource.h`) | the authored room as read from `*.room.json`: plain data | no | by every instance of the room |
 | `script::Program` | the room's compiled script (`*.schb`), loaded by the existing `ScriptHost` | no | by every instance (and every room using the same script) |
-| `RoomInstance` (`Room/RoomInstance.h`) | a live room: runtime objects with their handles and state, and the running coroutines it started | yes | no: each instance is independent |
+| `RoomInstance` (`Room/RoomInstance.h`) | a live room: runtime objects with their handles and state, and the execution owner of its coroutines | yes | no: each instance is independent |
 
 A `RoomResource` never changes after loading. Gameplay changes the `RoomInstance`. The future
 save system will store instance state separately. It never rewrites the resource or the JSON.
@@ -288,10 +288,10 @@ Two instances of the same room have different handles for "the same" object, and
   - Its objects point into its resource, which it keeps alive.
   - The `ScriptHost` must outlive every instance.
 - **Coroutines on destruction**
-  - An instance remembers the coroutines it started through `dispatch` and `start`, forgetting ended ones as it goes.
-  - Its destructor cancels the ones still running or waiting, so no handler of a destroyed room resumes later. Other instances' coroutines are unaffected.
+  - Each instance has its own execution owner (`ScriptHost::createOwner`). The coroutines it starts through `dispatch` and `start` belong to it, and so do the coroutines those spawn.
+  - Its destructor cancels them all (`cancelOwner`), so no coroutine of a destroyed room resumes later. Other instances' coroutines are unaffected.
 - **Destroy rooms between frames**
-  - A coroutine cannot be cancelled while it is the one running, so an instance must not be destroyed while the `ScriptHost` updates (from inside a native or a script event callback).
+  - A running coroutine is only stopped when its current native call returns, and that native may still use the room. So an instance must not be destroyed while the `ScriptHost` updates (from inside a native or a script event callback).
   - This is checked in every build (`SCHUIMM_VERIFY`, not only in debug builds): violating it stops the program. The future room-transition code will request an unload and perform it after the update.
 - **Not covered yet**
   - Coroutines started by other code that hold one of the room's handles are not cancelled; their handles are simply stale.
@@ -316,7 +316,7 @@ Two instances of the same room have different handles for "the same" object, and
 - **Instances:**
   - independent handles and state;
   - `self` in dispatched handlers;
-  - cancellation of a destroyed instance's coroutines.
+  - cancellation of a destroyed instance's coroutines, including those its handlers spawned.
 - **Examples:** the example files in `Documentation/Rooms/Examples`.
 
 The test scripts are compiled in-process into a scratch asset root, the only place the compiler is involved.

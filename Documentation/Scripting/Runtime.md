@@ -144,8 +144,11 @@ Enum values cross the boundary as ordinals:
   fails the call ("invalid enum ordinal") if the ordinal is out of range.
 
 **The core interface** (`coreInterface()`, bound by `registerStandardNatives`) is what every
-script sees: `print(any)`, `wait(float)`, `yield()`, and the vector functions `length`,
-`distance`, `normalize` and `lerp` ([Language.md §6.2](Language.md#62-built-in-functions)).
+script sees: `print(any)`, `wait(float)`, `yield()`, `cancel(coroutine)`, the vector functions
+`length`, `distance`, `normalize` and `lerp` ([Language.md §6.2](Language.md#62-built-in-functions)),
+and the hidden `await_operation(operation)`. Hidden declarations cannot be called by name; the
+compiler turns `wait(op)` with an `operation` argument into a call of it. That is the only
+overload in the language.
 
 ### Single natives
 
@@ -173,9 +176,18 @@ extern func play_sound(name: string, volume: float)   # in the script
   parameter accepts either; `value.type()` tells which. This is how scripts reach entity state:
   the engine resolves the handle to its own entity. A native cannot return `entity` or `any`.
 * An implementation returns `NativeResult::returnValue(v)`, `waitFor(nanoseconds)`,
-  `yieldNow()` or `error(message)`. `waitFor` and `yieldNow` suspend the coroutine — this is how
-  `wait`/`yield` are implemented, and how future natives such as `wait_until`, `say` or
-  `move_character` can suspend until something happens.
+  `yieldNow()`, `await(token, abandonCancels)` or `error(message)`. `waitFor`, `yieldNow` and
+  `await` suspend the coroutine. This is how `wait` and `yield` are implemented, and how natives
+  wait for gameplay operations ([Completion tokens](#completion-tokens)). A suspended call
+  resumes at the next instruction; the native is never called again for it.
+* `NativeContext::scheduler` is the scheduler running the coroutine (null when a test runs the
+  VM directly). The core `cancel()` uses it.
+* Every native declares an **execution category** (`NativeCategory`), part of its contract;
+  scripts call all three alike:
+  - `Immediate`: performs an action and returns (`set_position`);
+  - `Suspending`: suspends the caller until the action it started completes (`walk_to`, `wait`);
+  - `Background`: starts an operation and returns at once, possibly with an `operation`
+    reference (`play_animation`).
 * **Only natives returning None may suspend.** The coroutine resumes *after* the call, so a
   native with a result would leave its destination register without a value; `waitFor` or
   `yieldNow` from such a native is a `Native` runtime error ("a native function with a result
@@ -283,8 +295,11 @@ natives over object state) and `self.property` syntax are later milestones.
   yield()  │   │ deadline reached   │    ├──► error / budget ─► Failed
   wait(0)  └───┤                    │    │
                └──── Waiting ◄──────┘    └──► (cancel) ─────► Cancelled
-                       wait(d)
+                 wait(d), await(token)
 ```
+
+A coroutine waiting for a completion token stays Waiting until the token is resolved: completed
+makes it Ready, cancelled makes it Cancelled.
 
 `Running` is only observable from inside natives. `Finished`, `Failed` and `Cancelled` are
 terminal; the coroutine's frames and values are released at once, but its state, error and
@@ -306,6 +321,72 @@ so a stale handle never refers to a new coroutine.
 3. Never blocks: waiting coroutines cost nothing (they are not polled).
 
 Completion, failure, cancellation and budget warnings are reported to an event callback.
+
+### Spawn
+
+The `Spawn` instruction calls `ScriptScheduler::spawn(parent, program, function, arguments)`:
+- it adds a Ready coroutine for the function with the arguments the caller evaluated;
+- the new coroutine inherits the parent's execution owner;
+- like every coroutine added during an update, it first runs in the next update, after the
+  existing coroutines, in spawn order;
+- the caller continues immediately, with the new handle in its destination register.
+
+There is one VM path: spawning an engine function runs a compiler-generated wrapper,
+`spawn:walk_to`, which calls the native ([Compiler.md](Compiler.md#semantic-analysis)).
+`Program::findFunction` does not find these wrappers by name.
+
+### Cancellation
+
+`cancel(handle)` (and `cancelOwner`, `clear`, and the script's `cancel()`):
+- A coroutine that is not running ends as Cancelled at once. Its frames and values are released,
+  and its subscription to a completion token is removed. If it waited with
+  `abandonCancels`, the token's abandon handler runs afterwards.
+- The **running** coroutine is never torn down under the VM. Cancelling it sets a request,
+  which the VM checks after every native call. The coroutine then ends as Cancelled at that call
+  boundary, and none of its later instructions run. This is how a coroutine is stopped by a
+  native it called itself.
+- A stale or ended handle is ignored (`false`); handles are generation-checked.
+- Cancelling a coroutine does not cancel the coroutines it spawned.
+
+### Execution owners
+
+An `ExecutionOwner` is an opaque id (`ScriptScheduler::createOwner`):
+- `start` and `dispatch` take an owner, and spawned coroutines inherit it;
+- `cancelOwner(owner)` cancels every coroutine of the owner that has not ended, including the
+  running one, as a request;
+- `activeCount(owner)` counts them.
+
+A `RoomInstance` owns the coroutines it starts and cancels its owner when it is destroyed
+([Rooms.md](../Architecture/Rooms.md)).
+
+### Completion tokens
+
+A `CompletionToken` (`Runtime/Completion.h`) represents **one** accepted engine operation, such
+as a walk request or an animation playback. It is never "whatever the actor is doing now".
+- **Resolution.** The engine resolves it once: `complete()` or `cancel(reason)`, with reasons
+  such as "stopped", "replaced" or "destroyed". Later calls do nothing.
+- **Lifetime.** It is reference-counted (non-atomic; game thread only). It is held by the engine,
+  by `operation` values in scripts and by waiting coroutines, and freed with its last reference.
+  There is no history and no registry.
+- **Retained outcome.** A waiter whose operation completed sees that completion even if the
+  entity started another operation before the waiter resumed.
+- **Waiting.** A native suspends its caller with `NativeResult::await(token, abandonCancels)`
+  ([Native functions](#native-functions)). The scheduler subscribes the coroutine to the token.
+  Resolving the token notifies each subscribed coroutine exactly once:
+  - completed makes it Ready, and it runs from the scheduler loop. Resolving never runs script
+    code, so a native or engine system may resolve tokens at any time without recursion;
+  - cancelled cancels it.
+- **Before the wait.** A token resolved before the wait is not lost: completed returns at once,
+  cancelled cancels the caller.
+- **Not awaitable.** `setNotAwaitable(message)` marks an operation that never ends by itself;
+  waiting for it is a Native error with that message.
+- **Abandoning.** `setAbandonHandler` lets the engine stop an operation whose waiter gave up
+  (`walk_to` stops the walk when its coroutine is cancelled).
+- **Outliving the scheduler.** A token may outlive the scheduler; the scheduler unsubscribes its
+  waiters when it is destroyed.
+
+The VM knows nothing about what a token stands for: movement and animation reach scripts only
+through natives that create and resolve tokens.
 
 **Exceptions.** Native exceptions never leave the VM (see above). The event and trace callbacks
 are host code: an exception from them propagates out of `update()`, but a guard restores the

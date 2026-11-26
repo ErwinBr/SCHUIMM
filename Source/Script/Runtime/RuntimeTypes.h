@@ -18,13 +18,19 @@ struct CoroutineHandle {
     friend bool operator==(const CoroutineHandle&, const CoroutineHandle&) = default;
 };
 
+// Who a coroutine belongs to, e.g. a room instance: cancelling an owner cancels every coroutine
+// it owns (ScriptScheduler::cancelOwner). Coroutines started by spawn inherit the owner of the
+// coroutine that spawned them. Opaque to the scheduler; noExecutionOwner (0) is "no owner".
+using ExecutionOwner = std::uint64_t;
+inline constexpr ExecutionOwner noExecutionOwner = 0;
+
 enum class CoroutineState : std::uint8_t {
     Ready,     // Runs at the next scheduler update.
     Running,   // Executing right now (only observable from natives).
-    Waiting,   // Suspended by wait() until its deadline.
+    Waiting,   // Suspended by wait() until its deadline, or by an await until its token resolves.
     Finished,  // The entry function returned.
     Failed,    // A runtime error or the instruction budget ended it; see the error.
-    Cancelled, // Stopped by ScriptScheduler::cancel().
+    Cancelled, // Stopped by cancel(), cancelOwner(), or a cancelled operation it waited for.
 };
 
 [[nodiscard]] const char* toString(CoroutineState state) noexcept;

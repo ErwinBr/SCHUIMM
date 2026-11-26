@@ -50,6 +50,12 @@ public:
                                                                           ObjectRef self, std::vector<Value> arguments,
                                                                           CoroutineLimits limits = {});
 
+    // Prepares a call of function `index` of the program (a room-level function, never a
+    // handler): the target of the Spawn instruction.
+    [[nodiscard]] static Result<std::unique_ptr<Coroutine>> createCall(std::shared_ptr<const Program> program,
+                                                                       std::uint32_t index, std::vector<Value> arguments,
+                                                                       CoroutineLimits limits = {});
+
     [[nodiscard]] const Program& program() const noexcept { return *program_; }
     [[nodiscard]] const std::shared_ptr<const Program>& sharedProgram() const noexcept { return program_; }
     // The entry function's name; "object.event" for handlers.

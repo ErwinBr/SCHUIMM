@@ -48,15 +48,21 @@ public:
     [[nodiscard]] Result<std::shared_ptr<const Program>> load(std::span<const std::byte> bytecode, std::string name);
 
     [[nodiscard]] Result<CoroutineHandle> start(std::shared_ptr<const Program> program, std::string_view function = "main",
-                                                std::vector<Value> arguments = {});
+                                                std::vector<Value> arguments = {},
+                                                ExecutionOwner owner = noExecutionOwner);
     // Invokes an object handler (see ScriptScheduler::dispatch). This is the integration point
     // for the adventure runtime: `object` is the object's identifier in the room resource,
     // `event` an arbitrary event name, `self` the engine's handle of that object. A missing
     // handler is {handled = false} and is not logged as an error.
     [[nodiscard]] Result<DispatchResult> dispatch(std::shared_ptr<const Program> program, std::string_view object,
                                                   std::string_view event, ObjectRef self,
-                                                  std::vector<Value> arguments = {});
+                                                  std::vector<Value> arguments = {},
+                                                  ExecutionOwner owner = noExecutionOwner);
     bool cancel(CoroutineHandle handle) { return scheduler_.cancel(handle); }
+    // Execution owners (ScriptScheduler::createOwner / cancelOwner): e.g. a room instance owns
+    // the coroutines it starts and those they spawn, and cancels them when it is destroyed.
+    [[nodiscard]] ExecutionOwner createOwner() noexcept { return scheduler_.createOwner(); }
+    std::size_t cancelOwner(ExecutionOwner owner) { return scheduler_.cancelOwner(owner); }
     [[nodiscard]] std::optional<CoroutineState> state(CoroutineHandle handle) const { return scheduler_.state(handle); }
 
     // One scheduler step; never blocks.
@@ -71,6 +77,7 @@ public:
 
     [[nodiscard]] ScriptScheduler& scheduler() noexcept { return scheduler_; }
     [[nodiscard]] std::size_t activeCount() const noexcept { return scheduler_.activeCount(); }
+    [[nodiscard]] std::size_t activeCount(ExecutionOwner owner) const noexcept { return scheduler_.activeCount(owner); }
     [[nodiscard]] bool isUpdating() const noexcept { return scheduler_.isUpdating(); }
 
     struct Statistics {

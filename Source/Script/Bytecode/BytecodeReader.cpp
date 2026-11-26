@@ -621,6 +621,7 @@ struct Validator {
         case Opcode::NeVec2: return all(Bool, Vec2, Vec2);
         case Opcode::Call:
         case Opcode::CallNative:
+        case Opcode::Spawn:
         case Opcode::Return: return {}; // Checked with the signature (checkInstruction).
         }
         return bad("unknown opcode");
@@ -643,10 +644,12 @@ struct Validator {
 
         switch (instruction.opcode) {
         case Opcode::Call:
-        case Opcode::CallNative: {
+        case Opcode::CallNative:
+        case Opcode::Spawn: {
             const bool native = instruction.opcode == Opcode::CallNative;
+            const bool spawn = instruction.opcode == Opcode::Spawn;
             if (!native && owner[instruction.b] != noOwner) {
-                return bad(concat("calls handler '", functionName(instruction.b),
+                return bad(concat(spawn ? "spawns handler '" : "calls handler '", functionName(instruction.b),
                                   "'; handlers are only started by event dispatch"));
             }
             const std::vector<TypeRef>& parameters =
@@ -661,7 +664,15 @@ struct Validator {
             if (parameters.empty() && instruction.c != 0) {
                 return bad("argument window of a call without arguments must be 0");
             }
-            if (auto s = checkResult(function, instruction.a, returnType); !s) return s;
+            if (spawn) {
+                // The result of a spawn is the coroutine handle, not the function's result.
+                if (instruction.a != noRegister && function.registerTypes[instruction.a].kind != ScriptType::Coroutine) {
+                    return bad(concat("spawn stores its coroutine in register ", instruction.a, " of type ",
+                                      typeName(function.registerTypes[instruction.a])));
+                }
+            } else if (auto s = checkResult(function, instruction.a, returnType); !s) {
+                return s;
+            }
             for (std::size_t i = 0; i < parameters.size(); ++i) {
                 const TypeRef argument = function.registerTypes[instruction.c + i];
                 if (!isAssignableType(argument, parameters[i])) {

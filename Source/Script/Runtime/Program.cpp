@@ -96,7 +96,9 @@ Result<std::shared_ptr<const Program>> Program::link(Module module, const Native
 std::optional<std::uint32_t> Program::findFunction(std::string_view name) const
 {
     for (std::size_t i = 0; i < module_.functions.size(); ++i) {
-        if (owner_[i] == noOwner && module_.string(module_.functions[i].nameIndex) == name) {
+        // Compiler-generated functions ("spawn:walk_to") are internal: their names contain ':'.
+        const std::string& candidate = module_.string(module_.functions[i].nameIndex);
+        if (owner_[i] == noOwner && candidate == name && candidate.find(':') == std::string::npos) {
             return static_cast<std::uint32_t>(i);
         }
     }

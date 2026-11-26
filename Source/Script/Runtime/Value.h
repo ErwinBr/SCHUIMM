@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Script/Bytecode/ScriptType.h"
+#include "Script/Runtime/RuntimeTypes.h"
 
 #include <cstdint>
 #include <string>
@@ -9,6 +10,8 @@
 namespace schuimm::script {
 
 struct Module;
+class CompletionRef;
+class CompletionToken;
 
 // Immutable runtime string with an intrusive, non-atomic reference count. Strings are created
 // by the VM (concatenation, str()) and by Program for constants; a string is freed when its last
@@ -54,11 +57,14 @@ struct ObjectRef {
     friend bool operator==(const ObjectRef&, const ObjectRef&) = default;
 };
 
-// A register value: a 24-byte tagged union. Copying a string Value adds a reference.
+// A register value: a 24-byte tagged union. Copying a string or operation Value adds a reference.
 //
 //   vec2         two doubles (the script float), a value: copies are independent;
 //   enum         the enum's index in the module's enum table, and the ordinal of the member;
-//   actor/object an ObjectRef (id 0 is the null reference of that type).
+//   actor/object an ObjectRef (id 0 is the null reference of that type);
+//   coroutine    a CoroutineHandle (generation-checked; the invalid handle is the null
+//                coroutine). It never keeps a coroutine's stack alive;
+//   operation    a reference to a CompletionToken (Completion.h), or null.
 class Value {
 public:
     Value() noexcept = default;
@@ -77,6 +83,8 @@ public:
     [[nodiscard]] static Value fromActor(ObjectRef actor) noexcept;
     [[nodiscard]] static Value fromVec2(double x, double y) noexcept;
     [[nodiscard]] static Value fromEnum(std::uint16_t enumIndex, std::uint32_t ordinal) noexcept;
+    [[nodiscard]] static Value fromCoroutine(CoroutineHandle handle) noexcept;
+    [[nodiscard]] static Value fromOperation(const CompletionRef& operation) noexcept;
     // Takes over one reference of `string`.
     [[nodiscard]] static Value adoptString(StringObject* string) noexcept;
 
@@ -93,6 +101,9 @@ public:
     [[nodiscard]] double vec2Y() const noexcept { return vec2_.y; }
     [[nodiscard]] std::uint16_t enumIndex() const noexcept { return enum_.index; }
     [[nodiscard]] std::uint32_t enumOrdinal() const noexcept { return enum_.ordinal; }
+    [[nodiscard]] CoroutineHandle asCoroutine() const noexcept { return coroutine_; }
+    // The token of an operation value (null for the null operation); the Value keeps it alive.
+    [[nodiscard]] CompletionToken* asOperation() const noexcept { return operation_; }
     void setVec2X(double x) noexcept { vec2_.x = x; }
     void setVec2Y(double y) noexcept { vec2_.y = y; }
     [[nodiscard]] const StringObject* stringObject() const noexcept { return type_ == ScriptType::String ? string_ : nullptr; }
@@ -113,6 +124,7 @@ public:
 
 private:
     void copyPayload(const Value& other) noexcept;
+    void retainPayload() const noexcept;
 
     struct Vec2Payload {
         double x;
@@ -132,6 +144,8 @@ private:
         StringObject* string_;
         std::uint64_t object_;
         EnumPayload enum_;
+        CoroutineHandle coroutine_;
+        CompletionToken* operation_;
     };
 };
 

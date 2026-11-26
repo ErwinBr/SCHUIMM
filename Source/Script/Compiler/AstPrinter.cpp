@@ -60,6 +60,10 @@ public:
             expression(*e.left, depth + 1);
             expression(*e.right, depth + 1);
             return;
+        case ExprKind::Spawn:
+            line(depth, concat("Spawn", typeSuffix(e)));
+            expression(*e.left, depth + 1);
+            return;
         case ExprKind::Member:
             line(depth, concat("Member .", e.text, typeSuffix(e)));
             expression(*e.left, depth + 1);
@@ -185,6 +189,7 @@ std::string formatExpression(const Expr& e)
     case ExprKind::Binary:
         return concat("(", formatExpression(*e.left), " ", toString(e.binaryOp), " ", formatExpression(*e.right), ")");
     case ExprKind::Member: return concat(formatExpression(*e.left), ".", e.text);
+    case ExprKind::Spawn: return "spawn " + formatExpression(*e.left);
     case ExprKind::Call: {
         std::string text = e.text + "(";
         for (std::size_t i = 0; i < e.arguments.size(); ++i) {

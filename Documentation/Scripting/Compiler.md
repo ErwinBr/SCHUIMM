@@ -72,6 +72,12 @@ A separate pass over the AST, never mixed into parsing:
    - `var` declarations and assignments, and whether values are assignable;
    - lookups; operator typing, including vectors, enums and references;
    - `Enum.MEMBER` and `vector.x`;
+   - `spawn f(args)`: the call is checked as usual and the expression has type `coroutine`. A
+     spawned native gets a compiler-generated wrapper function, `spawn:<name>`, which calls it
+     and returns its result (`SemanticModel::spawnWrappers`). The wrappers come after all other
+     functions; `:` keeps their names apart from every identifier;
+   - `wait(x)` with an `operation` argument resolves to the hidden core native
+     `await_operation`;
    - call arity and argument types; `bool` conditions;
    - return types, and "every path returns" (a function with a result whose body can fall off
      the end).

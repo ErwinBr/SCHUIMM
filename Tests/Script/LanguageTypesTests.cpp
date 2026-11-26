@@ -71,9 +71,9 @@ const NativeInterface& testInterface()
         result.name = "test";
         result.enums.push_back({"Mood", {"CALM", "HAPPY", "ANGRY"}});
         result.functions.push_back({"mood_of", {ScriptType::Int}, NativeType(ScriptType::Enum, "Mood"), NativeCategory::Immediate,
-                                    false, "The mood of a character."});
+                                    false, "The mood of a character.", false});
         result.functions.push_back({"describe_mood", {NativeType(ScriptType::Enum, "Mood")}, ScriptType::String,
-                                    NativeCategory::Immediate, false, "A word for a mood."});
+                                    NativeCategory::Immediate, false, "A word for a mood.", false});
         return result;
     }();
     return interface;

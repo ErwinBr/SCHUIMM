@@ -27,6 +27,7 @@ enum class ExprKind : std::uint8_t {
     Binary,
     Call,
     Member, // left.text: an enum member ("Direction.NORTH") or a vec2 component ("v.x").
+    Spawn,  // "spawn f(args)": left is the Call.
 };
 
 enum class UnaryOp : std::uint8_t { Negate, Not };

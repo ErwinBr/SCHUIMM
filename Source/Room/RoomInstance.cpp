@@ -14,12 +14,6 @@ namespace schuimm::room {
 
 namespace {
 
-bool isAlive(const script::ScriptHost& host, script::CoroutineHandle handle)
-{
-    const auto state = host.state(handle);
-    return state && !script::isTerminal(*state);
-}
-
 } // namespace
 
 Result<std::unique_ptr<RoomInstance>> RoomInstance::create(LoadedRoom room, script::ScriptHost& host)
@@ -50,6 +44,7 @@ Result<std::unique_ptr<RoomInstance>> RoomInstance::create(LoadedRoom room, scri
 RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<std::unique_ptr<ActorInstance>> actors)
     : room_(std::move(room))
     , host_(host)
+    , owner_(host.createOwner())
     , actors_(std::move(actors))
 {
     objects_.reserve(room_.resource->objects.size());
@@ -60,12 +55,11 @@ RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vecto
 
 RoomInstance::~RoomInstance()
 {
-    // Checked in every build: the running coroutine cannot be cancelled, so it would go on running
-    // for a room that no longer exists.
+    // Checked in every build: a native of this room's script may be running, and it would go on
+    // using a room that no longer exists.
     SCHUIMM_VERIFY(!host_.isUpdating(), "a RoomInstance must not be destroyed while the ScriptHost updates");
-    for (const script::CoroutineHandle handle : coroutines_) {
-        if (isAlive(host_, handle)) host_.cancel(handle);
-    }
+    // Everything the room started, and everything those coroutines spawned.
+    host_.cancelOwner(owner_);
 }
 
 RoomObject* RoomInstance::object(std::string_view id) noexcept
@@ -238,9 +232,7 @@ Result<script::DispatchResult> RoomInstance::dispatch(std::string_view objectId,
         return makeError(ErrorCode::NotFound, concat("room '", resource().id, "' has no object '", objectId, "'"));
     }
     if (!room_.script) return script::DispatchResult{};
-    auto result = host_.dispatch(room_.script, objectId, event, target->handle(), std::move(arguments));
-    if (result && result->handled) track(result->handle);
-    return result;
+    return host_.dispatch(room_.script, objectId, event, target->handle(), std::move(arguments), owner_);
 }
 
 Result<script::CoroutineHandle> RoomInstance::start(std::string_view function, std::vector<script::Value> arguments)
@@ -248,26 +240,9 @@ Result<script::CoroutineHandle> RoomInstance::start(std::string_view function, s
     if (!room_.script) {
         return makeError(ErrorCode::NotFound, concat("room '", resource().id, "' has no script (cannot start '", function, "')"));
     }
-    auto handle = host_.start(room_.script, function, std::move(arguments));
-    if (handle) track(*handle);
-    return handle;
+    return host_.start(room_.script, function, std::move(arguments), owner_);
 }
 
-std::size_t RoomInstance::activeCoroutineCount() const
-{
-    return static_cast<std::size_t>(std::count_if(coroutines_.begin(), coroutines_.end(),
-                                                  [this](script::CoroutineHandle h) { return isAlive(host_, h); }));
-}
-
-void RoomInstance::track(script::CoroutineHandle handle)
-{
-    prune();
-    coroutines_.push_back(handle);
-}
-
-void RoomInstance::prune()
-{
-    std::erase_if(coroutines_, [this](script::CoroutineHandle h) { return !isAlive(host_, h); });
-}
+std::size_t RoomInstance::activeCoroutineCount() const { return host_.activeCount(owner_); }
 
 } // namespace schuimm::room

@@ -8,8 +8,9 @@
 // runtime or the adventure layer.
 //
 // Interfaces:
-//   * the core interface (coreInterface()): print, wait, yield and the vec2 maths functions,
-//     available to every script;
+//   * the core interface (coreInterface()): print, wait, yield, cancel and the vec2 maths
+//     functions, available to every script, and the hidden await_operation behind
+//     wait(operation);
 //   * further interfaces supplied by the engine, e.g. the adventure API (Source/Adventure). The
 //     compiler receives them through CompileOptions; the runtime binds them through
 //     NativeRegistry::bind.
@@ -63,6 +64,9 @@ struct NativeDeclaration {
     NativeCategory category = NativeCategory::Immediate;
     bool pure = false; // No side effects: the optimizer may remove unused calls.
     std::string documentation;
+    // Not callable by name: the compiler reaches it only through a language construct (the
+    // core interface's await_operation implements wait(operation)). Its name is still reserved.
+    bool hidden = false;
 };
 
 struct EnumDeclaration {

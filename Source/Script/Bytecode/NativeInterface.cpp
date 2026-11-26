@@ -118,14 +118,20 @@ const NativeInterface& coreInterface()
         interface.name = "core";
         using enum ScriptType;
         const auto add = [&](std::string name, std::vector<NativeType> parameters, NativeType result,
-                             NativeCategory category, bool pure, std::string documentation) {
-            interface.functions.push_back(
-                {std::move(name), std::move(parameters), std::move(result), category, pure, std::move(documentation)});
+                             NativeCategory category, bool pure, std::string documentation, bool hidden = false) {
+            interface.functions.push_back({std::move(name), std::move(parameters), std::move(result), category, pure,
+                                           std::move(documentation), hidden});
         };
         add("print", {Any}, None, NativeCategory::Immediate, false, "Writes a value as text to the script output.");
         add("wait", {Float}, None, NativeCategory::Suspending, false,
             "Suspends the coroutine for the given number of seconds of game time.");
         add("yield", {}, None, NativeCategory::Suspending, false, "Suspends the coroutine until the next scheduler update.");
+        add("await_operation", {Operation}, None, NativeCategory::Suspending, false,
+            "wait(operation): suspends the coroutine until the operation completes; cancels it if the operation is "
+            "cancelled.",
+            true);
+        add("cancel", {Coroutine}, None, NativeCategory::Immediate, false,
+            "Stops a coroutine. Harmless for a coroutine that has ended. A coroutine that cancels itself stops at once.");
         add("length", {Vec2}, Float, NativeCategory::Immediate, true, "The length of a vector.");
         add("distance", {Vec2, Vec2}, Float, NativeCategory::Immediate, true, "The distance between two points.");
         add("normalize", {Vec2}, Vec2, NativeCategory::Immediate, true,

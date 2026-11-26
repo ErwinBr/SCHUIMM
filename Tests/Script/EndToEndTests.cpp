@@ -89,6 +89,7 @@ SCHUIMM_TEST(EndToEnd_ExamplesAndDemoScriptsBehaveIdenticallyOptimizedAndUnoptim
         {std::string(SCHUIMM_SCRIPT_EXAMPLES_DIR) + "/functions.sch", {"main"}},
         {std::string(SCHUIMM_SCRIPT_EXAMPLES_DIR) + "/coroutines.sch", {"narrator", "clock", "main"}},
         {std::string(SCHUIMM_SCRIPT_EXAMPLES_DIR) + "/natives.sch", {"main"}},
+        {std::string(SCHUIMM_SCRIPT_EXAMPLES_DIR) + "/spawn.sch", {"main"}},
         {std::string(SCHUIMM_DEMO_SCRIPTS_DIR) + "/demo.sch", {"main", "ticker"}},
     };
     for (const auto& [path, entries] : scripts) {
@@ -145,6 +146,14 @@ SCHUIMM_TEST(EndToEnd_ExampleOutputs)
     REQUIRE(types.errors.empty());
     CHECK(output == std::vector<std::string>({"Welcome, Alex", "We have the key!", "Distance: 42.0", "Whole steps: 2",
                                               "Half: 6.0, floor: 2, rest: 2"}));
+    output.clear();
+    config.dt = 0.5;
+    const ScriptRun spawned = runScript(readText(std::string(SCHUIMM_SCRIPT_EXAMPLES_DIR) + "/spawn.sch"), config, &natives);
+    REQUIRE(spawned.errors.empty());
+    CHECK_EQ(spawned.stillActive, std::size_t{0});
+    // The ticker is cancelled before its third tick; the lamp outlives main.
+    CHECK(output == std::vector<std::string>({"main: both started", "lamp blinks", "tick 1", "tick 2", "main: ticker cancelled",
+                                              "main: done", "lamp blinks"}));
 }
 
 SCHUIMM_TEST(EndToEnd_ProgramsAgreeWithAndWithoutOptimization)

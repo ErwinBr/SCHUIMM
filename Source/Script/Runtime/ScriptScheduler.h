@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/Common/Error.h"
+#include "Script/Runtime/Completion.h"
 #include "Script/Runtime/Coroutine.h"
 #include "Script/Runtime/Interpreter.h"
 #include "Script/Runtime/RuntimeTypes.h"
@@ -67,6 +68,15 @@ struct DispatchResult {
 //     the coroutine that was running is marked Failed and update() may be called again.
 //   * Finished, failed and cancelled coroutines release their frames immediately but keep their
 //     state and error until release()/releaseFinished(), so callers can inspect the outcome.
+//   * spawn (the Spawn instruction) adds a Ready coroutine that inherits the spawning
+//     coroutine's execution owner. It first runs in the next update, like start(). Spawned
+//     coroutines are independent: they outlive the coroutine that spawned them and are not
+//     cancelled with it.
+//   * Awaiting a completion token (NativeResult::await) puts the coroutine in Waiting until the
+//     token is resolved: completed makes it Ready, cancelled cancels it. Nothing polls.
+//   * Cancellation never destroys a running coroutine's stack: cancelling the running coroutine
+//     (from a native, e.g. the script's cancel()) is a request that takes effect when the
+//     current native call returns. No further script code of it runs.
 class ScriptScheduler {
 public:
     using EventCallback = std::function<void(const CoroutineEvent&)>;
@@ -77,9 +87,10 @@ public:
     ScriptScheduler(const ScriptScheduler&) = delete;
     ScriptScheduler& operator=(const ScriptScheduler&) = delete;
 
-    // Creates a Ready coroutine running `function(arguments...)` of `program`.
+    // Creates a Ready coroutine running `function(arguments...)` of `program`, owned by `owner`.
     [[nodiscard]] Result<CoroutineHandle> start(std::shared_ptr<const Program> program, std::string_view function,
-                                                std::vector<Value> arguments = {});
+                                                std::vector<Value> arguments = {},
+                                                ExecutionOwner owner = noExecutionOwner);
 
     // Invokes the handler `event` of the object declaration `object` ("object blender:" ...
     // "func look_at():") as a new coroutine, with `self` as the handler's object context and
@@ -90,11 +101,26 @@ public:
     //   * otherwise {handled = true, handle}.
     [[nodiscard]] Result<DispatchResult> dispatch(std::shared_ptr<const Program> program, std::string_view object,
                                                   std::string_view event, ObjectRef self,
-                                                  std::vector<Value> arguments = {});
+                                                  std::vector<Value> arguments = {},
+                                                  ExecutionOwner owner = noExecutionOwner);
 
-    // Stops a coroutine that has not ended and releases its frames. Returns false if the handle
-    // is unknown or the coroutine has already ended. Not allowed on the running coroutine.
+    // The Spawn instruction: a Ready coroutine running function `index` of `program`, owned by
+    // the owner of `parent` (the spawning coroutine).
+    [[nodiscard]] Result<CoroutineHandle> spawn(CoroutineHandle parent, std::shared_ptr<const Program> program,
+                                                std::uint32_t index, std::vector<Value> arguments);
+
+    // Stops a coroutine that has not ended and releases its frames; a waiting coroutine gives up
+    // its operation (see NativeResult::await). On the running coroutine it is a request that
+    // takes effect when the current native call returns. Returns false if the handle is unknown
+    // or stale or the coroutine has already ended (cancelling it again is harmless).
     bool cancel(CoroutineHandle handle);
+    // Cancels every coroutine of `owner` that has not ended; returns how many.
+    std::size_t cancelOwner(ExecutionOwner owner);
+    // A new owner id, never returned before by this scheduler.
+    [[nodiscard]] ExecutionOwner createOwner() noexcept { return ++lastOwner_; }
+    [[nodiscard]] std::optional<ExecutionOwner> owner(CoroutineHandle handle) const;
+    // Whether cancel() was called for the running coroutine (checked by the VM after natives).
+    [[nodiscard]] bool isCancelRequested(CoroutineHandle handle) const;
 
     void update(double deltaSeconds);
 
@@ -109,6 +135,7 @@ public:
     void clear();
 
     [[nodiscard]] std::size_t activeCount() const noexcept; // Not yet ended.
+    [[nodiscard]] std::size_t activeCount(ExecutionOwner owner) const noexcept; // Of one owner.
     [[nodiscard]] std::size_t size() const noexcept;        // Including ended, unreleased ones.
     // True while update() runs (i.e. inside a native or a callback called from it).
     [[nodiscard]] bool isUpdating() const noexcept { return updating_; }
@@ -121,6 +148,8 @@ public:
     void setTraceCallback(TraceCallback callback) { trace_ = std::move(callback); }
 
 private:
+    friend class CompletionToken;
+
     struct Slot {
         std::uint32_t generation = 1;
         bool used = false;
@@ -133,13 +162,21 @@ private:
         std::optional<ScriptError> error;
         std::string program;
         std::string function;
+        ExecutionOwner owner = noExecutionOwner;
+        bool cancelRequested = false;
+        CompletionRef awaiting;      // The token a Waiting coroutine waits for.
+        bool abandonCancels = false; // Give up `awaiting` when cancelled (abandon handler).
     };
 
     // Restores updating_/running_ when update() exits, also by an exception from a callback.
     class UpdateGuard;
     friend class UpdateGuard;
 
-    CoroutineHandle add(std::unique_ptr<Coroutine> coroutine);
+    CoroutineHandle add(std::unique_ptr<Coroutine> coroutine, ExecutionOwner owner);
+    // From CompletionToken::resolve: the token `handle` waits for has been resolved.
+    void onTokenResolved(CoroutineHandle handle, const CompletionToken& token);
+    // Cancels a coroutine that is not running; abandons its operation if requested.
+    void cancelSlot(Slot& slot, CoroutineHandle handle);
     Slot* find(CoroutineHandle handle);
     const Slot* find(CoroutineHandle handle) const;
     void finish(Slot& slot, CoroutineHandle handle, CoroutineState state);
@@ -151,6 +188,7 @@ private:
     std::int64_t now_ = 0;
     std::uint64_t updates_ = 0;
     std::uint64_t nextSequence_ = 0;
+    ExecutionOwner lastOwner_ = noExecutionOwner;
     bool updating_ = false;
     std::uint32_t running_ = 0xFFFFFFFFu;
     EventCallback callback_;

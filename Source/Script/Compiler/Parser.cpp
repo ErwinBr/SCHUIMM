@@ -858,6 +858,23 @@ private:
             advance();
             expression->kind = ExprKind::Self;
             return expression;
+        case TokenKind::KwSpawn: {
+            advance();
+            const Token& name = current();
+            if (!check(TokenKind::Identifier) || peekToken(1).kind != TokenKind::LeftParen) {
+                error(name, "'spawn' must be followed by a function call, e.g. 'spawn patrol(guard)'.");
+                return nullptr;
+            }
+            advance();
+            auto call = parseCall(name);
+            if (!call) {
+                return nullptr;
+            }
+            expression->kind = ExprKind::Spawn;
+            expression->range = join(token.range, call->range);
+            expression->left = std::move(call);
+            return expression;
+        }
         case TokenKind::LeftParen: {
             advance();
             auto inner = parseExpression();

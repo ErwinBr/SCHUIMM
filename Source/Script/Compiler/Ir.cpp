@@ -67,6 +67,7 @@ std::string formatIrInstruction(const IrInstruction& instruction, const IrModule
         break;
     }
     case IrOp::Call:
+    case IrOp::Spawn:
         text += " " + (instruction.callee < module.functions.size() ? module.functions[instruction.callee].name
                                                                      : concat("f", instruction.callee));
         break;

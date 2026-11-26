@@ -36,6 +36,19 @@ Status registerStandardNatives(NativeRegistry& registry, PrintSink print)
         return NativeResult::waitFor(*nanoseconds);
     };
     implementations["yield"] = [](NativeContext&, std::span<const Value>) { return NativeResult::yieldNow(); };
+    implementations["await_operation"] = [](NativeContext&, std::span<const Value> arguments) {
+        CompletionToken* token = arguments[0].asOperation();
+        if (token == nullptr) {
+            return NativeResult::error("wait(): the operation is null");
+        }
+        return NativeResult::await(CompletionRef::share(token));
+    };
+    implementations["cancel"] = [](NativeContext& context, std::span<const Value> arguments) {
+        if (context.scheduler != nullptr) {
+            context.scheduler->cancel(arguments[0].asCoroutine()); // Stale or ended: nothing happens.
+        }
+        return NativeResult::returnValue();
+    };
     implementations["length"] = [](NativeContext&, std::span<const Value> arguments) {
         return NativeResult::returnValue(Value::fromFloat(std::hypot(arguments[0].vec2X(), arguments[0].vec2Y())));
     };

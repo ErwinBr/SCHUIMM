@@ -15,7 +15,10 @@ Language 2.0 (Milestone 4.4) adds:
 - scoped enums;
 - the `vec2` type;
 - native API interfaces: engine functions and enums declared once in C++ and used by both the
-  compiler and the runtime ([Runtime.md](Runtime.md#native-interfaces)).
+  compiler and the runtime ([Runtime.md](Runtime.md#native-interfaces));
+- `spawn`, coroutine references and `cancel()`, and waiting for engine operations through
+  completion tokens ([Language.md §9](Language.md#9-coroutines),
+  [Runtime.md](Runtime.md#completion-tokens)).
 
 Bytecode is format 2.0, with typed registers.
 
@@ -25,7 +28,7 @@ Bytecode is format 2.0, with typed registers.
 | [Compiler.md](Compiler.md) | Compiler architecture: lexer, parser, semantic analysis, IR, optimizer, code generation, diagnostics, `schuimmc` |
 | [Bytecode.md](Bytecode.md) | The `.schb` format, instruction set, versioning and validation |
 | [Runtime.md](Runtime.md) | VM, values and strings, native functions, object handler dispatch, scheduler, time, instruction budgets, `ScriptHost`, `schuimm-run` |
-| [Examples/](Examples/) | Example scripts (all compiled and run by the tests; `kitchen.sch` shows object handlers) |
+| [Examples/](Examples/) | Example scripts (all compiled and run by the tests; `kitchen.sch` shows object handlers, `spawn.sch` spawn and cancel) |
 
 ## Libraries
 

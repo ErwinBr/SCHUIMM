@@ -238,7 +238,8 @@ private:
         };
         for (const IrBlock& block : function.blocks) {
             for (const IrInstruction& instruction : block.instructions) {
-                if ((instruction.op == IrOp::Call || instruction.op == IrOp::CallNative) && !consecutive(instruction.operands)) {
+                if ((instruction.op == IrOp::Call || instruction.op == IrOp::CallNative || instruction.op == IrOp::Spawn) &&
+                    !consecutive(instruction.operands)) {
                     std::vector<Type> key = argumentTypes(instruction.operands);
                     if (windows.count(key) == 0) {
                         windows.emplace(key, static_cast<std::uint32_t>(types.size()));
@@ -294,7 +295,8 @@ private:
                     break;
                 case IrOp::LoadNone: emit(Opcode::LoadNone, r(instruction.dest), 0, 0, position); break;
                 case IrOp::Call:
-                case IrOp::CallNative: {
+                case IrOp::CallNative:
+                case IrOp::Spawn: {
                     const std::vector<VReg>& arguments = instruction.operands;
                     std::uint16_t first = 0;
                     if (!arguments.empty()) {
@@ -311,7 +313,9 @@ private:
                     const bool native = instruction.op == IrOp::CallNative;
                     const std::uint16_t callee =
                         native ? nativeImport(instruction.callee) : static_cast<std::uint16_t>(instruction.callee);
-                    emit(native ? Opcode::CallNative : Opcode::Call, r(instruction.dest), callee, first, position);
+                    const Opcode opcode = native ? Opcode::CallNative
+                                                 : (instruction.op == IrOp::Spawn ? Opcode::Spawn : Opcode::Call);
+                    emit(opcode, r(instruction.dest), callee, first, position);
                     break;
                 }
                 case IrOp::CheckRangeStep: emit(Opcode::CheckRangeStep, r(instruction.operands[0]), 0, 0, position); break;

@@ -48,10 +48,10 @@ Result<std::shared_ptr<const Program>> ScriptHost::load(std::span<const std::byt
 }
 
 Result<CoroutineHandle> ScriptHost::start(std::shared_ptr<const Program> program, std::string_view function,
-                                          std::vector<Value> arguments)
+                                          std::vector<Value> arguments, ExecutionOwner owner)
 {
     const std::string name = program ? program->name() : std::string("<none>");
-    auto handle = scheduler_.start(std::move(program), function, std::move(arguments));
+    auto handle = scheduler_.start(std::move(program), function, std::move(arguments), owner);
     if (!handle) {
         logger_.error(category, concat("Cannot start '", function, "' of script '", name, "': ", handle.error().message));
         return handle;
@@ -62,10 +62,11 @@ Result<CoroutineHandle> ScriptHost::start(std::shared_ptr<const Program> program
 }
 
 Result<DispatchResult> ScriptHost::dispatch(std::shared_ptr<const Program> program, std::string_view object,
-                                            std::string_view event, ObjectRef self, std::vector<Value> arguments)
+                                            std::string_view event, ObjectRef self, std::vector<Value> arguments,
+                                            ExecutionOwner owner)
 {
     const std::string name = program ? program->name() : std::string("<none>");
-    auto result = scheduler_.dispatch(std::move(program), object, event, self, std::move(arguments));
+    auto result = scheduler_.dispatch(std::move(program), object, event, self, std::move(arguments), owner);
     if (!result) {
         logger_.error(category, concat("Cannot dispatch '", object, ".", event, "' of script '", name, "': ",
                                        result.error().message));

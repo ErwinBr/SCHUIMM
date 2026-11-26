@@ -23,7 +23,7 @@ changes. They are independent.
 |---|---|
 | 1.0 | initial format: 6 sections |
 | 1.1 | section 7 (Objects), type `object`, opcodes `EqObject`/`NeObject` |
-| 2.0 | typed registers; section 8 (Enums); types `actor`, `entity`, `vec2`, enums, `coroutine`, `operation`; enum, vector and reference opcodes (`EqRef`/`NeRef` replace `EqObject`/`NeObject`) |
+| 2.0 | typed registers; section 8 (Enums); types `actor`, `entity`, `vec2`, enums, `coroutine`, `operation`; enum, vector and reference opcodes (`EqRef`/`NeRef` replace `EqObject`/`NeObject`); `Spawn` |
 
 The compiler always writes the current version. Format 2.0 changed the encoding of types and
 functions, so **1.x files are rejected** ("recompile the script from its source"); they are
@@ -151,6 +151,7 @@ of consecutive registers starting at `c`.
 | `MulVec2`, `DivVec2` | a, b, c | vector `rb` times / divided by float `rc`; `DivVec2` by zero is an error |
 | `NegVec2` | a, b | `ra = -rb` |
 | `EqVec2`, `NeVec2` | a, b, c | componentwise float equality |
+| `Spawn` | a (opt), function, window | starts the function with the arguments in the window as a new coroutine; `a` (a `coroutine` register) receives its handle. The caller continues at once. A handler cannot be spawned |
 
 The numeric opcode is the position in `SCHUIMM_SCRIPT_OPCODES` (`Opcode.h`). Opcodes are only
 ever appended within a format major version.

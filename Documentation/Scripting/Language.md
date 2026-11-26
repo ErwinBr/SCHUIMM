@@ -14,7 +14,8 @@ Version 2.0 adds:
 - scoped enums (§3.4);
 - the vector type `vec2` (§3.5);
 - native API interfaces: engine functions and enums a script can use without declaring them
-  (§6.1).
+  (§6.1);
+- `spawn`, coroutine references, `cancel()` and waiting for engine operations (§9).
 
 Scripts written for 1.x must be updated: add `var` to declarations and recompile them.
 
@@ -77,7 +78,7 @@ More examples: [Examples/](Examples/).
 
 * Identifiers: `[A-Za-z_][A-Za-z0-9_]*` (ASCII only). Use `snake_case` by convention.
 * Keywords: `func extern object enum var self if elif else while for in return pass and or not
-  True False None spawn`. (`spawn` is reserved; it has no meaning in version 2.0 yet.)
+  True False None spawn`.
 * Reserved names (not keywords, but they cannot be redefined or used as variable or function
   names): the type names `int float bool string vec2 entity actor coroutine operation`, the
   conversion functions `int float str`, the constructor `vec2`, and `range`.
@@ -119,7 +120,8 @@ More examples: [Examples/](Examples/).
 | `object` | a reference to a room object, e.g. `self` in a handler (§3.3, [§8.4](#84-self-and-the-object-type)) |
 | `entity` | a reference to an actor or a room object (§3.3) |
 | enum types | the members of a scoped enum, e.g. `Direction.NORTH` (§3.4) |
-| `coroutine`, `operation` | reserved for coroutine handles and engine operations; version 2.0 has no way to create such values yet |
+| `coroutine` | a reference to one running invocation, made by `spawn` (§9.2) |
+| `operation` | a reference to one engine operation, e.g. an animation playback, returned by engine functions (§9.4) |
 | `None` | the "no value" type: the result of a function without a return type |
 
 `None` is not a value a variable can hold. It is the return type of functions declared without
@@ -418,6 +420,8 @@ language; the others are the core interface:
 | `print(value)` | Writes the text of any value (not `None`) to the script output (the engine log and, in the demo, the on-screen console). |
 | `wait(seconds: float)` | Suspends the current coroutine for `seconds` of game time. `wait(0)` resumes at the next update. Negative, NaN, infinite or > 10⁹ s is a runtime error. |
 | `yield()` | Suspends the current coroutine until the next scheduler update (normally the next frame). |
+| `wait(op: operation)` | Suspends the current coroutine until the engine operation `op` completes (§9.4). |
+| `cancel(task: coroutine)` | Stops a coroutine (§9.3). |
 | `length(v: vec2) -> float` | The length of `v`. |
 | `distance(a: vec2, b: vec2) -> float` | `length(b - a)`. |
 | `normalize(v: vec2) -> vec2` | `v` scaled to length 1; `vec2(0, 0)` if `v` has length 0 or a non-finite length (never NaN). |
@@ -439,7 +443,9 @@ language; the others are the core interface:
 Only `print` accepts these:
 - vectors as `vec2(1.0, 2.5)`;
 - enum values as `Light.RED`;
-- references as `actor#` or `object#` followed by the engine id (`object#7`).
+- references as `actor#` or `object#` followed by the engine id (`object#7`);
+- coroutine references as `coroutine#` and an internal id, operations by their state
+  (`operation(pending)`, `operation(completed)`).
 
 `str()` does not accept them.
 
@@ -591,6 +597,79 @@ Script functions run as **coroutines** on the game thread, managed by the engine
 * A coroutine that waits or yields resumes in a later frame, never in the same one.
 * Coroutines run in the order they were started; within one frame the order is deterministic.
 
+### 9.1 Calls are sequential
+
+An ordinary call runs the function to its end before the caller continues. If the function waits,
+the caller waits with it: a call never creates a coroutine.
+
+```python
+patrol(guard)              # returns only when patrol returns
+walk_to(hero, vec2(500, 800))
+```
+
+Engine functions behave the same way. Some return at once (`set_position`), some suspend the
+caller until the action they started is done (`walk_to`), and some start an operation in the
+background and return a reference to it (`play_animation`). Which one a function is belongs to
+its contract ([Runtime.md](Runtime.md#native-functions)); calls look the same.
+
+### 9.2 spawn
+
+`spawn f(arguments)` starts a call as a new, independent coroutine and continues at once:
+
+```python
+func start_scene(guard: actor, hero: actor):
+	var task: coroutine = spawn patrol(guard)
+	spawn walk_to(guard, vec2(900, 600))    # an engine function, spawned directly
+	walk_to(hero, vec2(500, 800))
+```
+
+* The callee is a script function or an engine function. The built-ins `int`, `float`, `str`,
+  `vec2` and `range`, handlers, and engine functions with an `any` parameter (`print`) cannot be
+  spawned.
+* The arguments are type-checked as for a call and evaluated **once**, in the spawning
+  coroutine, before the new one is scheduled.
+* The new coroutine has its own parameters, variables and call stack. It first runs in the next
+  frame, after the coroutines that already exist, in spawn order. It never runs inside the
+  spawning coroutine.
+* `spawn` is an expression of type `coroutine`; it may also stand alone as a statement.
+* A spawned coroutine is independent: it keeps running after the coroutine that spawned it
+  returns or is cancelled. It belongs to the same owner as the coroutine that spawned it, e.g. the
+  room whose handler spawned it: when the room is destroyed, it is cancelled too.
+* A spawned function's result is discarded. There is no joining (`wait(coroutine)`) in version
+  2.0.
+
+### 9.3 Coroutine references and cancel
+
+A `coroutine` value identifies one invocation: two spawns of the same function give different
+references. It can be stored, passed and returned, but not compared or printed into strings.
+
+`cancel(task)` stops the coroutine. It never runs another statement, and everything it held is
+released: its frames and values, and its wait. Cancelling a coroutine that has ended, or
+cancelling it twice, does nothing. A reference never points to another invocation, even after
+the coroutine is gone.
+
+A coroutine can be stopped while it runs, for example by an engine function it called that
+unloads its room. It stops when that call returns.
+
+### 9.4 Engine operations and wait(operation)
+
+Some engine functions start an operation and return an `operation` reference to that one
+operation (`var playback: operation = play_animation(hero, "wave")`).
+
+`wait(op)` suspends the calling coroutine until the operation ends:
+- **completed:** the coroutine continues. If the operation has already completed, `wait` returns
+  at once;
+- **cancelled or replaced** (for example by another animation): the waiting coroutine is
+  cancelled.
+
+An operation that never ends by itself (a looping animation) cannot be waited for: `wait(op)` is
+a runtime error. Only the calling coroutine waits; the game, other scripts and the operation
+itself go on.
+
+The reference stays valid after the operation has ended, so a later `wait` sees the outcome of
+*this* operation even if others have started since. Operation references do not keep entities
+alive.
+
 ## 10. Runtime errors
 
 A runtime error stops the coroutine (other coroutines continue). The error names the script
@@ -633,8 +712,8 @@ Deliberate, so that scripts stay predictable and fast to check:
 
 * No `break`/`continue`, no `+=`, no compound data types (lists, dictionaries, structures)
   besides `vec2`.
-* `spawn`, coroutine handles and engine operations are not available yet (the keyword and the
-  type names are reserved).
+* No spawned blocks, closures or function values; no joining of coroutines (`wait(coroutine)`),
+  no coroutine groups or structured concurrency.
 * No modules or imports: one file is one program. No global (script-level) variables or
   constants, including for room scripts.
 * Objects (§8): no `self.property` access (object state goes through natives), no variables in
@@ -674,5 +753,6 @@ term        := unary (("*" | "/" | "//" | "%") unary)*
 unary       := "-" unary | postfix
 postfix     := primary ("." NAME)*
 primary     := INT | FLOAT | STRING | "True" | "False" | "None" | "self"
+             | "spawn" NAME "(" [expr ("," expr)* [","]] ")"
              | NAME | NAME "(" [expr ("," expr)* [","]] ")" | "(" expr ")"
 ```

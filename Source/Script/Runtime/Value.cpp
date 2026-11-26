@@ -1,6 +1,7 @@
 #include "Script/Runtime/Value.h"
 
 #include "Script/Bytecode/Module.h"
+#include "Script/Runtime/Completion.h"
 
 #include "Script/Bytecode/Semantics.h"
 
@@ -41,16 +42,25 @@ void Value::copyPayload(const Value& other) noexcept
     case ScriptType::Actor: object_ = other.object_; break;
     case ScriptType::Vec2: vec2_ = other.vec2_; break;
     case ScriptType::Enum: enum_ = other.enum_; break;
+    case ScriptType::Coroutine: coroutine_ = other.coroutine_; break;
+    case ScriptType::Operation: operation_ = other.operation_; break;
     default: vec2_ = {0.0, 0.0}; break;
+    }
+}
+
+void Value::retainPayload() const noexcept
+{
+    if (type_ == ScriptType::String) {
+        string_->retain();
+    } else if (type_ == ScriptType::Operation && operation_ != nullptr) {
+        operation_->retain();
     }
 }
 
 Value::Value(const Value& other) noexcept
 {
     copyPayload(other);
-    if (type_ == ScriptType::String) {
-        string_->retain();
-    }
+    retainPayload();
 }
 
 Value::Value(Value&& other) noexcept
@@ -63,9 +73,7 @@ Value::Value(Value&& other) noexcept
 Value& Value::operator=(const Value& other) noexcept
 {
     if (this != &other) {
-        if (other.type_ == ScriptType::String) {
-            other.string_->retain(); // Before reset(): other may hold the last reference via this.
-        }
+        other.retainPayload(); // Before reset(): other may hold the last reference via this.
         reset();
         copyPayload(other);
     }
@@ -87,9 +95,27 @@ void Value::reset() noexcept
 {
     if (type_ == ScriptType::String) {
         string_->release();
+    } else if (type_ == ScriptType::Operation && operation_ != nullptr) {
+        operation_->release();
     }
     type_ = ScriptType::None;
     vec2_ = {0.0, 0.0};
+}
+
+Value Value::fromCoroutine(CoroutineHandle handle) noexcept
+{
+    Value v;
+    v.type_ = ScriptType::Coroutine;
+    v.coroutine_ = handle;
+    return v;
+}
+
+Value Value::fromOperation(const CompletionRef& operation) noexcept
+{
+    Value v;
+    v.type_ = ScriptType::Operation;
+    v.operation_ = CompletionRef(operation).detach();
+    return v;
 }
 
 Value Value::fromBool(bool value) noexcept
@@ -169,6 +195,13 @@ std::string toDisplayString(const Value& value)
     case ScriptType::Actor: return "actor#" + std::to_string(value.asReference().id);
     case ScriptType::Vec2: return "vec2(" + formatFloat(value.vec2X()) + ", " + formatFloat(value.vec2Y()) + ")";
     case ScriptType::Enum: return "enum#" + std::to_string(value.enumIndex()) + "." + std::to_string(value.enumOrdinal());
+    case ScriptType::Coroutine:
+        return value.asCoroutine().isValid() ? "coroutine#" + std::to_string(value.asCoroutine().index) + "." +
+                                                   std::to_string(value.asCoroutine().generation)
+                                             : std::string("coroutine#null");
+    case ScriptType::Operation:
+        return value.asOperation() != nullptr ? std::string("operation(") + toString(value.asOperation()->state()) + ")"
+                                              : std::string("operation#null");
     default: return "None";
     }
 }

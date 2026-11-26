@@ -29,6 +29,8 @@ inline constexpr std::uint16_t noRegister = 0xFFFF;
 // the validator checks them against Function::registerTypes. Vec2 ops: MulVec2/DivVec2 take a
 // vector (b) and a float (c); SetVec2X/Y overwrite one component of the vector in register a
 // with the float in b. EqRef/NeRef compare two entity references (actor, object or entity).
+// Spawn starts function b with the arguments in the window at c as a new coroutine and stores
+// its coroutine handle in a (optional, a coroutine register); the caller continues at once.
 #define SCHUIMM_SCRIPT_OPCODES(X)                                                                   \
     X(Nop, Unused, Unused, Unused, false)                                                           \
     X(LoadConst, Register, Constant, Unused, false)                                                 \
@@ -102,7 +104,8 @@ inline constexpr std::uint16_t noRegister = 0xFFFF;
     X(DivVec2, Register, Register, Register, false)                                                 \
     X(NegVec2, Register, Register, Unused, false)                                                   \
     X(EqVec2, Register, Register, Register, false)                                                  \
-    X(NeVec2, Register, Register, Register, false)
+    X(NeVec2, Register, Register, Register, false)                                                  \
+    X(Spawn, OptRegister, Function, ArgWindow, false)
 
 enum class Opcode : std::uint8_t {
 #define SCHUIMM_X(name, a, b, c, terminator) name,

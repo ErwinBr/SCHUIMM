@@ -3,6 +3,7 @@
 schuimm_add_test(ScriptTests
     SOURCES
         BytecodeTests.cpp
+        CoroutineTests.cpp
         EndToEndTests.cpp
         IrTests.cpp
         LanguageTypesTests.cpp

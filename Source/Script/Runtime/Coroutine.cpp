@@ -35,6 +35,15 @@ Result<std::unique_ptr<Coroutine>> Coroutine::createHandler(std::shared_ptr<cons
     return createAt(std::move(program), *index, std::move(arguments), 1, limits);
 }
 
+Result<std::unique_ptr<Coroutine>> Coroutine::createCall(std::shared_ptr<const Program> program, std::uint32_t index,
+                                                         std::vector<Value> arguments, CoroutineLimits limits)
+{
+    if (!program || index >= program->module().functions.size() || program->isHandler(index)) {
+        return ::schuimm::makeError(ErrorCode::InvalidArgument, "No such room-level function");
+    }
+    return createAt(std::move(program), index, std::move(arguments), 0, limits);
+}
+
 Result<std::unique_ptr<Coroutine>> Coroutine::createAt(std::shared_ptr<const Program> program, std::uint32_t index,
                                                        std::vector<Value> arguments, std::size_t hidden,
                                                        CoroutineLimits limits)

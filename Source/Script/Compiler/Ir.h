@@ -27,6 +27,8 @@ inline constexpr VReg noVReg = 0xFFFFFFFFu;
 //   LoadEnum: enum `callee` (an index into IrModule::enums), member ordinal `intValue`.
 //   SetVec2X/Y: dest = operand 0 with component x/y replaced by operand 1 (a float).
 //   MulVec2/DivVec2: vector operand 0, float operand 1.
+//   Spawn: starts function `callee` with the operands as arguments; dest (optional) receives the
+//   coroutine.
 //   removable: no side effect and cannot fail, so an unused result may be deleted.
 //   may trap:  can raise a runtime error, which is observable; never removed or folded into one.
 #define SCHUIMM_IR_OPS(X)                                                                           \
@@ -97,7 +99,8 @@ inline constexpr VReg noVReg = 0xFFFFFFFFu;
     X(EqVec2, 2, true, false)                                                                       \
     X(NeVec2, 2, true, false)                                                                       \
     X(Call, -1, false, true)                                                                        \
-    X(CallNative, -1, false, true)
+    X(CallNative, -1, false, true)                                                                  \
+    X(Spawn, -1, false, true)
 
 enum class IrOp : std::uint8_t {
 #define SCHUIMM_X(name, operands, removable, traps) name,

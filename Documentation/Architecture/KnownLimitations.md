@@ -128,7 +128,7 @@ See [Navigation.md](Navigation.md) and [Actors.md](Actors.md#movement).
 Language scope (version 2.0, see [Language.md](../Scripting/Language.md#12-limitations-version-20)):
 * no `break`/`continue`, augmented assignment, lists, dictionaries, structures (besides `vec2`),
   modules/imports, global variables or exception handling;
-* `spawn`, coroutine handles and engine operations are reserved but not available yet;
+* no joining of coroutines (`wait(coroutine)`), spawned blocks, closures or coroutine groups;
 * `str()` does not convert vectors, enums or references (only `print` shows them);
 * object handlers reach object state only through natives (no `self.property` syntax yet), and
   the adventure runtime that dispatches events to them is not part of this milestone;

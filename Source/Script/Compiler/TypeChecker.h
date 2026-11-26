@@ -30,6 +30,7 @@ struct NativeSignature {
     Type returnType = Type::None;
     bool pure = false;         // No side effects: the optimizer may remove unused calls.
     std::string interfaceName; // Empty for extern declarations.
+    bool hidden = false;       // Not callable by name (await_operation, behind wait(operation)).
 };
 
 // An enum type: declared by the script ("enum Name:") or by a native interface (an engine
@@ -57,6 +58,7 @@ struct ExprInfo {
     std::uint8_t component = 0;
     // Binary "scalar * vector": the operands are swapped for the vector instruction.
     bool swapOperands = false;
+    // Spawn: `callee` is the function to start (a script function or a spawn wrapper).
 };
 
 struct VariableInfo {
@@ -113,6 +115,10 @@ public:
     [[nodiscard]] const std::vector<ObjectSemantics>& objects() const noexcept { return objects_; }
     // Interface functions (core first) followed by extern declarations.
     [[nodiscard]] const std::vector<NativeSignature>& natives() const noexcept { return natives_; }
+    // Natives the script spawns ("spawn walk_to(...)"), as indices into natives(). Each gets a
+    // compiler-generated wrapper function "spawn:<name>" that calls it; the wrapper of
+    // spawnWrappers()[i] is function functions().size() + i.
+    [[nodiscard]] const std::vector<std::uint32_t>& spawnWrappers() const noexcept { return spawnWrappers_; }
     // Enum types: engine enums of the interfaces, then the script's enums. Type enumType(i)
     // refers to enums()[i].
     [[nodiscard]] const std::vector<EnumInfo>& enums() const noexcept { return enums_; }
@@ -127,6 +133,7 @@ private:
     std::vector<ObjectSemantics> objects_;
     std::vector<NativeSignature> natives_;
     std::vector<EnumInfo> enums_;
+    std::vector<std::uint32_t> spawnWrappers_;
 };
 
 // Resolves names and checks types (Language.md, "Types" and "Scopes"). Reports every error it

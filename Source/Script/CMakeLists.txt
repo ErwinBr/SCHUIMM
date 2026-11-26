@@ -37,6 +37,7 @@ target_link_libraries(schuimm_script_compiler PUBLIC Schuimm::ScriptBytecode)
 schuimm_configure_target(schuimm_script_compiler)
 
 add_library(schuimm_script_runtime STATIC
+    Runtime/Completion.cpp
     Runtime/Coroutine.cpp
     Runtime/Interpreter.cpp
     Runtime/NativeRegistry.cpp

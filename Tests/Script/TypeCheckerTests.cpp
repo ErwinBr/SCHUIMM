@@ -122,7 +122,7 @@ SCHUIMM_TEST(TypeChecker_FunctionCalls)
     CHECK(check("\tvar x = float(True)\n").has("cannot convert"));
     CHECK(check("\tvar x = str(1, 2)\n").has("exactly 1 argument"));
     CHECK(check("\tvar x = range(3)\n").has("only be used in a for loop"));
-    CHECK(check("\t1 + 2\n").has("only function calls can be used as statements"));
+    CHECK(check("\t1 + 2\n").has("only function calls and spawn can be used as statements"));
     CHECK(check("\tvar x = 1\n\tx == 2\n").hasNote("Use '=' to assign"));
     // Functions can be called before their declaration and recursively.
     CHECK(compileSource("func main():\n\tprint(fact(5))\nfunc fact(n: int) -> int:\n\tif n <= 1:\n\t\treturn 1\n"

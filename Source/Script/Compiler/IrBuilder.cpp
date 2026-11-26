@@ -314,6 +314,16 @@ private:
             }
             return binary(e, info, position);
         case ExprKind::Call: return call(e, info, discard, position);
+        case ExprKind::Spawn: {
+            // Arguments are evaluated here, once, in the spawning coroutine.
+            std::vector<VReg> arguments;
+            for (const auto& argument : e.left->arguments) {
+                arguments.push_back(expression(*argument));
+            }
+            const VReg dest = discard ? noVReg : temporary(Type::Coroutine);
+            emit(IrOp::Spawn, dest, std::move(arguments), position).callee = info.callee;
+            return dest;
+        }
         }
         return noVReg;
     }
@@ -456,6 +466,34 @@ IrModule buildIr(const SourceUnit& unit, const SemanticModel& semantics, std::st
     for (const FunctionSemantics& function : semantics.functions()) {
         module.functions.emplace_back();
         FunctionBuilder(semantics, function, module.functions.back()).build();
+    }
+    // Spawn wrappers: "spawn:walk_to(params) -> result" calls the native and returns its result.
+    for (const std::uint32_t nativeIndex : semantics.spawnWrappers()) {
+        const NativeSignature& native = semantics.natives()[nativeIndex];
+        IrFunction wrapper;
+        wrapper.name = "spawn:" + native.name;
+        wrapper.parameters = native.parameters;
+        wrapper.returnType = native.returnType;
+        wrapper.registerTypes = native.parameters;
+        std::vector<VReg> arguments;
+        for (std::size_t p = 0; p < native.parameters.size(); ++p) {
+            arguments.push_back(static_cast<VReg>(p));
+        }
+        VReg result = noVReg;
+        if (native.returnType != Type::None) {
+            result = static_cast<VReg>(wrapper.registerTypes.size());
+            wrapper.registerTypes.push_back(native.returnType);
+        }
+        IrBlock block;
+        IrInstruction call;
+        call.op = IrOp::CallNative;
+        call.dest = result;
+        call.operands = std::move(arguments);
+        call.callee = nativeIndex;
+        block.instructions.push_back(std::move(call));
+        block.terminator = {TerminatorKind::Return, result, 0, 0, {}};
+        wrapper.blocks.push_back(std::move(block));
+        module.functions.push_back(std::move(wrapper));
     }
     for (const ObjectSemantics& object : semantics.objects()) {
         IrObject out;

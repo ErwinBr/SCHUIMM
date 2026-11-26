@@ -3,6 +3,7 @@
 #include "Core/Common/StringBuilder.h"
 #include "Script/Bytecode/Disassembler.h"
 #include "Script/Bytecode/Semantics.h"
+#include "Script/Runtime/ScriptScheduler.h"
 
 #include <exception>
 
@@ -347,9 +348,16 @@ struct Interpreter {
                 } catch (...) {
                     return fail(ScriptErrorKind::Native, concat(native.name, "(): threw an unknown exception"));
                 }
+                // A cancellation requested during the call (cancel() of the running coroutine)
+                // takes effect here, at the call boundary: nothing after the call runs.
+                if (context.scheduler != nullptr && context.scheduler->isCancelRequested(context.coroutine)) {
+                    result.outcome = RunOutcome::Cancelled;
+                    return result;
+                }
                 // Only natives without a result may suspend: the coroutine resumes after the
                 // call, so there would be no value for the destination register.
-                if ((outcome.kind == NativeResult::Kind::Wait || outcome.kind == NativeResult::Kind::Yield) &&
+                if ((outcome.kind == NativeResult::Kind::Wait || outcome.kind == NativeResult::Kind::Yield ||
+                     outcome.kind == NativeResult::Kind::Await) &&
                     import.returnType.kind != ScriptType::None) {
                     return fail(ScriptErrorKind::Native,
                                 concat(native.name, "(): a native function with a result cannot suspend (wait/yield)"));
@@ -382,8 +390,54 @@ struct Interpreter {
                     result.waitNanoseconds = outcome.waitNanoseconds;
                     return result;
                 case NativeResult::Kind::Yield: result.outcome = RunOutcome::Yielded; return result;
+                case NativeResult::Kind::Await: {
+                    CompletionToken* token = outcome.token.get();
+                    if (token == nullptr) {
+                        return fail(ScriptErrorKind::Native, concat(native.name, "(): the operation is null"));
+                    }
+                    if (!token->isAwaitable()) {
+                        return fail(ScriptErrorKind::Native, concat(native.name, "(): ", token->notAwaitableMessage()));
+                    }
+                    if (token->state() == CompletionToken::State::Completed) {
+                        break; // Completed before the wait: continue at once.
+                    }
+                    if (token->state() == CompletionToken::State::Cancelled) {
+                        result.outcome = RunOutcome::Cancelled;
+                        return result;
+                    }
+                    if (context.scheduler == nullptr) {
+                        return fail(ScriptErrorKind::Native, concat(native.name, "(): waiting for an operation needs a scheduler"));
+                    }
+                    result.outcome = RunOutcome::Awaiting;
+                    result.token = std::move(outcome.token);
+                    result.abandonCancels = outcome.abandonCancels;
+                    return result;
+                }
                 case NativeResult::Kind::Error:
                     return fail(ScriptErrorKind::Native, concat(native.name, "(): ", outcome.message));
+                }
+                break;
+            }
+            case Opcode::Spawn: {
+                // A new, independent coroutine; it first runs at a later point of the scheduler's
+                // order (never inside this one). Arguments were evaluated by the caller.
+                const Function& callee = module.functions[in.b];
+                std::vector<Value> arguments;
+                arguments.reserve(callee.parameters.size());
+                for (std::size_t i = 0; i < callee.parameters.size(); ++i) {
+                    if (!r[in.c + i].matches(callee.parameters[i])) return typeMismatch();
+                    arguments.push_back(r[in.c + i]);
+                }
+                if (context.scheduler == nullptr) {
+                    return fail(ScriptErrorKind::Runtime, "spawn needs a scheduler");
+                }
+                auto spawned = context.scheduler->spawn(context.coroutine, co.program_, in.b, std::move(arguments));
+                if (!spawned) {
+                    return fail(ScriptErrorKind::Runtime, concat("Cannot spawn '", program.functionDisplayName(in.b), "': ",
+                                                                spawned.error().message));
+                }
+                if (in.a != noRegister) {
+                    r[in.a] = Value::fromCoroutine(*spawned);
                 }
                 break;
             }

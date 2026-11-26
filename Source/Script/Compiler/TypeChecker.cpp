@@ -2,6 +2,7 @@
 
 #include "Core/Common/StringBuilder.h"
 
+#include <algorithm>
 #include <optional>
 #include <string_view>
 
@@ -154,6 +155,7 @@ private:
                 native.returnType = convert(declaration.returnType);
                 native.pure = declaration.pure;
                 native.interfaceName = interface->name;
+                native.hidden = declaration.hidden;
                 const auto index = static_cast<std::uint32_t>(model_.natives_.size());
                 model_.natives_.push_back(std::move(native));
                 symbols_[declaration.name] = {CallKind::Native, index, {}};
@@ -462,12 +464,12 @@ private:
         case StmtKind::Expression: {
             const Expr& value = *statement.value;
             checkExpression(value);
-            if (value.kind != ExprKind::Call && value.kind != ExprKind::Error) {
+            if (value.kind != ExprKind::Call && value.kind != ExprKind::Spawn && value.kind != ExprKind::Error) {
                 std::vector<std::string> notes;
                 if (value.kind == ExprKind::Binary && value.binaryOp == BinaryOp::Equal && value.left->kind == ExprKind::Name) {
                     notes.push_back("Use '=' to assign a value; '==' compares.");
                 }
-                error(value.range, "This expression has no effect; only function calls can be used as statements.",
+                error(value.range, "This expression has no effect; only function calls and spawn can be used as statements.",
                       std::move(notes));
             }
             return;
@@ -641,6 +643,7 @@ private:
         case ExprKind::Binary: return checkBinary(expression);
         case ExprKind::Call: return checkCall(expression);
         case ExprKind::Member: return checkMember(expression);
+        case ExprKind::Spawn: return checkSpawn(expression);
         }
         return record(expression, info);
     }
@@ -874,7 +877,14 @@ private:
             info.type = Type::Error;
             return record(call, info);
         }
-        const auto symbol = symbols_.find(name);
+        // wait(operation) waits for an engine operation: the hidden native await_operation. This
+        // is the only overload in the language; wait(float) is the core function itself.
+        const bool waitForOperation = name == "wait" && arguments.size() == 1 && arguments[0] == Type::Operation;
+        auto symbol = symbols_.find(waitForOperation ? std::string("await_operation") : name);
+        if (symbol != symbols_.end() && symbol->second.kind == CallKind::Native && !waitForOperation &&
+            model_.natives_[symbol->second.index].hidden) {
+            symbol = symbols_.end();
+        }
         if (symbol == symbols_.end()) {
             if (lookupVariable(name)) {
                 error(call.nameRange, concat("'", name, "' is a variable, not a function."));
@@ -920,6 +930,43 @@ private:
             }
         }
         return record(call, info);
+    }
+
+    // "spawn f(args)": the call is checked as usual; the expression is the new coroutine.
+    Type checkSpawn(const Expr& expression)
+    {
+        const Expr& call = *expression.left;
+        checkCall(call);
+        ExprInfo info;
+        info.type = Type::Coroutine;
+        const ExprInfo& target = model_.expressions_[&call];
+        if (target.callee == invalidIndex) {
+            // The call itself was reported (undefined function, range(), ...).
+            if (target.callKind == CallKind::Intrinsic) {
+                error(call.nameRange, concat("'", call.text, "' is built into the language and cannot be spawned."));
+            }
+            return record(expression, info);
+        }
+        if (target.callKind == CallKind::Function) {
+            info.callee = target.callee;
+            return record(expression, info);
+        }
+        const NativeSignature& native = model_.natives_[target.callee];
+        for (const Type parameter : native.parameters) {
+            if (parameter == Type::Any) {
+                error(call.nameRange, concat("'", call.text, "' takes a value of any type and cannot be spawned."),
+                      {"Spawn a script function that calls it instead."});
+                return record(expression, info);
+            }
+        }
+        // A native runs in a compiler-generated wrapper function (one per spawned native).
+        const auto existing = std::find(model_.spawnWrappers_.begin(), model_.spawnWrappers_.end(), target.callee);
+        const auto wrapper = static_cast<std::uint32_t>(existing - model_.spawnWrappers_.begin());
+        if (existing == model_.spawnWrappers_.end()) {
+            model_.spawnWrappers_.push_back(target.callee);
+        }
+        info.callee = static_cast<std::uint32_t>(model_.functions_.size()) + wrapper;
+        return record(expression, info);
     }
 
     [[nodiscard]] bool isSiblingHandler(const std::string& name) const

@@ -3,6 +3,7 @@
 #include "Core/Common/Error.h"
 #include "Script/Bytecode/Module.h"
 #include "Script/Bytecode/NativeInterface.h"
+#include "Script/Runtime/Completion.h"
 #include "Script/Runtime/RuntimeTypes.h"
 #include "Script/Runtime/Value.h"
 
@@ -17,24 +18,39 @@
 
 namespace schuimm::script {
 
+class ScriptScheduler;
+
 // Information a native function receives about the calling coroutine.
 struct NativeContext {
     CoroutineHandle coroutine;
     std::string_view script;          // Program name (normally the source file name).
     std::int64_t timeNanoseconds = 0; // Scheduler time of the current update.
     const Module* module = nullptr;   // The calling module (set by the VM for each call).
+    // The scheduler running the coroutine; null when the VM runs a coroutine directly
+    // (runCoroutine without a scheduler: spawn and cancel are then unavailable).
+    ScriptScheduler* scheduler = nullptr;
 };
 
 // What a native function does after it returns: produce a value, suspend the coroutine (wait,
-// yield) or fail. Natives never call back into the VM.
+// yield, await) or fail. Natives never call back into the VM.
 //
 // Only natives whose return type is None may suspend: the coroutine resumes after the call,
-// with no value for a result. Wait/Yield from a native with a result is a runtime error.
+// with no value for a result. Suspending from a native with a result is a runtime error. A
+// suspended call resumes at the next instruction; the native is never called again for it.
+//
+// await(token, abandonCancels) waits for an engine operation (Completion.h):
+//   * the token is already completed: the call returns at once (no suspension);
+//   * already cancelled: the calling coroutine is cancelled;
+//   * not awaitable (e.g. a looping animation): a Native error with the token's message;
+//   * otherwise the coroutine waits until the token is resolved, then resumes (completed) or is
+//     cancelled (cancelled). If the waiting coroutine is cancelled first, its subscription is
+//     removed and, with abandonCancels, the token's abandon handler runs (walk_to stops the walk
+//     it started for this coroutine).
 // An exception thrown by an implementation is caught by the VM and becomes a Native error of
 // the calling coroutine.
 class NativeResult {
 public:
-    enum class Kind : std::uint8_t { Return, Wait, Yield, Error };
+    enum class Kind : std::uint8_t { Return, Wait, Yield, Await, Error };
 
     [[nodiscard]] static NativeResult returnValue(Value value = {}) { return {Kind::Return, std::move(value), 0, {}}; }
     // Suspends the coroutine for `nanoseconds` of scheduler time (>= 0).
@@ -42,11 +58,20 @@ public:
     // Suspends the coroutine until the next scheduler update.
     [[nodiscard]] static NativeResult yieldNow() { return {Kind::Yield, {}, 0, {}}; }
     [[nodiscard]] static NativeResult error(std::string message) { return {Kind::Error, {}, 0, std::move(message)}; }
+    [[nodiscard]] static NativeResult await(CompletionRef token, bool abandonCancels = false)
+    {
+        NativeResult result{Kind::Await, {}, 0, {}};
+        result.token = std::move(token);
+        result.abandonCancels = abandonCancels;
+        return result;
+    }
 
     Kind kind = Kind::Return;
     Value value;
     std::int64_t waitNanoseconds = 0;
     std::string message;
+    CompletionRef token = {};
+    bool abandonCancels = false;
 };
 
 // The implementation receives arguments already checked against the declared parameter types.

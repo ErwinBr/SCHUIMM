@@ -62,7 +62,17 @@ ScriptScheduler::ScriptScheduler(SchedulerSettings settings)
 {
 }
 
-ScriptScheduler::~ScriptScheduler() = default;
+ScriptScheduler::~ScriptScheduler()
+{
+    // Tokens may outlive the scheduler: unsubscribe (without abandoning: the engine objects an
+    // abandon handler refers to may already be gone).
+    for (std::uint32_t index = 0; index < slots_.size(); ++index) {
+        Slot& slot = slots_[index];
+        if (slot.awaiting) {
+            slot.awaiting->removeWaiter(*this, {index, slot.generation});
+        }
+    }
+}
 
 ScriptScheduler::Slot* ScriptScheduler::find(CoroutineHandle handle)
 {
@@ -77,17 +87,30 @@ const ScriptScheduler::Slot* ScriptScheduler::find(CoroutineHandle handle) const
 }
 
 Result<CoroutineHandle> ScriptScheduler::start(std::shared_ptr<const Program> program, std::string_view function,
-                                               std::vector<Value> arguments)
+                                               std::vector<Value> arguments, ExecutionOwner owner)
 {
     auto coroutine = Coroutine::create(std::move(program), function, std::move(arguments), settings_.limits);
     if (!coroutine) {
         return std::unexpected(coroutine.error());
     }
-    return add(std::move(*coroutine));
+    return add(std::move(*coroutine), owner);
+}
+
+Result<CoroutineHandle> ScriptScheduler::spawn(CoroutineHandle parent, std::shared_ptr<const Program> program,
+                                               std::uint32_t index, std::vector<Value> arguments)
+{
+    const Slot* spawner = find(parent);
+    const ExecutionOwner owner = spawner != nullptr ? spawner->owner : noExecutionOwner;
+    auto coroutine = Coroutine::createCall(std::move(program), index, std::move(arguments), settings_.limits);
+    if (!coroutine) {
+        return std::unexpected(coroutine.error());
+    }
+    return add(std::move(*coroutine), owner);
 }
 
 Result<DispatchResult> ScriptScheduler::dispatch(std::shared_ptr<const Program> program, std::string_view object,
-                                                 std::string_view event, ObjectRef self, std::vector<Value> arguments)
+                                                 std::string_view event, ObjectRef self, std::vector<Value> arguments,
+                                                 ExecutionOwner owner)
 {
     if (!program) {
         return makeError(ErrorCode::InvalidArgument, "No program");
@@ -102,10 +125,10 @@ Result<DispatchResult> ScriptScheduler::dispatch(std::shared_ptr<const Program> 
     if (!coroutine) {
         return std::unexpected(coroutine.error());
     }
-    return DispatchResult{true, add(std::move(*coroutine))};
+    return DispatchResult{true, add(std::move(*coroutine), owner)};
 }
 
-CoroutineHandle ScriptScheduler::add(std::unique_ptr<Coroutine> coroutine)
+CoroutineHandle ScriptScheduler::add(std::unique_ptr<Coroutine> coroutine, ExecutionOwner owner)
 {
     std::uint32_t index = 0;
     while (index < slots_.size() && slots_[index].used) {
@@ -125,6 +148,10 @@ CoroutineHandle ScriptScheduler::add(std::unique_ptr<Coroutine> coroutine)
     slot.sequence = nextSequence_++;
     slot.budgetWarned = false;
     slot.error.reset();
+    slot.owner = owner;
+    slot.cancelRequested = false;
+    slot.awaiting = {};
+    slot.abandonCancels = false;
     order_.push_back(index);
     return CoroutineHandle{index, slot.generation};
 }
@@ -144,6 +171,11 @@ void ScriptScheduler::emit(CoroutineEvent::Kind kind, const Slot& slot, Coroutin
 
 void ScriptScheduler::finish(Slot& slot, CoroutineHandle handle, CoroutineState state)
 {
+    if (slot.awaiting) {
+        slot.awaiting->removeWaiter(*this, handle);
+        slot.awaiting = {};
+    }
+    slot.cancelRequested = false;
     slot.state = state;
     if (state != CoroutineState::Finished) {
         slot.coroutine->releaseFrames(); // Finished keeps its (frame-less) result value.
@@ -154,14 +186,72 @@ void ScriptScheduler::finish(Slot& slot, CoroutineHandle handle, CoroutineState 
     emit(kind, slot, handle);
 }
 
+void ScriptScheduler::cancelSlot(Slot& slot, CoroutineHandle handle)
+{
+    // Keep the token for the abandon handler: finish() drops the subscription.
+    const CompletionRef abandoned = slot.abandonCancels ? slot.awaiting : CompletionRef{};
+    finish(slot, handle, CoroutineState::Cancelled);
+    if (abandoned) {
+        abandoned->abandon(); // After the coroutine has ended: the handler may resolve the token.
+    }
+}
+
 bool ScriptScheduler::cancel(CoroutineHandle handle)
 {
     Slot* slot = find(handle);
-    if (slot == nullptr || isTerminal(slot->state) || handle.index == running_) {
+    if (slot == nullptr || isTerminal(slot->state)) {
         return false;
     }
-    finish(*slot, handle, CoroutineState::Cancelled);
+    if (handle.index == running_) {
+        slot->cancelRequested = true; // Applied by the VM when the current native call returns.
+        return true;
+    }
+    cancelSlot(*slot, handle);
     return true;
+}
+
+std::size_t ScriptScheduler::cancelOwner(ExecutionOwner owner)
+{
+    if (owner == noExecutionOwner) {
+        return 0;
+    }
+    std::size_t count = 0;
+    for (std::uint32_t index = 0; index < slots_.size(); ++index) {
+        Slot& slot = slots_[index];
+        if (slot.used && slot.owner == owner && !isTerminal(slot.state) && cancel({index, slot.generation})) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::optional<ExecutionOwner> ScriptScheduler::owner(CoroutineHandle handle) const
+{
+    const Slot* slot = find(handle);
+    if (slot == nullptr) return std::nullopt;
+    return slot->owner;
+}
+
+bool ScriptScheduler::isCancelRequested(CoroutineHandle handle) const
+{
+    const Slot* slot = find(handle);
+    return slot != nullptr && slot->cancelRequested;
+}
+
+void ScriptScheduler::onTokenResolved(CoroutineHandle handle, const CompletionToken& token)
+{
+    Slot* slot = find(handle);
+    if (slot == nullptr || slot->awaiting.get() != &token || slot->state != CoroutineState::Waiting) {
+        return;
+    }
+    if (token.state() == CompletionToken::State::Completed) {
+        slot->awaiting = {};
+        slot->state = CoroutineState::Ready;
+        slot->wakeTime = now_;
+        return;
+    }
+    slot->abandonCancels = false; // The operation ended by itself: nothing to abandon.
+    cancelSlot(*slot, handle);
 }
 
 void ScriptScheduler::update(double deltaSeconds)
@@ -188,7 +278,7 @@ void ScriptScheduler::update(double deltaSeconds)
         const CoroutineHandle handle{index, slot.generation};
         slot.state = CoroutineState::Running;
         running_ = index;
-        NativeContext context{handle, slot.program, now_};
+        NativeContext context{handle, slot.program, now_, nullptr, this};
         RunResult run = runCoroutine(*slot.coroutine, settings_.instructionBudget, context, trace_ ? &trace_ : nullptr);
         running_ = 0xFFFFFFFFu;
         Slot& after = slot;
@@ -209,6 +299,14 @@ void ScriptScheduler::update(double deltaSeconds)
             }
             break;
         case RunOutcome::Yielded: after.state = CoroutineState::Ready; break;
+        case RunOutcome::Cancelled: finish(after, handle, CoroutineState::Cancelled); break;
+        case RunOutcome::Awaiting:
+            after.state = CoroutineState::Waiting;
+            after.wakeTime = std::numeric_limits<std::int64_t>::max();
+            after.awaiting = std::move(run.token);
+            after.abandonCancels = run.abandonCancels;
+            after.awaiting->addWaiter(*this, handle);
+            break;
         case RunOutcome::BudgetExhausted:
             if (settings_.budgetPolicy == BudgetPolicy::Fail) {
                 after.error = std::move(run.error);
@@ -254,6 +352,7 @@ bool ScriptScheduler::release(CoroutineHandle handle)
     }
     slot->coroutine.reset();
     slot->error.reset();
+    slot->awaiting = {};
     slot->used = false;
     ++slot->generation;
     order_.erase(std::remove(order_.begin(), order_.end(), handle.index), order_.end());
@@ -276,7 +375,7 @@ void ScriptScheduler::clear()
     for (std::uint32_t index = 0; index < slots_.size(); ++index) {
         Slot& slot = slots_[index];
         if (slot.used && !isTerminal(slot.state)) {
-            finish(slot, {index, slot.generation}, CoroutineState::Cancelled);
+            cancelSlot(slot, {index, slot.generation});
         }
     }
     releaseFinished();
@@ -286,6 +385,13 @@ std::size_t ScriptScheduler::activeCount() const noexcept
 {
     return static_cast<std::size_t>(std::count_if(slots_.begin(), slots_.end(), [](const Slot& slot) {
         return slot.used && !isTerminal(slot.state);
+    }));
+}
+
+std::size_t ScriptScheduler::activeCount(ExecutionOwner owner) const noexcept
+{
+    return static_cast<std::size_t>(std::count_if(slots_.begin(), slots_.end(), [owner](const Slot& slot) {
+        return slot.used && slot.owner == owner && !isTerminal(slot.state);
     }));
 }
 

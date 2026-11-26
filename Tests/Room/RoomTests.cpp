@@ -731,6 +731,32 @@ SCHUIMM_TEST(Room_DispatchPassesTheObjectHandleAsSelf)
     CHECK(fixture.recorded[2] == a->object("cupboard")->handle());
 }
 
+SCHUIMM_TEST(Room_DestroyingAnInstanceCancelsSpawnedCoroutines)
+{
+    // Coroutines spawned by a room's handlers belong to the room too (they inherit its
+    // execution owner), even after the handler that spawned them has returned.
+    RoomFixture fixture;
+    fixture.writeFullRoom("func hum(o: object):\n\twait(2.0)\n\trecord_self(o)\n"
+                          "object blender:\n\tfunc use():\n\t\tspawn hum(self)\n"
+                          "object cupboard:\n\tfunc look_at():\n\t\tsay(\"A wooden cupboard.\")\n");
+    const AssetLocator locator = fixture.locator();
+    RoomLibrary library(locator, fixture.host);
+    auto loaded = library.load(test::assetPath(roomName));
+    REQUIRE(loaded.has_value());
+    auto a = RoomInstance::create(*loaded, fixture.host).value();
+    auto b = RoomInstance::create(*loaded, fixture.host).value();
+    REQUIRE(a->dispatch("blender", "use")->handled);
+    REQUIRE(b->dispatch("blender", "use")->handled);
+    fixture.host.update(0.0); // The handlers spawn and return.
+    fixture.host.update(0.1); // The spawned coroutines wait.
+    CHECK_EQ(a->activeCoroutineCount(), std::size_t{1});
+    CHECK_EQ(b->activeCoroutineCount(), std::size_t{1});
+    a.reset();
+    for (int i = 0; i < 10; ++i) fixture.host.update(0.5);
+    REQUIRE(fixture.recorded.size() == 1);
+    CHECK(fixture.recorded[0] == b->object("blender")->handle());
+}
+
 SCHUIMM_TEST(Room_HostReportsWhenItUpdates)
 {
     // RoomInstance's destructor refuses to run during an update (SCHUIMM_VERIFY, every build);

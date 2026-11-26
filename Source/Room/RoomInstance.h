@@ -215,20 +215,18 @@ public:
     [[nodiscard]] Result<script::CoroutineHandle> start(std::string_view function,
                                                         std::vector<script::Value> arguments = {});
 
-    // Coroutines started by this instance that have not ended yet.
+    // Coroutines of this instance (started by it, or spawned by those) that have not ended yet.
     [[nodiscard]] std::size_t activeCoroutineCount() const;
 
 private:
     RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<std::unique_ptr<ActorInstance>> actors);
-    void track(script::CoroutineHandle handle);
-    void prune();
 
     LoadedRoom room_;
     script::ScriptHost& host_;
+    script::ExecutionOwner owner_; // Of every coroutine this instance starts (and they spawn).
     std::vector<RoomObject> objects_;
     std::vector<std::unique_ptr<ActorInstance>> actors_;
     animation::AnimationClock clock_;
-    std::vector<script::CoroutineHandle> coroutines_;
 };
 
 } // namespace schuimm::room

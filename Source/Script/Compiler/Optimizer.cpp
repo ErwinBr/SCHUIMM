@@ -127,6 +127,7 @@ Lattice evaluate(const IrInstruction& instruction, const std::vector<Lattice>& s
     case IrOp::LoadNone:
     case IrOp::Call:
     case IrOp::CallNative:
+    case IrOp::Spawn:
     case IrOp::CheckRangeStep: return Lattice::varying();
     default: break;
     }
