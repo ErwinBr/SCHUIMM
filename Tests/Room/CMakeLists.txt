@@ -3,7 +3,7 @@
 # in rooms. Headless: scripts are compiled in-process into a scratch asset root, images are only
 # checked for existence or read for their headers (TestPng.h).
 schuimm_add_test(RoomTests
-    SOURCES ActorTests.cpp MovementTests.cpp RoomTests.cpp
+    SOURCES ActorTests.cpp MovementTests.cpp ObjectAnimationTests.cpp RoomTests.cpp
     LIBRARIES Schuimm::Room Schuimm::ScriptCompiler Schuimm::ThirdParty::Json
     LABELS unit)
 target_include_directories(RoomTests PRIVATE

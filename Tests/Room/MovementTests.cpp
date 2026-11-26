@@ -701,10 +701,10 @@ SCHUIMM_TEST(RoomDrawing_RuntimeStateAndReadOnlyDrawing)
     const auto room = sceneRoomInstance(fixture);
     // Objects use their runtime position and visibility; actors their runtime visibility.
     RoomObject& chest = *room->object("chest");
-    chest.position = {300, 260};
+    REQUIRE(chest.setPosition({300, 260}).has_value());
     RoomDrawList list = room->drawList();
     CHECK(list.items.back().kind == RoomDrawKind::Object); // Now in front of everything.
-    chest.visible = false;
+    chest.setVisible(false);
     room->actor("near")->setVisible(false);
     list = room->drawList();
     CHECK_EQ(list.items.size(), std::size_t{4});

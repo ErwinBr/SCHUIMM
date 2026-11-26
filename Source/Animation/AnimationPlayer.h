@@ -13,6 +13,13 @@
 // play(clip) never restarts a clip that is already playing or paused: movement code may request
 // the same clip every frame. Requesting the current clip when it is stopped or finished starts it
 // again from the beginning. restart() always starts from the beginning.
+//
+// Playback identity: playbackGeneration() names the current playback, independently of the clip.
+// It changes whenever a playback starts (play() returning true, restart()) or is stopped (stop()
+// from any other status, play() of an invalid clip). Pausing, resuming, advancing and finishing
+// keep it: a finished playback is still the same playback. So "the playback I started has
+// finished" is: same generation, status Finished; "it was stopped or replaced" is: a different
+// generation. (Completion tokens of animation operations use this; see Adventure.md.)
 
 #include "Animation/AnimationResource.h"
 
@@ -61,11 +68,13 @@ public:
     // Requires hasClip().
     [[nodiscard]] std::size_t frameIndex() const noexcept { return clip_.clip().frameAt(elapsed_); }
     [[nodiscard]] const AnimationFrame& currentFrame() const noexcept { return clip_.clip().frames[frameIndex()]; }
+    [[nodiscard]] std::uint64_t playbackGeneration() const noexcept { return generation_; }
 
 private:
     AnimationClipRef clip_;
     std::uint64_t elapsed_ = 0;
     PlaybackStatus status_ = PlaybackStatus::Stopped;
+    std::uint64_t generation_ = 0;
 };
 
 } // namespace schuimm::animation

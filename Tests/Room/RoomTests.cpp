@@ -538,7 +538,7 @@ SCHUIMM_TEST(Room_CompletionCriteria)
     CHECK(!cupboard->handle().isNull());
     CHECK(!(blender->handle() == cupboard->handle()));
     CHECK(room.object(blender->handle()) == blender);
-    CHECK(blender->position == (Vec2{420.0f, 310.0f}));
+    CHECK(blender->position() == (Vec2{420.0f, 310.0f}));
 
     REQUIRE(room.dispatch("cupboard", "look_at")->handled);
     REQUIRE(room.dispatch("blender", "look_at")->handled);
@@ -591,7 +591,7 @@ SCHUIMM_TEST(Room_ScriptObjectWithoutRoomObjectIsAnError)
     REQUIRE(resource.has_value());
     auto program = fixture.host.load(compileToBytecode("object fridge:\n\tfunc open():\n\t\tsay(\"cold\")\n"), "fridge.schb");
     REQUIRE(program.has_value());
-    auto instance = RoomInstance::create(LoadedRoom{std::make_shared<const RoomResource>(std::move(*resource)), *program, {}, nullptr, {}},
+    auto instance = RoomInstance::create(LoadedRoom{std::make_shared<const RoomResource>(std::move(*resource)), *program, {}, nullptr, {}, {}},
                                          fixture.host);
     REQUIRE(!instance.has_value());
     CHECK(contains(instance.error().message, "declares object 'fridge', which room 'kitchen' does not define"));
@@ -690,11 +690,11 @@ SCHUIMM_TEST(Room_InstancesHaveIndependentHandlesAndState)
 
     // State changes stay in the instance; the shared resource never changes.
     a->object("blender")->flags["is_running"] = true;
-    a->object("blender")->position = Vec2{1.0f, 2.0f};
-    a->object("cupboard")->visible = false;
+    REQUIRE(a->object("blender")->setPosition(Vec2{1.0f, 2.0f}).has_value());
+    a->object("cupboard")->setVisible(false);
     CHECK(b->object("blender")->flags.empty());
-    CHECK(b->object("blender")->position == (Vec2{420.0f, 310.0f}));
-    CHECK(b->object("cupboard")->visible);
+    CHECK(b->object("blender")->position() == (Vec2{420.0f, 310.0f}));
+    CHECK(b->object("cupboard")->visible());
     CHECK(a->resource().objects[0].position == (Vec2{420.0f, 310.0f}));
     CHECK(a->resource() == decode(fullRoom).value());
 

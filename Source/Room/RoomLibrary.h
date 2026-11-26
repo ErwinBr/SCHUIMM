@@ -10,6 +10,7 @@
 #include "Resource/ResourceCache.h"
 #include "Room/ActorLibrary.h"
 #include "Room/ActorResource.h"
+#include "Room/ObjectAnimation.h"
 #include "Room/RoomResource.h"
 #include "Script/Runtime/Program.h"
 #include "Script/Runtime/ScriptHost.h"
@@ -33,6 +34,9 @@ struct LoadedRoom {
     std::shared_ptr<const navigation::NavigationMap> navigation;
     // Sizes of the background, prop and object images (from their headers), for placing them.
     std::map<AssetPath, Extent2D> imageSizes;
+    // Per object (objectAnimations[i] for resource->objects[i]): its resolved animations, or
+    // null for a static or invisible object.
+    std::vector<std::shared_ptr<const ObjectAnimationSet>> objectAnimations;
 };
 
 // Checks that `room.actors` matches the placements and that each placement's configuration is
@@ -64,6 +68,7 @@ public:
 private:
     Status loadActors(const AssetPath& room, LoadedRoom& loaded);
     Status loadImageSizes(const AssetPath& room, LoadedRoom& loaded);
+    Status loadObjectAnimations(const AssetPath& room, LoadedRoom& loaded);
     Result<std::shared_ptr<const navigation::NavigationMap>> navigationFor(const AssetPath& room,
                                                                           const RoomResource& resource);
 

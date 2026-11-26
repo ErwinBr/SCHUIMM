@@ -94,10 +94,30 @@ property may be left out or set to `null` (the two mean the same).
 - `position`: point, required.
 - `pivot`: point, default `[0, 0]`.
 
-**Objects** (`objects[]`): `{ "id", "sprite", "position", "pivot" }`.
+**Objects** (`objects[]`): `{ "id", "position", ... }` with one of three visuals:
+- a **static sprite**: `sprite` (asset path) and `pivot`, as for props;
+- an **animation configuration**:
+  - `animation_resources`: `{ name: .anim.json path }`;
+  - `animations`: `{ name: { "resource", "clip" } }`, with no directions;
+  - `default_animation`.
+
+  All three are required together, and every frame carries its own pivot, so `pivot` is not
+  allowed. Clips are resolved when the room is loaded (`LoadedRoom::objectAnimations`), through
+  the same animation and image caches as actors;
+- **nothing**: an invisible object, such as a hotspot on the background.
+
+Rules:
 - `id`: identifier, required. This is the name a room script declares as `object <id>:`.
-- `sprite`: asset path, optional. An object without a sprite is an invisible object, such as a hotspot on the background. Its interaction area comes with the interaction milestone.
-- `position` and `pivot`: as for props.
+- `position`: point, required.
+- `sprite` together with an animation configuration is an error. This constrains the resource,
+  not what the object may show during play.
+
+At run time each animated object has its own `AnimationPlayer`, so objects sharing a resource
+never share playback. It starts its default animation when the room instance is created. It is
+advanced by `RoomInstance::update` together with the actors, visible or not, and drawn with its
+current frame. `RoomObject` offers validated `setPosition` and `setVisible`, and
+`playAnimation`, `pause`, `resume`, `stop` and `restart`, with the player's same-clip rules. On a
+static object or a hotspot the animation controls fail with `InvalidState`.
 - An object declares **no** events, handler names or capabilities. Which events an object reacts to is decided by the room script alone (see [Script association](#script-association)).
 
 **Scale map** (`scale_map`): `{ "type": "linear", "points": [{ "y", "scale" }, ...] }`.

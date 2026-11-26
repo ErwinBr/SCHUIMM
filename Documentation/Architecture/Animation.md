@@ -114,6 +114,7 @@ stays alive as long as any player uses it, even if the resource cache unloads it
 |---|---|
 | `play(clip)` | Selects and plays `clip`. If `clip` is already selected and **playing or paused**, nothing changes (it returns false). Movement code may request the same clip every frame. If the clip is selected but **stopped or finished**, it starts again from the beginning. A different clip starts from its first frame. |
 | `restart()` | The current clip from the beginning, playing. |
+| `playbackGeneration()` | Names the current playback. It changes when a playback starts (`play` returning true, `restart`) or is stopped (`stop` from another status). Pause, resume, advancing and finishing keep it, so "same generation and Finished" means the playback that was started has finished. |
 | `stop()` | Back to the first frame, not advancing. |
 | `pause()` / `resume()` | Playing ↔ paused; no effect in other states. |
 | `advance(ticks)` | Advances a playing clip. Returns `{finished}`, which is true only in the update where a non-looping clip completes, never again after that. |

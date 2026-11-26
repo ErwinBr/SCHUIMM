@@ -13,6 +13,8 @@
 #include "Resource/AssetPath.h"
 #include "Room/Facing.h"
 
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -37,9 +39,35 @@ struct RoomProp {
 
 // An interactive object: what a script's "object <id>:" declaration refers to. Without a sprite
 // it is an invisible object (a hotspot; its interaction area is a later milestone).
+// A logical animation of a room object: one clip of one of its animation resources. Objects
+// have no facings, so there are no directional variants.
+struct ObjectClipMapping {
+    std::string resource; // Name in ObjectAnimationConfig::resources.
+    std::string clip;
+
+    friend bool operator==(const ObjectClipMapping&, const ObjectClipMapping&) = default;
+};
+
+// The animation configuration of an animated room object, as authored. The clips are resolved
+// when the room is loaded (LoadedRoom::objectAnimations).
+struct ObjectAnimationConfig {
+    std::map<std::string, AssetPath, std::less<>> resources;         // Name -> .anim.json.
+    std::map<std::string, ObjectClipMapping, std::less<>> animations; // Logical name -> clip.
+    std::string defaultAnimation;                                     // Plays when the room starts.
+
+    friend bool operator==(const ObjectAnimationConfig&, const ObjectAnimationConfig&) = default;
+};
+
+// A room object's visual is one of three, chosen by the resource:
+//   * a static sprite (`sprite`, placed with `pivot`);
+//   * an animation configuration (`animation`; each frame carries its own pivot);
+//   * nothing: an invisible hotspot.
+// A definition never has both a sprite and an animation configuration; the loader rejects it.
+// This constrains the definition, not what scripts may show at run time.
 struct RoomObjectDefinition {
     std::string id;
     std::optional<AssetPath> sprite;
+    std::optional<ObjectAnimationConfig> animation;
     Vec2 position;
     Vec2 pivot;
 

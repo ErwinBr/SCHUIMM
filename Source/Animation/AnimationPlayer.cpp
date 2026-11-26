@@ -16,6 +16,7 @@ const char* playbackStatusName(PlaybackStatus status) noexcept
 bool AnimationPlayer::play(AnimationClipRef clip)
 {
     if (!clip.isValid()) {
+        if (clip_.isValid() || status_ != PlaybackStatus::Stopped) ++generation_;
         clip_ = AnimationClipRef();
         elapsed_ = 0;
         status_ = PlaybackStatus::Stopped;
@@ -25,6 +26,7 @@ bool AnimationPlayer::play(AnimationClipRef clip)
     clip_ = std::move(clip);
     elapsed_ = 0;
     status_ = PlaybackStatus::Playing;
+    ++generation_;
     return true;
 }
 
@@ -33,10 +35,12 @@ void AnimationPlayer::restart() noexcept
     if (!clip_.isValid()) return;
     elapsed_ = 0;
     status_ = PlaybackStatus::Playing;
+    ++generation_;
 }
 
 void AnimationPlayer::stop() noexcept
 {
+    if (status_ != PlaybackStatus::Stopped) ++generation_;
     elapsed_ = 0;
     status_ = PlaybackStatus::Stopped;
 }

@@ -75,7 +75,7 @@ struct Scene {
         resource.actors.push_back(ActorPlacement{"back", actorPath, {30, 20}, Facing::East, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
         resource.actors.push_back(ActorPlacement{"hidden", actorPath, {50, 90}, std::nullopt, std::string("glow"), std::nullopt, false, std::nullopt});
         room = LoadedRoom{std::make_shared<const RoomResource>(std::move(resource)), nullptr,
-                          {actorResource, actorResource, actorResource}, nullptr, {}};
+                          {actorResource, actorResource, actorResource}, nullptr, {}, {}};
     }
 };
 
@@ -217,4 +217,46 @@ SCHUIMM_TEST(RoomGraphics_DrawsTheBackgroundFirstAndRoomArtwork)
     const auto mismatch = RoomTextures::prepare(textures, room);
     REQUIRE(!mismatch.has_value());
     CHECK(mismatch.error().code == ErrorCode::InvalidData);
+}
+
+SCHUIMM_TEST(RoomGraphics_PreparesAndDrawsAnimatedObjects)
+{
+    // An animated room object (no actors): its frames' images are prepared with the room, and
+    // it is drawn with its current frame, pivot on its position.
+    Scene scene;
+    const auto animation = scene.room.actors[0]->animationResources.at("main").resource;
+    ObjectAnimationConfig config;
+    config.resources.emplace("main", AssetPath::parse("Anim/blob.anim.json").value());
+    config.animations.emplace("idle", ObjectClipMapping{"main", "idle"});
+    config.defaultAnimation = "idle";
+    const AnimationLoader load = [animation](const AssetPath&) -> Result<std::shared_ptr<const animation::AnimationResource>> {
+        return animation;
+    };
+    auto set = resolveObjectAnimations(config, load);
+    REQUIRE(set.has_value());
+    RoomResource resource;
+    resource.id = "objects";
+    resource.size = {100, 100};
+    resource.objects.push_back(RoomObjectDefinition{"fan", std::nullopt, config, {40, 60}, {}});
+    const LoadedRoom room{std::make_shared<const RoomResource>(std::move(resource)), nullptr, {}, nullptr, {}, {*set}};
+
+    FakeRenderer renderer;
+    const AssetLocator locator = testAssetLocator();
+    ResourceCache<Image> images(locator, loadImage);
+    TextureCache textures(renderer, images);
+    const auto prepared = RoomTextures::prepare(textures, room);
+    REQUIRE(prepared.has_value());
+    CHECK_EQ(prepared->size(), std::size_t{2}); // Every clip of the resource: rgba_4x2 and rgb_3x1.
+    const auto instance = RoomInstance::create(room, scene.host).value();
+    REQUIRE(drawRoom(renderer, instance->drawList(), *prepared).has_value());
+    REQUIRE(renderer.sprites.size() == 1);
+    CHECK(renderer.sprites[0].texture == prepared->find(AssetPath::parse("Images/rgba_4x2.png").value()));
+    CHECK(renderer.sprites[0].source == (RectF{0, 0, 2, 2}));
+    CHECK(renderer.sprites[0].destination == (RectF{39, 58, 2, 2})); // Pivot (1, 2) on (40, 60).
+    instance->update(2.0 / 60.0);
+    renderer.sprites.clear();
+    REQUIRE(drawRoom(renderer, instance->drawList(), *prepared).has_value());
+    CHECK(renderer.sprites[0].source == (RectF{2, 0, 2, 2}));
+    CHECK(renderer.sprites[0].destination == (RectF{40, 58, 2, 2})); // Pivot (0, 2).
+    CHECK_EQ(renderer.texturesCreated, 2); // Playback never creates textures.
 }

@@ -25,6 +25,21 @@ Result<std::unique_ptr<RoomInstance>> RoomInstance::create(LoadedRoom room, scri
     if (auto status = validateRoomActors(room); !status) {
         return makeError(status.error().code, concat("room '", room.resource->id, "': ", status.error().message));
     }
+    // Animated objects need their resolved animations (RoomLibrary::load provides them).
+    const auto& definitions = room.resource->objects;
+    if (!room.objectAnimations.empty() && room.objectAnimations.size() != definitions.size()) {
+        return makeError(ErrorCode::InvalidArgument, concat("room '", room.resource->id, "': ", definitions.size(),
+                                                            " objects but ", room.objectAnimations.size(),
+                                                            " object animation sets"));
+    }
+    for (std::size_t i = 0; i < definitions.size(); ++i) {
+        const bool resolved = i < room.objectAnimations.size() && room.objectAnimations[i] != nullptr;
+        if (definitions[i].animation.has_value() != resolved) {
+            return makeError(ErrorCode::InvalidArgument,
+                             concat("room '", room.resource->id, "': objects[", i, "] ('", definitions[i].id, "'): ",
+                                    resolved ? "animations for a static object" : "the animations are not resolved"));
+        }
+    }
     // Every actor is created before the instance exists: a failure publishes nothing.
     const auto& placements = room.resource->actors;
     std::vector<std::unique_ptr<ActorInstance>> actors;
@@ -47,9 +62,11 @@ RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vecto
     , owner_(host.createOwner())
     , actors_(std::move(actors))
 {
-    objects_.reserve(room_.resource->objects.size());
-    for (const RoomObjectDefinition& definition : room_.resource->objects) {
-        objects_.push_back(RoomObject(definition, detail::allocateObjectHandle()));
+    const auto& definitions = room_.resource->objects;
+    objects_.reserve(definitions.size());
+    for (std::size_t i = 0; i < definitions.size(); ++i) {
+        objects_.push_back(RoomObject(definitions[i], detail::allocateObjectHandle(),
+                                      i < room_.objectAnimations.size() ? room_.objectAnimations[i] : nullptr));
     }
 }
 
@@ -60,6 +77,79 @@ RoomInstance::~RoomInstance()
     SCHUIMM_VERIFY(!host_.isUpdating(), "a RoomInstance must not be destroyed while the ScriptHost updates");
     // Everything the room started, and everything those coroutines spawned.
     host_.cancelOwner(owner_);
+}
+
+RoomObject::RoomObject(const RoomObjectDefinition& definition, script::ObjectRef handle,
+                       std::shared_ptr<const ObjectAnimationSet> animations)
+    : definition_(&definition)
+    , handle_(handle)
+    , position_(definition.position)
+    , animations_(std::move(animations))
+{
+    if (animations_) {
+        // Validated when loading: the default animation exists.
+        animation_ = animations_->defaultAnimation;
+        player_.play(*animations_->find(animation_));
+    }
+}
+
+Status RoomObject::setPosition(Vec2 position)
+{
+    const auto valid = [](float c) { return std::isfinite(c) && std::fabs(c) <= maxActorCoordinate; };
+    if (!valid(position.x) || !valid(position.y)) {
+        return makeError(ErrorCode::InvalidArgument,
+                         concat("object '", id(), "': position (", position.x, ", ", position.y, ") must be finite and within ",
+                                static_cast<double>(maxActorCoordinate), " pixels of the origin"));
+    }
+    position_ = position;
+    return {};
+}
+
+Status RoomObject::requireAnimated(std::string_view operation) const
+{
+    if (animations_) return {};
+    return makeError(ErrorCode::InvalidState,
+                     concat("object '", id(), "' has no animations (", operation, " needs an animated object)"));
+}
+
+Status RoomObject::playAnimation(std::string_view name)
+{
+    if (auto status = requireAnimated("playing an animation"); !status) return status;
+    const animation::AnimationClipRef* clip = animations_->find(name);
+    if (clip == nullptr) {
+        return makeError(ErrorCode::NotFound, concat("object '", id(), "' has no animation '", name, "'"));
+    }
+    player_.play(*clip);
+    animation_ = std::string(name);
+    return {};
+}
+
+Status RoomObject::restartAnimation()
+{
+    if (auto status = requireAnimated("restarting an animation"); !status) return status;
+    player_.restart();
+    return {};
+}
+
+Status RoomObject::pauseAnimation()
+{
+    if (auto status = requireAnimated("pausing an animation"); !status) return status;
+    player_.pause();
+    return {};
+}
+
+Status RoomObject::resumeAnimation()
+{
+    if (auto status = requireAnimated("resuming an animation"); !status) return status;
+    player_.resume();
+    return {};
+}
+
+Status RoomObject::stopAnimation()
+{
+    if (auto status = requireAnimated("stopping an animation"); !status) return status;
+    player_.stop();
+    return {};
 }
 
 RoomObject* RoomInstance::object(std::string_view id) noexcept
@@ -121,6 +211,7 @@ void RoomInstance::update(double deltaSeconds)
     const std::uint64_t ticks = clock_.advance(deltaSeconds);
     if (ticks == 0) return;
     for (const std::unique_ptr<ActorInstance>& actor : actors_) actor->update(ticks);
+    for (RoomObject& object : objects_) object.update(ticks);
 }
 
 Result<MovementRequest> RoomInstance::walkTo(ActorInstance& actor, Vec2 destination, navigation::DestinationPolicy policy)
@@ -206,9 +297,18 @@ RoomDrawList RoomInstance::drawList() const
     }
     for (std::size_t i = 0; i < objects_.size(); ++i, ++sequence) {
         const RoomObject& object = objects_[i];
-        if (!object.visible || !object.definition().sprite) continue;
-        if (auto sprite = sized(*object.definition().sprite, object.position, object.definition().pivot)) {
-            list.items.push_back(RoomDrawItem{RoomDrawKind::Object, object.position.y, sequence, i, std::move(*sprite)});
+        if (!object.visible()) continue;
+        if (object.isAnimated()) {
+            if (!object.player().hasClip()) continue;
+            // The current frame, its pivot on the object's position (as for actors, unscaled).
+            ActorRenderState state = makeActorRenderState(object.player().currentFrame(), object.position(), 1.0f, false);
+            list.items.push_back(RoomDrawItem{RoomDrawKind::Object, object.position().y, sequence, i,
+                                              RoomSprite{std::move(state.image), state.source, state.destination, false}});
+            continue;
+        }
+        if (!object.definition().sprite) continue;
+        if (auto sprite = sized(*object.definition().sprite, object.position(), object.definition().pivot)) {
+            list.items.push_back(RoomDrawItem{RoomDrawKind::Object, object.position().y, sequence, i, std::move(*sprite)});
         }
     }
     for (std::size_t i = 0; i < actors_.size(); ++i, ++sequence) {

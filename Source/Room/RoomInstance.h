@@ -24,22 +24,25 @@
 // nor moved, so its address is stable.
 //
 // Updating: update(deltaSeconds) converts engine time to animation ticks (one AnimationClock per
-// instance, so every actor advances by the same ticks) and advances all actors, visible or not.
-// drawList() only reads: drawing never advances anything.
+// instance, so every actor and animated object advances by the same ticks) and advances all of
+// them once, visible or not. drawList() only reads: drawing never advances anything.
 //
-// Coroutines: the instance remembers the coroutines it started (dispatch(), start()) and cancels
-// those still alive when it is destroyed, so no handler of a destroyed room keeps running. An
-// instance must therefore not be destroyed while the ScriptHost updates (from a native or a
-// script event callback): the running coroutine cannot be cancelled. This is checked in every
-// build (violating it stops the program). Destroy rooms between frames.
+// Coroutines: the instance is the execution owner of the coroutines it starts (dispatch(),
+// start()) and of those they spawn, and cancels them all when it is destroyed, so no coroutine
+// of a destroyed room keeps running. An instance must not be destroyed while the ScriptHost
+// updates (from a native or a script event callback): the running coroutine only stops when its
+// native call returns, and that native may still use the room. This is checked in every build
+// (violating it stops the program). Destroy rooms between frames.
 // The ScriptHost must outlive its instances.
 
 #include "Core/Common/Error.h"
 #include "Core/Common/Geometry.h"
 #include "Animation/AnimationClock.h"
+#include "Animation/AnimationPlayer.h"
 #include "Room/ActorInstance.h"
 #include "Room/ActorRenderState.h"
 #include "Room/RoomDrawList.h"
+#include "Room/ObjectAnimation.h"
 #include "Room/RoomLibrary.h"
 #include "Room/RoomResource.h"
 #include "Script/Runtime/Program.h"
@@ -62,6 +65,21 @@ namespace schuimm::room {
 // the instance creates it; its state is initialised from the definition and is the instance's
 // own: changing it never changes the definition.
 //
+// State:
+//   * position and visibility, through validated setters (a position must be finite and within
+//     maxActorCoordinate, so nothing invalid reaches depth sorting or drawing);
+//   * flags, free-form state for the game;
+//   * for an animated object (its definition has an animation configuration): the current
+//     logical animation and its own AnimationPlayer. Objects sharing animation resources never
+//     share playback. The default animation starts when the object is created.
+//
+// Animation controls follow the AnimationPlayer's same-clip rule (AnimationPlayer.h):
+// playAnimation of the animation that is playing or paused continues it untouched; of a stopped
+// or finished one restarts it; of another one starts that from its beginning. On a static or
+// invisible-hotspot object (no animation configuration) every animation control fails with
+// InvalidState: an object never becomes animated at run time. Invisible animated objects keep
+// playing, like actors.
+//
 // Assignment is deleted, so the identity cannot be overwritten through objects() either. Copying
 // one out gives a snapshot that does not affect the room; so does "moving" one out, because there
 // is no move constructor (an rvalue is copied), so the room's object keeps its state.
@@ -77,22 +95,46 @@ public:
     [[nodiscard]] script::ObjectRef handle() const noexcept { return handle_; }
     [[nodiscard]] const std::string& id() const noexcept { return definition_->id; }
 
-    // Mutable runtime state.
-    Vec2 position;
-    bool visible = true;
+    [[nodiscard]] Vec2 position() const noexcept { return position_; }
+    // InvalidArgument (state unchanged) for non-finite coordinates or ones beyond
+    // maxActorCoordinate.
+    [[nodiscard]] Status setPosition(Vec2 position);
+    [[nodiscard]] bool visible() const noexcept { return visible_; }
+    void setVisible(bool visible) noexcept { visible_ = visible; }
+
+    // Free-form state for the game (not used by the engine).
     std::map<std::string, bool, std::less<>> flags;
+
+    // --- Animation (animated objects only) ------------------------------------------------------
+    [[nodiscard]] bool isAnimated() const noexcept { return animations_ != nullptr; }
+    // Its resolved animations; nullptr for a static object.
+    [[nodiscard]] const ObjectAnimationSet* animations() const noexcept { return animations_.get(); }
+    // The current logical animation; empty for a static object.
+    [[nodiscard]] const std::string& animation() const noexcept { return animation_; }
+    // NotFound for an unknown animation, InvalidState for a static object (state unchanged).
+    [[nodiscard]] Status playAnimation(std::string_view name);
+    [[nodiscard]] Status restartAnimation();
+    [[nodiscard]] Status pauseAnimation();
+    [[nodiscard]] Status resumeAnimation();
+    [[nodiscard]] Status stopAnimation();
+    // The object's playback (a player without clip for a static object).
+    [[nodiscard]] const animation::AnimationPlayer& player() const noexcept { return player_; }
+    // Advances playback by whole animation ticks (RoomInstance::update; nothing else does).
+    animation::AdvanceResult update(std::uint64_t ticks) noexcept { return player_.advance(ticks); }
 
 private:
     friend class RoomInstance;
-    RoomObject(const RoomObjectDefinition& definition, script::ObjectRef handle)
-        : position(definition.position)
-        , definition_(&definition)
-        , handle_(handle)
-    {
-    }
+    RoomObject(const RoomObjectDefinition& definition, script::ObjectRef handle,
+               std::shared_ptr<const ObjectAnimationSet> animations);
+    [[nodiscard]] Status requireAnimated(std::string_view operation) const;
 
     const RoomObjectDefinition* definition_;
     script::ObjectRef handle_;
+    Vec2 position_;
+    bool visible_ = true;
+    std::shared_ptr<const ObjectAnimationSet> animations_;
+    std::string animation_;
+    animation::AnimationPlayer player_;
 };
 
 // A view of a room's actors: ActorInstance& (or const ActorInstance&) in placement order, with

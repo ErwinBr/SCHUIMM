@@ -170,14 +170,84 @@ private:
     Status readObject(const Json& value, const std::string& path, IdMap& ids, std::vector<RoomObjectDefinition>& out) const
     {
         SCHUIMM_JSON_TRY(readJsonObject(value, path));
-        SCHUIMM_JSON_TRY(onlyKnown(value, path, {"id", "sprite", "position", "pivot"}));
+        SCHUIMM_JSON_TRY(onlyKnown(value, path, {"id", "sprite", "position", "pivot", "animation_resources", "animations",
+                                                 "default_animation"}));
         RoomObjectDefinition object;
         SCHUIMM_JSON_TRY(readUniqueIdentifier(value, path, ids, object.id));
+        const bool animated = optional(value, "animation_resources") != nullptr || optional(value, "animations") != nullptr ||
+                              optional(value, "default_animation") != nullptr;
         if (const Json* sprite = optional(value, "sprite")) {
+            if (animated) {
+                return fail(member(path, "sprite"), "an object has either a static sprite or animations "
+                                                    "(animation_resources, animations, default_animation), not both");
+            }
             SCHUIMM_JSON_TRY(readAssetPath(*sprite, member(path, "sprite"), object.sprite));
+        }
+        if (animated) {
+            if (optional(value, "pivot") != nullptr) {
+                return fail(member(path, "pivot"), "an animated object takes its pivot from its animation frames");
+            }
+            ObjectAnimationConfig config;
+            SCHUIMM_JSON_TRY(readObjectAnimation(value, path, config));
+            object.animation = std::move(config);
         }
         SCHUIMM_JSON_TRY(readPlacement(value, path, object.position, object.pivot));
         out.push_back(std::move(object));
+        return {};
+    }
+
+    // animation_resources {name: path}, animations {name: {resource, clip}} and
+    // default_animation, all three required together. Clip names are checked when the room is
+    // loaded, against the animation resources.
+    Status readObjectAnimation(const Json& value, const std::string& path, ObjectAnimationConfig& out) const
+    {
+        const Json* field = nullptr;
+        const std::string resourcesPath = member(path, "animation_resources");
+        SCHUIMM_JSON_TRY(required(value, path, "animation_resources", field));
+        SCHUIMM_JSON_TRY(readJsonObject(*field, resourcesPath));
+        if (field->empty()) return fail(resourcesPath, "an animated object needs at least one animation resource");
+        for (const auto& item : field->items()) {
+            const std::string itemPath = member(resourcesPath, item.key());
+            SCHUIMM_JSON_TRY(checkName(item.key(), itemPath, "animation resource"));
+            std::optional<AssetPath> asset;
+            SCHUIMM_JSON_TRY(readAssetPath(item.value(), itemPath, asset));
+            out.resources.emplace(item.key(), std::move(*asset));
+        }
+        const std::string animationsPath = member(path, "animations");
+        SCHUIMM_JSON_TRY(required(value, path, "animations", field));
+        SCHUIMM_JSON_TRY(readJsonObject(*field, animationsPath));
+        if (field->empty()) return fail(animationsPath, "an animated object needs at least one animation");
+        for (const auto& item : field->items()) {
+            const std::string itemPath = member(animationsPath, item.key());
+            SCHUIMM_JSON_TRY(checkName(item.key(), itemPath, "animation"));
+            SCHUIMM_JSON_TRY(readJsonObject(item.value(), itemPath));
+            SCHUIMM_JSON_TRY(onlyKnown(item.value(), itemPath, {"resource", "clip"}));
+            ObjectClipMapping mapping;
+            const Json* part = nullptr;
+            SCHUIMM_JSON_TRY(required(item.value(), itemPath, "resource", part));
+            SCHUIMM_JSON_TRY(readString(*part, member(itemPath, "resource"), mapping.resource));
+            if (!out.resources.contains(mapping.resource)) {
+                return fail(member(itemPath, "resource"),
+                            concat("no animation resource '", mapping.resource, "' in animation_resources"));
+            }
+            SCHUIMM_JSON_TRY(required(item.value(), itemPath, "clip", part));
+            SCHUIMM_JSON_TRY(readString(*part, member(itemPath, "clip"), mapping.clip));
+            out.animations.emplace(item.key(), std::move(mapping));
+        }
+        SCHUIMM_JSON_TRY(required(value, path, "default_animation", field));
+        SCHUIMM_JSON_TRY(readIdentifier(*field, member(path, "default_animation"), out.defaultAnimation));
+        if (!out.animations.contains(out.defaultAnimation)) {
+            return fail(member(path, "default_animation"), concat("no animation '", out.defaultAnimation, "'"));
+        }
+        return {};
+    }
+
+    Status checkName(const std::string& name, const std::string& path, std::string_view what) const
+    {
+        if (!json::isValidIdentifier(name)) {
+            return fail(path, concat("invalid ", what, " name '", name,
+                                     "' (letters, digits and '_' only, not starting with a digit)"));
+        }
         return {};
     }
 
@@ -390,6 +460,11 @@ Status verifyRoomAssets(const RoomResource& room, const AssetLocator& locator, s
     for (std::size_t i = 0; i < room.objects.size(); ++i) {
         if (room.objects[i].sprite) {
             SCHUIMM_JSON_TRY(check(*room.objects[i].sprite, member(element("objects", i), "sprite")));
+        }
+        if (room.objects[i].animation) {
+            for (const auto& [name, resource] : room.objects[i].animation->resources) {
+                SCHUIMM_JSON_TRY(check(resource, member(member(element("objects", i), "animation_resources"), name)));
+            }
         }
     }
     for (std::size_t i = 0; i < room.actors.size(); ++i) {

@@ -40,8 +40,9 @@ Result<LoadedRoom> RoomLibrary::load(const AssetPath& room)
 {
     auto resource = resources_.load(ResourceId<RoomResource>(room));
     if (!resource) return std::unexpected(resource.error());
-    LoadedRoom loaded{*resource, nullptr, {}, nullptr, {}};
+    LoadedRoom loaded{*resource, nullptr, {}, nullptr, {}, {}};
     if (auto status = loadImageSizes(room, loaded); !status) return std::unexpected(status.error());
+    if (auto status = loadObjectAnimations(room, loaded); !status) return std::unexpected(status.error());
     if (auto status = loadActors(room, loaded); !status) return std::unexpected(status.error());
     if (auto navigation = navigationFor(room, *loaded.resource); !navigation) {
         return std::unexpected(navigation.error());
@@ -103,6 +104,23 @@ Status RoomLibrary::loadImageSizes(const AssetPath& room, LoadedRoom& loaded)
     for (std::size_t i = 0; i < resource.objects.size(); ++i) {
         if (!resource.objects[i].sprite) continue;
         if (auto status = add(*resource.objects[i].sprite, concat("objects[", i, "].sprite")); !status) return status;
+    }
+    return {};
+}
+
+Status RoomLibrary::loadObjectAnimations(const AssetPath& room, LoadedRoom& loaded)
+{
+    const auto& objects = loaded.resource->objects;
+    loaded.objectAnimations.assign(objects.size(), nullptr);
+    const AnimationLoader load = [this](const AssetPath& path) { return actors_.loadAnimation(path); };
+    for (std::size_t i = 0; i < objects.size(); ++i) {
+        if (!objects[i].animation) continue;
+        auto set = resolveObjectAnimations(*objects[i].animation, load);
+        if (!set) {
+            return makeError(set.error().code, concat(room.view(), ": objects[", i, "] ('", objects[i].id, "'): ",
+                                                      set.error().message));
+        }
+        loaded.objectAnimations[i] = std::move(*set);
     }
     return {};
 }

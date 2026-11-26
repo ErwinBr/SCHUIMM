@@ -8,6 +8,7 @@ add_library(schuimm_room STATIC
     ActorLibrary.cpp
     ActorMovement.cpp
     ActorRenderState.cpp
+    ObjectAnimation.cpp
     ActorResource.cpp
     ActorResourceLoader.cpp
     Facing.cpp
