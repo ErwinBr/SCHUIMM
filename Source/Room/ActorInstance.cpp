@@ -147,8 +147,12 @@ void ActorInstance::beginWalk(MovementRequestId request, Vec2 requested, Vec2 re
                               Facing facing)
 {
     movement_.start(request, requested, resolved, std::move(path));
-    const Status walk = changeAnimation(resource_->movement->walkAnimation, facing, RestartFinished::No);
+    // Entering locomotion: the walk clip must play, even if it was selected but stopped, finished
+    // or paused before (it continues if it was already playing). Turns during the walk instead keep
+    // an unchanged clip exactly as it is.
+    const Status walk = changeAnimation(resource_->movement->walkAnimation, facing, RestartFinished::Yes);
     SCHUIMM_ASSERT(walk.has_value(), "the walk animation was checked for every facing of the walk");
+    player_.resume();
 }
 
 void ActorInstance::completeWalk(MovementRequestId request, Vec2 requested, Vec2 resolved)
@@ -169,7 +173,11 @@ void ActorInstance::advanceMovement(double seconds)
         movement_.advance(seconds, static_cast<double>(walkSpeed_), config.perspectiveSpeed ? perspective_ : nullptr);
     position_ = step.position;
     if (step.arrived) {
-        const Status idle = changeAnimation(config.idleAnimation, facing_, RestartFinished::No);
+        // Face the way the last segment was walked, even if it was entered and finished within this
+        // update (so the final facing does not depend on the update rate).
+        Facing facing = facing_;
+        if (step.lastDirection) facing = facingFromDirection(*step.lastDirection).value_or(facing_);
+        const Status idle = changeAnimation(config.idleAnimation, facing, RestartFinished::No);
         SCHUIMM_ASSERT(idle.has_value(), "the idle animation resolves for every facing of an accepted walk");
     } else if (step.segmentChanged) {
         if (const auto facing = facingFromDirection(movement_.segmentDirection())) {

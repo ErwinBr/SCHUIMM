@@ -349,6 +349,14 @@ walking.
 The request id tells a waiter whether "completed" means its own request. Script-level waiting comes
 in Milestone 4.4.
 
+**Requirement for 4.4:** `MovementState` describes only the latest request. A newer request
+overwrites it, so someone still waiting for an earlier request can see that it is no longer
+current, but not whether it completed or was cancelled first. Before blocking script movement
+functions exist, each request's terminal outcome (completed or cancelled, and when) must reach
+whatever waits for it. That can be a completion token, or a notification to the waiting
+coroutine, kept only while someone waits. There is no movement history. Request ids are the key
+for it.
+
 **Stopping and taking over** (the walk never fights an explicit request):
 - `stopWalking()` stops where the actor is (`Cancelled`) and selects the idle animation.
 - `setPosition()` cancels the walk and selects idle, so stale waypoints never pull the actor back.
@@ -379,10 +387,17 @@ on the compass directions.
 - **Zero-length segments** do not change the facing.
 
 **Animation**, always with the atomic `setAnimation(animation, facing)`:
-- **At the start:** the walk animation, in the first segment's facing.
+- **At the start:** the walk animation, in the first segment's facing. Starting a walk makes the
+  walk clip play: it restarts it if it was stopped or finished, resumes it if it was paused, and
+  continues it if it was playing.
 - **At each waypoint:** the walk animation, in the new facing. The same clip keeps playing,
   mirrored or not. A different clip starts over; directional clips are not phase-synchronised.
-- **On completion or cancellation:** the idle animation, keeping the last facing.
+- **On completion or cancellation:** the idle animation, keeping the last facing. On completion that
+  is the facing of the last segment walked, even when that segment was entered and finished within
+  one update, so the final facing does not depend on the update rate.
+- **Non-looping walk clips** are allowed. They hold their last frame for the rest of the walk; a
+  new walk, or a turn into a different clip, starts them again.
+- **The same clip for walking and idling:** arriving leaves it playing, by the unchanged-clip rule.
 
 Actors with fewer directions use the existing explicit mappings, mirroring and `fallback`. The
 walking actor in ActorDemo has north, south and east, with west mirrored.

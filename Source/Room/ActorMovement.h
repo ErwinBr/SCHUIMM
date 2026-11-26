@@ -58,7 +58,8 @@ public:
     void start(MovementRequestId request, Vec2 requested, Vec2 resolved, std::vector<Vec2> path);
     // A request that needed no walking.
     void completeImmediately(MovementRequestId request, Vec2 requested, Vec2 resolved);
-    // Moving -> Cancelled; no effect otherwise.
+    // Moving -> Cancelled, keeping the segment and the distance travelled (position() stays where
+    // the walk stopped); no effect otherwise.
     void cancel() noexcept;
 
     // The direction of the segment being walked ({0, 0} when not moving).
@@ -68,12 +69,16 @@ public:
         Vec2 position;
         bool segmentChanged = false; // A waypoint was passed.
         bool arrived = false;        // The destination was reached (status is now Completed).
+        // The direction of the last (non-degenerate) segment walked during this advance, the
+        // final one included: on arrival it gives the facing to keep, whatever the update rate.
+        std::optional<Vec2> lastDirection;
     };
     // Advances a moving controller by `seconds` (no effect when not moving or for seconds <= 0).
     // `speed` > 0 in room pixels per second; `perspective` (may be null) scales it.
     Step advance(double seconds, double speed, const ScaleMap* perspective);
 
-    // The position on the path (path start before moving).
+    // Where the walk is: on its current segment while moving or after a cancel, the resolved
+    // destination once completed, {0, 0} before any request.
     [[nodiscard]] Vec2 position() const noexcept;
 
 private:

@@ -108,8 +108,13 @@ Vec2 MovementController::segmentDirection() const noexcept
 
 Vec2 MovementController::position() const noexcept
 {
-    if (state_.path.empty()) return {};
-    if (!isMoving()) return state_.status == MovementStatus::Completed ? state_.resolved : state_.path.front();
+    switch (state_.status) {
+    case MovementStatus::Idle: return {};
+    case MovementStatus::Completed: return state_.resolved;
+    case MovementStatus::Moving:
+    case MovementStatus::Cancelled: break;
+    }
+    if (state_.nextWaypoint == 0 || state_.nextWaypoint >= state_.path.size()) return state_.resolved;
     const Vec2 a = state_.path[state_.nextWaypoint - 1];
     const Vec2 b = state_.path[state_.nextWaypoint];
     const double l = distance(a, b);
@@ -135,6 +140,7 @@ MovementController::Step MovementController::advance(double seconds, double spee
             remaining -= travel.time;
             state_.travelled = travel.distance;
             segmentDone = state_.travelled >= length;
+            step.lastDirection = b - a;
             if (!segmentDone && travel.time <= 0.0) break; // No numerical progress possible.
         }
         if (!segmentDone) break;

@@ -111,7 +111,7 @@ property may be left out or set to `null` (the two mean the same).
 - `id`: identifier, required.
 - `points`: a polygon, required, lying inside the room (`[0, width] × [0, height]`).
 - They may overlap and touch; together they form the walkable domain ([Navigation.md](Navigation.md)).
-- At most 32 walkable areas and 256 points in all.
+- At most 32 walkable areas and 256 points in all, and they may not produce more than 512 navigation corners where they overlap.
 
 **Regions** (`regions[]`): named areas whose behaviour scripts and future systems decide. The format declares none.
 - `{ "id", "type": "rectangle", "position", "size" }`: `position` is the top-left corner, and `size` is `[width, height]` with both greater than 0.
@@ -119,7 +119,7 @@ property may be left out or set to `null` (the two mean the same).
 
 **Polygons** must be simple ([Navigation.md](Navigation.md#polygon-validation-navigationpolygonh)):
 - 3 to 128 points;
-- no point repeated (within 10⁻³ px), and the last point not repeating the first: polygons close implicitly;
+- no point repeated (within 1/64 px), and the last point not repeating the first: polygons close implicitly;
 - a non-zero area;
 - no edges that fold back over each other, and no edges that intersect, touch or overlap.
 

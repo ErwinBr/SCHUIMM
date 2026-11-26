@@ -8,6 +8,7 @@
 #include "Navigation/NavigationMap.h"
 #include "Navigation/Polygon.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -104,8 +105,8 @@ SCHUIMM_TEST(Geometry_ClosestPointOnSegment)
     CHECK(closestPointOnSegment({15, -5}, {0, 0}, {10, 0}).point == (Vec2{10, 0}));
     CHECK(closestPointOnSegment({3, 3}, {2, 2}, {2, 2}).point == (Vec2{2, 2})); // Degenerate segment.
     CHECK(std::fabs(distanceToSegment({5, 5}, {0, 0}, {10, 0}) - 5.0) < 1e-12);
-    CHECK(pointOnSegment({5, 0.0005f}, {0, 0}, {10, 0}));
-    CHECK(!pointOnSegment({5, 0.01f}, {0, 0}, {10, 0}));
+    CHECK(pointOnSegment({5, 0.01f}, {0, 0}, {10, 0})); // Within 1/64 px.
+    CHECK(!pointOnSegment({5, 0.05f}, {0, 0}, {10, 0}));
 }
 
 SCHUIMM_TEST(Geometry_SegmentIntersection)
@@ -129,8 +130,8 @@ SCHUIMM_TEST(Geometry_SegmentIntersection)
     CHECK(overlap.kind == SKind::Overlap);
     CHECK(std::fabs(overlap.t - 0.4) < 1e-9);
     CHECK(std::fabs(overlap.tEnd - 1.0) < 1e-9);
-    CHECK(intersectSegments({0, 0}, {10, 0}, {5, 0.0005f}, {5, 5}).kind == SKind::Point); // Within tolerance.
-    CHECK(intersectSegments({0, 0}, {10, 0}, {5, 0.01f}, {5, 5}).kind == SKind::None);
+    CHECK(intersectSegments({0, 0}, {10, 0}, {5, 0.01f}, {5, 5}).kind == SKind::Point); // Within tolerance.
+    CHECK(intersectSegments({0, 0}, {10, 0}, {5, 0.05f}, {5, 5}).kind == SKind::None);
 }
 
 SCHUIMM_TEST(Geometry_PointInPolygon)
@@ -402,4 +403,93 @@ SCHUIMM_TEST(Navigation_ManyRandomPathsAreWalkable)
             checkPath(*map, *path, from, to);
         }
     }
+}
+
+// --- Precision at large coordinates ---
+
+SCHUIMM_TEST(Navigation_LargeCoordinatesWithDiagonalEdges)
+{
+    // Near x, y 60000 (float spacing 1/256 px), with non-axis-aligned edges and an overlap whose
+    // meeting points are not authored.
+    const Polygon a = {{60000.3f, 60000.7f}, {60800.1f, 60100.9f}, {60700.6f, 60900.2f}, {59900.4f, 60800.8f}};
+    const Polygon b = {{60500.5f, 60400.2f}, {61300.7f, 60300.3f}, {61400.1f, 61100.6f}, {60600.9f, 61200.4f}};
+    const auto map = makeMap({a, b});
+    CHECK_EQ(map->componentCount(), std::size_t{1});
+    // Every corner node, computed in double and stored as float, is still walkable.
+    std::size_t meetings = 0;
+    for (const auto& node : map->nodes()) {
+        CHECK(map->contains(node.point));
+        bool authored = false;
+        for (const Vec2 p : a) authored = authored || p == node.point;
+        for (const Vec2 p : b) authored = authored || p == node.point;
+        if (!authored) ++meetings;
+    }
+    CHECK(meetings >= 2);
+    // Nearest points on diagonal edges, from outside, are walkable.
+    for (const Vec2 outside : {Vec2{60400, 59000}, Vec2{59000, 60400}, Vec2{62000, 60700}, Vec2{60700, 62000}}) {
+        const Vec2 nearest = map->closestPoint(outside, 0);
+        CHECK(map->contains(nearest));
+        // And a path that ends there, and one that starts there, is walkable throughout.
+        const Vec2 inside{60400, 60450};
+        const auto there = map->findPath(inside, nearest);
+        REQUIRE(there.has_value());
+        checkPath(*map, *there, inside, nearest);
+        const auto back = map->findPath(nearest, {61000, 60800});
+        REQUIRE(back.has_value());
+        checkPath(*map, *back, nearest, {61000, 60800});
+    }
+}
+
+// --- Graph complexity ---
+
+SCHUIMM_TEST(Navigation_TooManyMeetingPointsFailQuickly)
+{
+    // 16 long horizontal and 16 long vertical strips: within the authored limits (32 polygons,
+    // 128 points), but every pair crosses in 4 points.
+    std::vector<Polygon> strips;
+    for (int i = 0; i < 16; ++i) {
+        const auto o = static_cast<float>(i * 60 + 10);
+        strips.push_back({{0, o}, {1000, o}, {1000, o + 20}, {0, o + 20}});
+        strips.push_back({{o, 0}, {o + 20, 0}, {o + 20, 1000}, {o, 1000}});
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const auto map = NavigationMap::create(strips);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    REQUIRE(!map.has_value());
+    CHECK(map.error().code == ErrorCode::InvalidArgument);
+    CHECK(map.error().message.find("produce more than 512 navigation corners (polygons overlap in too many places)") !=
+          std::string::npos);
+    CHECK(elapsed < std::chrono::seconds(2));
+}
+
+SCHUIMM_TEST(Navigation_ToleranceCoversFloatRounding)
+{
+    static_assert(geometryTolerance == 1.0 / 64.0);
+    // At 65536, neighbouring floats are 1/128 px apart: a point rounded there is within tolerance.
+    const float big = 65536.0f;
+    const float next = std::nextafter(big, 70000.0f);
+    CHECK(static_cast<double>(next - big) <= geometryTolerance / 2.0);
+}
+
+SCHUIMM_TEST(Navigation_ABusyValidMapBuildsInReasonableTime)
+{
+    // 10 horizontal and 10 vertical strips: 20 polygons crossing in 400 points, plus 80 authored
+    // points: 480 corners, close to the limit.
+    std::vector<Polygon> strips;
+    for (int i = 0; i < 10; ++i) {
+        const auto o = static_cast<float>(i * 95 + 10);
+        strips.push_back({{0, o}, {1000, o}, {1000, o + 20}, {0, o + 20}});
+        strips.push_back({{o, 0}, {o + 20, 0}, {o + 20, 1000}, {o, 1000}});
+    }
+    const auto start = std::chrono::steady_clock::now();
+    const auto map = NavigationMap::create(strips);
+    const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    if (!map) std::fprintf(stderr, "%s\n", map.error().message.c_str());
+    REQUIRE(map.has_value());
+    std::fprintf(stderr, "    %zu nodes, %zu edges, built in %.2f s\n", (*map)->nodes().size(), (*map)->edges().size(),
+                 elapsed);
+    CHECK(elapsed < 20.0);
+    const auto path = (*map)->findPath({15, 15}, {875, 875});
+    REQUIRE(path.has_value());
+    checkPath(**map, *path, {15, 15}, {875, 875});
 }

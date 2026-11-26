@@ -2,13 +2,17 @@
 
 // Geometric predicates for room geometry (polygons, navigation, movement), computed in double.
 //
-// Tolerance policy: one distance, geometryTolerance (1e-3 room pixels), decides whether two points
-// are the same and whether a point lies on a segment or line. It is a distance, never a raw
-// cross product: orientation() returns the signed distance of a point from a line, so the test
-// means the same thing for long and short edges. Room coordinates are floats of at most 65536 in
-// a room (float spacing there is 1/256 px), so 1e-3 px separates distinct stored coordinates while
-// absorbing the rounding of double computations on them. Areas use their own threshold
-// (Navigation/Polygon.h); angles need none (facing sectors are exact).
+// All arithmetic, differences of coordinates included, is done in double: the inputs are floats
+// (room coordinates), but a float difference would round before any double computation began.
+//
+// Tolerance policy: one distance, geometryTolerance (1/64 room pixel), decides whether two points
+// are the same and whether a point lies on a segment or line. It is a distance, never a raw cross
+// product: orientation() returns the signed distance of a point from a line, so the test means the
+// same thing for long and short edges. It must cover float rounding: points computed in double
+// (edge intersections, closest points, positions along a path) are stored as float, and in a room
+// (coordinates up to 65536) neighbouring floats are up to 1/128 px apart, so a stored point can be
+// 1/256 px off. 1/64 px (exact in binary) is four times that, and still far below a visible pixel.
+// Areas use their own threshold (Navigation/Polygon.h); angles need none (facing sectors are exact).
 
 #include "Core/Common/Geometry.h"
 
@@ -16,7 +20,7 @@
 
 namespace schuimm {
 
-inline constexpr double geometryTolerance = 1e-3;
+inline constexpr double geometryTolerance = 1.0 / 64.0;
 
 // Signed distance of c from the line through a and b: positive when c lies to the left of a->b in
 // a y-up frame (cross(b - a, c - a) > 0). 0 if a and b coincide.

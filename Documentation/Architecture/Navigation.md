@@ -49,7 +49,7 @@ room, but must be valid polygons too.
 A valid polygon is simple:
 
 - 3 to 128 points, all finite;
-- no two points within the tolerance of each other. This covers repeated points, zero-length
+- no two points within the tolerance (1/64 px) of each other. This covers repeated points, zero-length
   edges, and a last point that repeats the first (polygons close implicitly);
 - an area of at least 10⁻⁶ square pixels;
 - adjacent edges meet only at their shared point; they do not fold back over each other;
@@ -68,23 +68,34 @@ InvalidData: Rooms/Courtyard.room.json: navigation.walkable_areas[0].points: edg
 
 ## Numerical tolerance
 
-The tolerance is one distance: `geometryTolerance`, 10⁻³ room pixels. It decides whether two
-points are the same, and whether a point lies on a segment or a line.
+The tolerance is one distance: `geometryTolerance`, 1/64 room pixel. It decides whether two points
+are the same, and whether a point lies on a segment or a line.
 
 - **Orientation tests are distances.** `orientation(a, b, c)` returns the signed distance of `c`
   from line `ab`, not a raw cross product. So the same tolerance means the same thing for long
   and short edges.
-- **Why 10⁻³ px:** room coordinates are floats, and inside a room (at most 65536 px) neighbouring
-  floats are at most 1/256 px apart. 10⁻³ px separates distinct stored coordinates while
-  absorbing the rounding of double-precision computations on them.
+- **Double precision throughout.** All predicates compute in double, including the differences of
+  coordinates. A difference of two floats taken as a float would round before any double
+  computation began.
+- **Why 1/64 px.** Points computed in double are stored as floats: edge meeting points, nearest
+  points, and positions along a path. At room coordinates up to 65536, neighbouring floats are up
+  to 1/128 px apart, so a stored point can be 1/256 px off the exact one. An actor that walked to
+  a boundary point stands within that distance of the boundary and must still count as standing
+  on it. 1/64 px is four times the worst rounding, exact in binary, and far below a visible pixel.
+  Authored points must therefore be more than 1/64 px apart.
 - **Other thresholds:** areas have their own (above). Facing sectors are exact and need none.
-- **Precision:** all predicates compute in double.
 
 ## The navigation map (`Navigation/NavigationMap.h`)
 
 `NavigationMap::create(polygons)` builds an immutable map. `RoomLibrary` builds one per room
 resource and caches it, so every instance of the room shares it (`LoadedRoom::navigation`, which is
 null without walkable areas).
+
+**Size limit:** the corner nodes, which are authored points plus meeting points, are limited to
+512 (`maxNavigationNodes`), because overlapping polygons can meet in many more places than they
+have points. A room whose walkable areas produce more fails to load, quickly: collecting stops
+early. The error reads "the walkable areas produce more than 512 navigation corners (polygons
+overlap in too many places)". A map with 480 corners builds in about 1.2 s in a Debug build.
 
 **Precomputed:**
 - **Components:** found by union-find over pairs of polygons that intersect or touch, or where one
@@ -137,12 +148,12 @@ With V nodes (at most the walkable points plus their meeting points) and E polyg
 
 | Operation | Cost |
 |---|---|
-| Building the map | O(V²·E) segment tests (visibility graph), plus O(E²) for components and meeting points |
+| Building the map | O(V²·E) segment tests (visibility graph), plus O(E²) for components and meeting points; V ≤ 512, E ≤ 256 |
 | Segment test | O(E log E) |
 | A path query | O(V·E) to link the start and goal, then A* over at most V² edges: O(V² log V) |
 | Nearest reachable point | O(E) |
 
-With 256 points in a room this is fine for interactive use, which is what the limits ensure.
+The limits (256 authored points, 512 corner nodes) keep this fine for interactive use.
 
 **Practical limitations:**
 - there is no clearance for actor size;

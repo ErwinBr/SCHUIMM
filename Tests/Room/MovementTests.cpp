@@ -48,7 +48,10 @@ constexpr std::string_view walkerAnimation = R"({ "version": 1, "clips": {
     { "image": "Actors/walker.png", "source": [0, 32, 16, 32], "pivot": [8, 32], "duration": 6 },
     { "image": "Actors/walker.png", "source": [16, 32, 16, 32], "pivot": [8, 32], "duration": 6 } ] },
   "walk_north": { "loop": true, "frames": [ { "image": "Actors/walker.png", "source": [32, 32, 16, 32], "pivot": [8, 32], "duration": 6 } ] },
-  "walk_east": { "loop": true, "frames": [ { "image": "Actors/walker.png", "source": [48, 32, 16, 32], "pivot": [8, 32], "duration": 6 } ] }
+  "walk_east": { "loop": true, "frames": [ { "image": "Actors/walker.png", "source": [48, 32, 16, 32], "pivot": [8, 32], "duration": 6 } ] },
+  "walk_once": { "loop": false, "frames": [
+    { "image": "Actors/walker.png", "source": [0, 32, 16, 32], "pivot": [8, 32], "duration": 6 },
+    { "image": "Actors/walker.png", "source": [16, 32, 16, 32], "pivot": [8, 32], "duration": 6 } ] }
 } })";
 
 // Three authored directions, west mirrored, diagonals falling back to south.
@@ -81,6 +84,22 @@ constexpr std::string_view steadyActor = R"({ "version": 1, "id": "steady",
   "default_animation": "idle", "default_facing": "south", "perspective_scale": false,
   "movement": { "speed": 100, "walk_animation": "walk", "idle_animation": "idle", "perspective_speed": false } })";
 
+// A non-looping walk clip.
+constexpr std::string_view shufflerActor = R"({ "version": 1, "id": "shuffler",
+  "animation_resources": { "main": "Actors/walker.anim.json" },
+  "animations": { "idle": { "any": { "resource": "main", "clip": "idle_south" } },
+                  "walk": { "any": { "resource": "main", "clip": "walk_once" } } },
+  "default_animation": "idle", "default_facing": "south",
+  "movement": { "speed": 100, "walk_animation": "walk", "idle_animation": "idle" } })";
+
+// Walk and idle resolve to the same clip.
+constexpr std::string_view glideActor = R"({ "version": 1, "id": "glide",
+  "animation_resources": { "main": "Actors/walker.anim.json" },
+  "animations": { "idle": { "any": { "resource": "main", "clip": "walk_south" } },
+                  "walk": { "any": { "resource": "main", "clip": "walk_south" } } },
+  "default_animation": "idle", "default_facing": "south",
+  "movement": { "speed": 100, "walk_animation": "walk", "idle_animation": "idle" } })";
+
 constexpr std::string_view decorativeActor = R"({ "version": 1, "id": "plant",
   "animation_resources": { "main": "Actors/walker.anim.json" },
   "animations": { "idle": { "any": { "resource": "main", "clip": "idle_south" } } },
@@ -93,7 +112,16 @@ constexpr std::string_view flatRoom = R"({ "version": 1, "id": "flat", "size": {
     { "id": "hero", "actor": "Actors/walker.actor.json", "position": [100, 100] },
     { "id": "guard", "actor": "Actors/walker.actor.json", "position": [300, 250], "walk_speed": 50 },
     { "id": "stiff", "actor": "Actors/stiff.actor.json", "position": [200, 150] },
-    { "id": "plant", "actor": "Actors/plant.actor.json", "position": [50, 50] } ] })";
+    { "id": "plant", "actor": "Actors/plant.actor.json", "position": [50, 50] },
+    { "id": "shuffler", "actor": "Actors/shuffler.actor.json", "position": [50, 280] },
+    { "id": "glide", "actor": "Actors/glide.actor.json", "position": [350, 20] } ] })";
+
+// Far from the origin (float spacing 1/256 px there), with diagonal edges.
+constexpr std::string_view farRoom = R"({ "version": 1, "id": "far", "size": { "width": 65536, "height": 65536 },
+  "navigation": { "walkable_areas": [
+    { "id": "a", "points": [[60000.3, 60000.7], [60800.1, 60100.9], [60700.6, 60900.2], [59900.4, 60800.8]] },
+    { "id": "b", "points": [[60500.5, 60400.2], [61300.7, 60300.3], [61400.1, 61100.6], [60600.9, 61200.4]] } ] },
+  "actors": [ { "id": "hero", "actor": "Actors/steady.actor.json", "position": [60400, 60450] } ] })";
 
 // A U-shaped floor (the notch, x 160..240 and y 0..200, is not walkable), a separate balcony, and
 // a scale map from 0.5 at y 100 to 1.5 at y 300.
@@ -124,6 +152,9 @@ struct MovementFixture {
         write("Actors/stiff.actor.json", bytesOf(stiffActor));
         write("Actors/steady.actor.json", bytesOf(steadyActor));
         write("Actors/plant.actor.json", bytesOf(decorativeActor));
+        write("Actors/shuffler.actor.json", bytesOf(shufflerActor));
+        write("Actors/glide.actor.json", bytesOf(glideActor));
+        write("Rooms/Far.room.json", bytesOf(farRoom));
         write("Rooms/Flat.room.json", bytesOf(flatRoom));
         write("Rooms/Yard.room.json", bytesOf(uRoom));
         write("Rooms/Void.room.json", bytesOf(noNavigationRoom));
@@ -686,4 +717,129 @@ SCHUIMM_TEST(RoomDrawing_RuntimeStateAndReadOnlyDrawing)
     for (int i = 0; i < 5; ++i) (void)room->drawList();
     CHECK(hero.position() == before);
     CHECK(hero.player().elapsedTicks() == ticks);
+}
+
+// --- Review follow-ups: final facing, entering locomotion, cancel position, precision ---
+
+SCHUIMM_TEST(Movement_FinalFacingDoesNotDependOnTheUpdateRate)
+{
+    // Around the notch: the last segment (east, after a south-east one) starts close to the end,
+    // so a single large update passes the corner and arrives in the same advance.
+    for (const double step : {1.0 / 60.0, 100.0}) {
+        MovementFixture fixture;
+        const auto room = fixture.room("Yard");
+        ActorInstance& hero = *room->actor("hero");
+        REQUIRE(room->walkTo(hero, {320, 230}).has_value());
+        REQUIRE(hero.movement().path.size() >= 3);
+        run(*room, 100.0, step);
+        CHECK(hero.movementStatus() == MovementStatus::Completed);
+        const Vec2 last = hero.movement().path.back() - hero.movement().path[hero.movement().path.size() - 2];
+        CHECK(hero.facing() == facingFromDirection(last));
+        CHECK(clipName(hero) == (hero.facing() == Facing::East ? "idle_east" : "idle_south"));
+    }
+}
+
+SCHUIMM_TEST(Movement_StartingAWalkPlaysTheWalkClip)
+{
+    MovementFixture fixture;
+    const auto room = fixture.room("Flat");
+    ActorInstance& hero = *room->actor("hero");
+    // The walk clip already selected but stopped: a new walk plays it.
+    REQUIRE(hero.setAnimation("walk", Facing::East).has_value());
+    hero.stopAnimation();
+    REQUIRE(room->walkTo(hero, {300, 100}).has_value());
+    CHECK(clipName(hero) == "walk_east");
+    CHECK(hero.playbackStatus() == animation::PlaybackStatus::Playing);
+    // Paused during the walk: a new walk resumes it (it continues, it does not restart).
+    room->update(0.1);
+    hero.pauseAnimation();
+    const std::uint64_t ticks = hero.player().elapsedTicks();
+    REQUIRE(room->walkTo(hero, {350, 100}).has_value());
+    CHECK(hero.playbackStatus() == animation::PlaybackStatus::Playing);
+    CHECK(hero.player().elapsedTicks() == ticks);
+    // A turn during a walk keeps an unchanged clip as it is (here: west, the same clip mirrored).
+    room->update(0.1);
+    hero.pauseAnimation();
+    REQUIRE(room->walkTo(hero, {20, 100}).has_value()); // A new walk: resumed again.
+    CHECK(hero.flipX());
+    CHECK(hero.playbackStatus() == animation::PlaybackStatus::Playing);
+}
+
+SCHUIMM_TEST(Movement_NonLoopingWalkClipsHoldTheirLastFrame)
+{
+    MovementFixture fixture;
+    const auto room = fixture.room("Flat");
+    ActorInstance& shuffler = *room->actor("shuffler");
+    REQUIRE(room->walkTo(shuffler, {350, 280}).has_value());
+    room->update(1.0); // 60 ticks: the 12-tick clip finished, the walk goes on.
+    CHECK(shuffler.isWalking());
+    CHECK(shuffler.playbackStatus() == animation::PlaybackStatus::Finished);
+    CHECK_EQ(shuffler.player().frameIndex(), std::size_t{1});
+    // A new walk starts the finished clip again.
+    REQUIRE(room->walkTo(shuffler, {350, 200}).has_value());
+    CHECK(shuffler.playbackStatus() == animation::PlaybackStatus::Playing);
+    CHECK_EQ(shuffler.player().elapsedTicks(), std::uint64_t{0});
+}
+
+SCHUIMM_TEST(Movement_WalkAndIdleSharingAClipKeepPlaying)
+{
+    MovementFixture fixture;
+    const auto room = fixture.room("Flat");
+    ActorInstance& glide = *room->actor("glide");
+    REQUIRE(room->walkTo(glide, {350, 60}).has_value());
+    room->update(0.25);
+    const std::uint64_t ticks = glide.player().elapsedTicks();
+    room->update(1.1); // Arrives: idle is the same clip, which keeps playing (66 ticks: not a whole loop).
+    CHECK(glide.movementStatus() == MovementStatus::Completed);
+    CHECK(clipName(glide) == "walk_south");
+    CHECK(glide.playbackStatus() == animation::PlaybackStatus::Playing);
+    CHECK(glide.player().elapsedTicks() != ticks);
+}
+
+SCHUIMM_TEST(Movement_ControllerPositionAfterCancelling)
+{
+    MovementController controller;
+    CHECK(controller.position() == (Vec2{0, 0}));
+    controller.start(7, {100, 0}, {100, 0}, {{0, 0}, {100, 0}});
+    (void)controller.advance(0.4, 100.0, nullptr);
+    CHECK(controller.position() == (Vec2{40, 0}));
+    controller.cancel();
+    CHECK(controller.state().status == MovementStatus::Cancelled);
+    CHECK(controller.position() == (Vec2{40, 0})); // Where it stopped, not the path start.
+    CHECK(!controller.advance(1.0, 100.0, nullptr).arrived);
+    CHECK(controller.position() == (Vec2{40, 0}));
+
+    // The actor and its controller agree after stopWalking.
+    MovementFixture fixture;
+    const auto room = fixture.room("Flat");
+    ActorInstance& hero = *room->actor("hero");
+    REQUIRE(room->walkTo(hero, {300, 100}).has_value());
+    room->update(0.5);
+    hero.stopWalking();
+    const MovementState& state = hero.movement();
+    const Vec2 a = state.path[state.nextWaypoint - 1];
+    const Vec2 b = state.path[state.nextWaypoint];
+    CHECK(near(lerp(a, b, state.travelled / distance(a, b)), hero.position()));
+}
+
+SCHUIMM_TEST(Movement_WalkingOnDiagonalEdgesFarFromTheOrigin)
+{
+    MovementFixture fixture;
+    const auto room = fixture.room("Far");
+    ActorInstance& hero = *room->actor("hero");
+    // Outside, beyond a diagonal edge: resolved onto it. From there (a float position on the
+    // boundary) the actor can walk again.
+    for (const Vec2 outside : {Vec2{60400, 59000}, Vec2{62000, 60700}, Vec2{59000, 60400}, Vec2{60700, 62000}}) {
+        const auto there = room->walkTo(hero, outside);
+        REQUIRE(there.has_value());
+        room->update(1000.0);
+        CHECK(hero.movementStatus() == MovementStatus::Completed);
+        CHECK(hero.position() == there->resolved);
+        CHECK(room->navigation()->contains(hero.position()));
+        const auto again = room->walkTo(hero, {60600, 60500});
+        if (!again) std::fprintf(stderr, "%s\n", again.error().message.c_str());
+        REQUIRE(again.has_value());
+        room->update(1000.0);
+        CHECK(hero.position() == (Vec2{60600, 60500}));
+    }
 }

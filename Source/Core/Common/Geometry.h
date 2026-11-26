@@ -34,8 +34,14 @@ struct Vec2 {
 }
 [[nodiscard]] constexpr double lengthSquared(Vec2 v) noexcept { return dot(v, v); }
 [[nodiscard]] inline double length(Vec2 v) noexcept { return std::sqrt(lengthSquared(v)); }
-[[nodiscard]] constexpr double distanceSquared(Vec2 a, Vec2 b) noexcept { return lengthSquared(b - a); }
-[[nodiscard]] inline double distance(Vec2 a, Vec2 b) noexcept { return length(b - a); }
+// The difference is taken in double too (b - a as floats would round first).
+[[nodiscard]] constexpr double distanceSquared(Vec2 a, Vec2 b) noexcept
+{
+    const double dx = static_cast<double>(b.x) - static_cast<double>(a.x);
+    const double dy = static_cast<double>(b.y) - static_cast<double>(a.y);
+    return dx * dx + dy * dy;
+}
+[[nodiscard]] inline double distance(Vec2 a, Vec2 b) noexcept { return std::sqrt(distanceSquared(a, b)); }
 // The unit vector in v's direction; {0, 0} for a zero vector (callers that must distinguish test
 // the length first).
 [[nodiscard]] inline Vec2 normalized(Vec2 v) noexcept

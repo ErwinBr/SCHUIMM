@@ -69,7 +69,7 @@ Result<std::shared_ptr<const NavigationMap>> NavigationMap::create(std::vector<s
                                                             " walkable-area points in a room, found ", vertices));
     }
     std::shared_ptr<NavigationMap> map(new NavigationMap(std::move(polygons)));
-    map->build();
+    if (auto status = map->build(); !status) return std::unexpected(status.error());
     return std::shared_ptr<const NavigationMap>(std::move(map));
 }
 
@@ -78,8 +78,13 @@ NavigationMap::NavigationMap(std::vector<std::vector<Vec2>> polygons)
 {
 }
 
-void NavigationMap::build()
+Status NavigationMap::build()
 {
+    const auto tooComplex = [] {
+        return makeError(ErrorCode::InvalidArgument,
+                         concat("the walkable areas produce more than ", maxNavigationNodes,
+                                " navigation corners (polygons overlap in too many places)"));
+    };
     const std::size_t count = polygons_.size();
     bounds_.reserve(count);
     for (const auto& polygon : polygons_) {
@@ -116,6 +121,9 @@ void NavigationMap::build()
                     if (meet.kind == SegmentIntersection::Kind::Overlap) {
                         meetings.push_back(lerp(p[e], p[(e + 1) % p.size()], meet.tEnd));
                     }
+                    // Each meeting point is counted at most a few times (shared vertices); far more
+                    // than the node limit means pathological overlap: stop before the costly part.
+                    if (meetings.size() > 4 * maxNavigationNodes) return tooComplex();
                 }
             }
             // One inside the other without touching edges.
@@ -149,7 +157,9 @@ void NavigationMap::build()
     }
     for (const Vec2 point : meetings) {
         if (!strictlyInsideOther(point, count, count)) addNode(point);
+        if (nodes_.size() > maxNavigationNodes) return tooComplex();
     }
+    if (nodes_.size() > maxNavigationNodes) return tooComplex();
 
     adjacency_.resize(nodes_.size());
     for (std::size_t i = 0; i < nodes_.size(); ++i) {
@@ -162,6 +172,7 @@ void NavigationMap::build()
         }
     }
     for (auto& neighbours : adjacency_) std::sort(neighbours.begin(), neighbours.end());
+    return {};
 }
 
 bool NavigationMap::strictlyInsideOther(Vec2 point, std::size_t except, std::size_t exceptToo) const noexcept

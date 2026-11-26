@@ -31,6 +31,9 @@ namespace schuimm::navigation {
 
 inline constexpr std::size_t maxNavigationPolygons = 32;
 inline constexpr std::size_t maxNavigationVertices = 256; // Over all polygons.
+// Corner nodes of the visibility graph: authored points plus the points where polygons meet. Bounds
+// the O(V^2 E) build; overlapping polygons that meet in too many places fail instead.
+inline constexpr std::size_t maxNavigationNodes = 512;
 
 enum class DestinationPolicy {
     Strict,           // The destination must be walkable and reachable from the start.
@@ -53,8 +56,8 @@ public:
         std::size_t to = 0;
     };
 
-    // `polygons` must be valid (findPolygonDefect) and within the limits above (InvalidArgument
-    // otherwise).
+    // `polygons` must be valid (findPolygonDefect) and within the limits above, and must not produce
+    // more than maxNavigationNodes corner nodes (InvalidArgument otherwise).
     [[nodiscard]] static Result<std::shared_ptr<const NavigationMap>> create(std::vector<std::vector<Vec2>> polygons);
 
     NavigationMap(const NavigationMap&) = delete;
@@ -90,7 +93,7 @@ private:
     };
 
     explicit NavigationMap(std::vector<std::vector<Vec2>> polygons);
-    void build();
+    [[nodiscard]] Status build();
     [[nodiscard]] bool strictlyInsideOther(Vec2 point, std::size_t except, std::size_t exceptToo) const noexcept;
     [[nodiscard]] std::vector<Vec2> simplify(std::vector<Vec2> waypoints) const;
 

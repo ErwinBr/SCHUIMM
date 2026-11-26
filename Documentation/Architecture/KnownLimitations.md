@@ -105,7 +105,8 @@ See [Actors.md](Actors.md) and [Animation.md](Animation.md).
   when a walk turns at a waypoint.
 * Depth is the ground y; there are no occlusion masks, foreground layers or per-pixel depth.
 * Walking is not exposed to scripts yet (Milestone 4.4), and there is no script-level waiting for
-  a walk.
+  a walk. The movement state keeps only the latest request, so 4.4 must deliver each request's
+  outcome to its waiter ([Actors.md](Actors.md#walking)).
 
 ## Navigation and movement
 
@@ -114,7 +115,9 @@ See [Navigation.md](Navigation.md) and [Actors.md](Actors.md#movement).
   one another), no acceleration.
 * Navigation is static: no dynamic obstacles, navigation links or one-way areas.
 * Paths are geometrically shortest; travel time (perspective speed) does not affect the route.
-* At most 32 walkable areas and 256 walkable-area points per room (visibility-graph cost).
+* At most 32 walkable areas, 256 walkable-area points and 512 navigation corners per room
+  (visibility-graph cost).
+* Authored polygon points must be more than 1/64 px apart (the geometry tolerance).
 * No animation events, blending, state machines, multiple tracks or skeletal animation.
 * Actor state is not saved or restored yet.
 * Image sizes for animation frames come from the PNG header, but `AssetLocator` reads whole
