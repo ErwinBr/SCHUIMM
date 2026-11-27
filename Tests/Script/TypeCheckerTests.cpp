@@ -41,7 +41,7 @@ SCHUIMM_TEST(TypeChecker_InfersTypes)
     CHECK(variableType(c, "fd") == Type::Int);
     CHECK(variableType(c, "label") == Type::String);
     CHECK(variableType(c, "back") == Type::Int);
-    const std::string dump = dumpAst(*c.result.ast, &c.result.semantics);
+    const std::string dump = dumpAst(*c.result.units[0].ast, &c.result.semantics);
     CHECK(dump.find("Name size : int -> float") != std::string::npos); // widened in size * speed
 }
 

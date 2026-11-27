@@ -43,7 +43,11 @@ std::string describe(const ScriptError& error)
     text += concat(": ", error.message);
     for (std::size_t i = 1; i < error.stack.size(); ++i) {
         const StackFrameInfo& frame = error.stack[i];
-        text += concat("\n    called from '", frame.function, "' (line ", frame.position.line, ")");
+        if (!frame.script.empty() && frame.script != error.script) {
+            text += concat("\n    called from '", frame.function, "' (", frame.script, ":", frame.position.line, ")");
+        } else {
+            text += concat("\n    called from '", frame.function, "' (line ", frame.position.line, ")");
+        }
     }
     return text;
 }

@@ -1,6 +1,7 @@
-// schuimmc: compiles a SCHUIMM script (.sch) into bytecode (.schb) and prints debug dumps.
+// schuimmc: compiles SCHUIMM scripts (.sch) into bytecode (.schb) and prints debug dumps.
 //
-//   schuimmc [options] <input.sch>
+//   schuimmc [options] <input.sch>                      one room script on its own
+//   schuimmc [options] --global a.sch --room b.sch ...  several scripts into one program
 //
 // Exit codes: 0 success, 1 compile errors or I/O failure, 2 invalid command line.
 
@@ -25,16 +26,23 @@ using namespace schuimm::script;
 namespace {
 
 constexpr const char* usage =
-    "Usage: schuimmc [options] <input.sch>\n"
+    "Usage: schuimmc [options] <input.sch>...\n"
+    "       schuimmc [options] [--global FILE] [--room FILE] [--actor FILE] ...\n"
     "\n"
-    "Compiles a SCHUIMM script into platform-independent bytecode.\n"
+    "Compiles SCHUIMM scripts into platform-independent bytecode. All inputs form one\n"
+    "program: their global variables, functions and enums share one namespace.\n"
     "\n"
     "Options:\n"
     "  -o FILE        Write the bytecode to FILE (default: none, only check)\n"
     "  -O0            Disable the optimizer\n"
     "  -O1            Enable the optimizer (default)\n"
-    "  --name NAME    Source name recorded in diagnostics and debug information\n"
-    "                 (default: the input path as given)\n"
+    "  --global FILE  A global script: game-wide declarations only (repeatable)\n"
+    "  --room FILE    A room script (repeatable; also: an input without option)\n"
+    "  --actor FILE   An actor script (repeatable)\n"
+    "  --source-root DIR\n"
+    "                 Name each source by its path relative to DIR, as resources refer\n"
+    "                 to it (default: the path as given)\n"
+    "  --name NAME    Source name of the only input (diagnostics, debug information)\n"
     "  --interface N  Let the script call the native interface N besides the core\n"
     "                 interface (repeatable); see --list-interfaces\n"
     "  --list-interfaces\n"
@@ -68,9 +76,31 @@ const NativeInterface* findInterface(std::string_view name)
     return nullptr;
 }
 
+struct Input {
+    std::string path;
+    ScriptRole role = ScriptRole::Room;
+};
+
+// `path` relative to `root` when it lies inside it ("Rooms/Kitchen.sch"), else unchanged.
+std::string relativeName(const std::string& path, const std::string& root)
+{
+    if (root.empty()) return path;
+    std::string prefix = root;
+    if (prefix.back() != '/' && prefix.back() != '\\') prefix += '/';
+    if (path.size() > prefix.size() && path.compare(0, prefix.size(), prefix) == 0) {
+        std::string name = path.substr(prefix.size());
+        for (char& c : name) {
+            if (c == '\\') c = '/';
+        }
+        return name;
+    }
+    return path;
+}
+
 struct Options {
     std::vector<const NativeInterface*> interfaces;
-    std::string input;
+    std::vector<Input> inputs;
+    std::string sourceRoot;
     std::string output;
     std::string name;
     bool optimize = true;
@@ -98,12 +128,21 @@ int main(int argc, char** argv)
         if (argument == "-h" || argument == "--help") {
             std::fputs(usage, stdout);
             return 0;
-        } else if (argument == "-o" || argument == "--name") {
+        } else if (argument == "-o" || argument == "--name" || argument == "--source-root") {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "%s requires a value\n\n%s", argv[i], usage);
                 return 2;
             }
-            (argument == "-o" ? options.output : options.name) = argv[++i];
+            (argument == "-o" ? options.output : argument == "--name" ? options.name : options.sourceRoot) = argv[++i];
+        } else if (argument == "--global" || argument == "--room" || argument == "--actor") {
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "%s requires a value\n\n%s", argv[i], usage);
+                return 2;
+            }
+            const ScriptRole role = argument == "--global" ? ScriptRole::Global
+                                    : argument == "--room" ? ScriptRole::Room
+                                                           : ScriptRole::Actor;
+            options.inputs.push_back({argv[++i], role});
         } else if (argument == "--interface") {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "%s requires a value\n\n%s", argv[i], usage);
@@ -150,38 +189,56 @@ int main(int argc, char** argv)
         } else if (!argument.empty() && argument[0] == '-') {
             std::fprintf(stderr, "Unknown option %s\n\n%s", argv[i], usage);
             return 2;
-        } else if (options.input.empty()) {
-            options.input = std::string(argument);
         } else {
-            std::fprintf(stderr, "Only one input file is accepted\n\n%s", usage);
-            return 2;
+            options.inputs.push_back({std::string(argument), ScriptRole::Room});
         }
     }
-    if (options.input.empty()) {
+    if (options.inputs.empty()) {
         std::fputs(usage, stderr);
         return 2;
     }
-
-    auto bytes = fs::readFile(options.input, 16u << 20);
-    if (!bytes) {
-        std::fprintf(stderr, "schuimmc: %s\n", describe(bytes.error()).c_str());
-        return 1;
+    if (!options.name.empty() && options.inputs.size() != 1) {
+        std::fprintf(stderr, "--name needs exactly one input; use --source-root to name several\n\n%s", usage);
+        return 2;
     }
-    const SourceFile source(options.name.empty() ? options.input : options.name,
-                            std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size()));
+
+    std::vector<SourceFile> sources;
+    sources.reserve(options.inputs.size());
+    for (std::size_t i = 0; i < options.inputs.size(); ++i) {
+        const Input& input = options.inputs[i];
+        auto bytes = fs::readFile(input.path, 16u << 20);
+        if (!bytes) {
+            std::fprintf(stderr, "schuimmc: %s\n", describe(bytes.error()).c_str());
+            return 1;
+        }
+        std::string name = options.name.empty() ? relativeName(input.path, options.sourceRoot) : options.name;
+        sources.emplace_back(std::move(name), std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size()),
+                             static_cast<std::uint32_t>(i));
+    }
+    std::vector<ProjectSource> project;
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        project.push_back({&sources[i], options.inputs[i].role});
+    }
     CompileOptions compileOptions;
     compileOptions.optimize = options.optimize;
     compileOptions.interfaces = options.interfaces;
-    const CompileResult result = compile(source, compileOptions);
+    const CompileResult result = compileProject(project, compileOptions);
 
-    if (options.tokens) print("tokens", dumpTokens(result.tokens));
-    if (options.ast && result.ast) print("ast", dumpAst(*result.ast));
-    if (options.types && result.ast && !result.diagnostics.hasErrors()) print("types", dumpAst(*result.ast, &result.semantics));
+    const auto unitTitle = [&](const char* title, const CompiledUnit& unit) {
+        return result.units.size() == 1 ? std::string(title) : concat(title, ": ", unit.source->name());
+    };
+    for (const CompiledUnit& unit : result.units) {
+        if (options.tokens) print(unitTitle("tokens", unit), dumpTokens(unit.tokens));
+        if (options.ast && unit.ast) print(unitTitle("ast", unit), dumpAst(*unit.ast));
+        if (options.types && unit.ast && !result.diagnostics.hasErrors()) {
+            print(unitTitle("types", unit), dumpAst(*unit.ast, &result.semantics));
+        }
+    }
     if (options.ir && result.success) print("ir", dumpIr(result.ir));
     if (options.irOptimized && result.success) print(options.optimize ? "optimized ir" : "ir (-O0)", dumpIr(result.optimizedIr));
     if (options.disassembly && result.success) print("bytecode", disassemble(result.module));
 
-    const std::string diagnostics = formatDiagnostics(result, source);
+    const std::string diagnostics = formatDiagnostics(result);
     if (!diagnostics.empty()) {
         std::fputs(diagnostics.c_str(), stderr);
     }
@@ -210,7 +267,9 @@ int main(int argc, char** argv)
                 return 1;
             }
         }
-        std::printf("%s -> %s (%zu bytes, %zu functions%s)\n", options.input.c_str(), options.output.c_str(), encoded->size(),
+        const std::string inputs = options.inputs.size() == 1 ? options.inputs.front().path
+                                                              : concat(options.inputs.size(), " sources");
+        std::printf("%s -> %s (%zu bytes, %zu functions%s)\n", inputs.c_str(), options.output.c_str(), encoded->size(),
                     result.module.functions.size(), options.optimize ? "" : ", unoptimized");
     }
     return 0;

@@ -320,11 +320,11 @@ SCHUIMM_TEST(Bytecode_MalformedSectionsAndOverflowingOffsets)
     // A function whose code range overflows.
     bytes = good;
     const std::size_t functions = sectionOffset(good, format::SectionId::Functions) + 4;
-    // main(): name u32, return u8, param count u8 (0), registers u16, one type byte per
-    // register, code offset u32, length u32.
-    const std::size_t registers = static_cast<std::size_t>(good[functions + 6]) | (static_cast<std::size_t>(good[functions + 7]) << 8);
-    putU32(bytes, functions + 8 + registers, 0xFFFFFFFFu);
-    putU32(bytes, functions + 12 + registers, 2);
+    // main(): name u32, source u32, return u8, param count u8 (0), registers u16, one type byte
+    // per register, code offset u32, length u32.
+    const std::size_t registers = static_cast<std::size_t>(good[functions + 10]) | (static_cast<std::size_t>(good[functions + 11]) << 8);
+    putU32(bytes, functions + 12 + registers, 0xFFFFFFFFu);
+    putU32(bytes, functions + 16 + registers, 2);
     fixCrc(bytes);
     CHECK(failsWith(bytes, "code range"));
     // Trailing bytes inside a section.
@@ -393,6 +393,8 @@ SCHUIMM_TEST(Bytecode_ValidateModuleForInMemoryModules)
     CHECK(validateModule(sampleModule()).has_value());
     Module empty;
     empty.strings = {"x"};
+    CHECK(!validateModule(empty).has_value()); // Every module has a source.
+    empty.sources = {{0, ScriptRole::Room}};
     CHECK(validateModule(empty).has_value()); // A module without functions is valid (but has no entry).
     Module noCode = empty;
     noCode.functions.push_back({});
@@ -451,25 +453,25 @@ bool invalidModule(const Module& module, std::string_view text)
 SCHUIMM_TEST(Bytecode_ObjectsRoundTrip)
 {
     const Module original = objectModule();
-    REQUIRE(original.objects.size() == 2);
+    REQUIRE(original.behaviours.size() == 2);
     const std::vector<std::byte> bytes = encodeModule(original);
     CHECK_EQ(getU32(bytes, 24), format::sectionCount);
     auto read = readBytecode(bytes);
     REQUIRE(read.has_value());
     CHECK_EQ(read->formatMinor, bytecodeFormatMinor);
-    REQUIRE(read->objects.size() == 2);
+    REQUIRE(read->behaviours.size() == 2);
     for (std::size_t o = 0; o < 2; ++o) {
-        CHECK_EQ(read->objects[o].nameIndex, original.objects[o].nameIndex);
-        REQUIRE(read->objects[o].handlers.size() == original.objects[o].handlers.size());
-        for (std::size_t h = 0; h < original.objects[o].handlers.size(); ++h) {
-            CHECK_EQ(read->objects[o].handlers[h].nameIndex, original.objects[o].handlers[h].nameIndex);
-            CHECK_EQ(read->objects[o].handlers[h].function, original.objects[o].handlers[h].function);
+        CHECK_EQ(read->behaviours[o].nameIndex, original.behaviours[o].nameIndex);
+        REQUIRE(read->behaviours[o].handlers.size() == original.behaviours[o].handlers.size());
+        for (std::size_t h = 0; h < original.behaviours[o].handlers.size(); ++h) {
+            CHECK_EQ(read->behaviours[o].handlers[h].nameIndex, original.behaviours[o].handlers[h].nameIndex);
+            CHECK_EQ(read->behaviours[o].handlers[h].function, original.behaviours[o].handlers[h].function);
         }
     }
     CHECK(encodeModule(*read) == bytes);
     const std::string listing = disassemble(*read);
-    CHECK(listing.find("; SCHUIMM bytecode 2.0, language 2.0") != std::string::npos);
-    CHECK(listing.find("  blender: look_at -> f2 use -> f3\n  cupboard: look_at -> f4\n") != std::string::npos);
+    CHECK(listing.find("; SCHUIMM bytecode 3.0, language 3.0") != std::string::npos);
+    CHECK(listing.find("  object blender: look_at -> f2 use -> f3\n  object cupboard: look_at -> f4\n") != std::string::npos);
     CHECK(listing.find("function f3 blender.use(object, object) -> bool") != std::string::npos);
     CHECK(listing.find("EqRef") != std::string::npos);
     // Room-level "use" and the handler "blender.use" coexist; lookup keeps them apart.
@@ -485,12 +487,13 @@ SCHUIMM_TEST(Bytecode_ObjectsRoundTrip)
     CHECK_EQ((*program)->functionDisplayName(1), std::string("use"));
 }
 
-SCHUIMM_TEST(Bytecode_FormatOneIsRejected)
+SCHUIMM_TEST(Bytecode_EarlierFormatsAreRejected)
 {
-    // Format 2.0 changed the encoding (typed registers, enums); 1.x files are not read.
+    // Format 3.0 changed the encoding (sources, behaviours); 1.x and 2.x files are not read.
     std::vector<std::byte> bytes = encodeModule(objectModule());
+    for (const std::uint16_t major : {std::uint16_t{1}, std::uint16_t{2}})
     for (const std::uint16_t minor : {std::uint16_t{0}, std::uint16_t{1}}) {
-        putU16(bytes, 4, 1);
+        putU16(bytes, 4, major);
         putU16(bytes, 6, minor);
         fixCrc(bytes);
         CHECK(failsWith(bytes, "recompile the script from its source", ErrorCode::Unsupported));
@@ -502,27 +505,27 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
     const Module good = objectModule();
     REQUIRE(validateModule(good).has_value());
     Module m = good;
-    m.objects.push_back(m.objects[0]);
+    m.behaviours.push_back(m.behaviours[0]);
     CHECK(invalidModule(m, "duplicate object 'blender'"));
     m = good;
-    m.objects[0].handlers.push_back(m.objects[0].handlers[0]);
-    CHECK(invalidModule(m, "duplicate handler 'look_at' in object 'blender'"));
+    m.behaviours[0].handlers.push_back(m.behaviours[0].handlers[0]);
+    CHECK(invalidModule(m, "duplicate handler 'look_at' in 'blender'"));
     m = good;
-    m.objects[0].handlers[0].function = 99;
+    m.behaviours[0].handlers[0].function = 99;
     CHECK(invalidModule(m, "refers to missing function 99"));
     m = good;
-    m.objects[1].handlers[0].function = m.objects[0].handlers[0].function;
+    m.behaviours[1].handlers[0].function = m.behaviours[0].handlers[0].function;
     CHECK(invalidModule(m, "is the handler of more than one event"));
     m = good;
-    m.objects[0].handlers[0].function = 0; // helper(int), renamed look_at: no self parameter.
-    m.functions[0].nameIndex = m.objects[0].handlers[0].nameIndex;
+    m.behaviours[0].handlers[0].function = 0; // helper(int), renamed look_at: no self parameter.
+    m.functions[0].nameIndex = m.behaviours[0].handlers[0].nameIndex;
     CHECK(invalidModule(m, "must take the object (self) as its first parameter"));
     m = good;
-    m.objects[0].nameIndex = 9999;
-    CHECK(invalidModule(m, "object 0 refers to a missing name"));
+    m.behaviours[0].nameIndex = 9999;
+    CHECK(invalidModule(m, "object behaviour 0 refers to a missing name"));
     m = good;
-    m.objects[0].handlers[1].nameIndex = 9999;
-    CHECK(invalidModule(m, "handler 1 of object 'blender' refers to a missing name"));
+    m.behaviours[0].handlers[1].nameIndex = 9999;
+    CHECK(invalidModule(m, "handler 1 of 'blender' refers to a missing name"));
     // Handler names need only be unique within their object, room functions among themselves.
     m = good;
     m.functions[1].nameIndex = m.functions[0].nameIndex;
@@ -533,17 +536,46 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
         REQUIRE(found != good.strings.end());
         return static_cast<std::uint32_t>(found - good.strings.begin());
     };
+    // Objects do not share the game-wide namespace: an object may be named like a function or a
+    // native, and a behaviour without handlers is well-formed.
     m = good;
-    m.objects[1].handlers.clear();
-    CHECK(invalidModule(m, "object 'cupboard' has no handlers"));
+    m.behaviours[1].handlers.clear();
+    CHECK(validateModule(m).has_value());
     m = good;
-    m.objects[0].nameIndex = stringIndex("helper");
-    CHECK(invalidModule(m, "object 'helper' has the same name as a room-level function"));
+    m.behaviours[0].nameIndex = stringIndex("helper");
+    CHECK(validateModule(m).has_value());
     m = good;
-    m.objects[0].nameIndex = stringIndex("print");
-    CHECK(invalidModule(m, "object 'print' has the same name as a native import"));
+    m.behaviours[0].nameIndex = stringIndex("print");
+    CHECK(validateModule(m).has_value());
+    // Sources: behaviours of the right role, at most one room behaviour per source, existing
+    // sources for functions.
     m = good;
-    m.functions[m.objects[0].handlers[0].function].nameIndex = stringIndex("helper");
+    m.sources[0].role = ScriptRole::Global;
+    CHECK(invalidModule(m, "behaviour 0 (object) belongs to a global script"));
+    m = good;
+    m.behaviours[0].source = 7;
+    CHECK(invalidModule(m, "behaviour 0 refers to missing source 7"));
+    m = good;
+    m.functions[0].source = 7;
+    CHECK(invalidModule(m, "function 0 refers to missing source 7"));
+    m = good;
+    m.behaviours.push_back({BehaviourKind::Room, 0, noString, {}});
+    m.behaviours.push_back({BehaviourKind::Room, 0, noString, {}});
+    CHECK(invalidModule(m, "has more than one room behaviour"));
+    m = good;
+    m.behaviours.push_back({BehaviourKind::Actor, 0, noString, {}});
+    CHECK(invalidModule(m, "behaviour 2 (actor) belongs to a room script"));
+    m = good;
+    m.behaviours.push_back({BehaviourKind::Room, 0, stringIndex("helper"), {}});
+    CHECK(invalidModule(m, "behaviour 2 (room) must not have a name"));
+    m = good;
+    m.sources.push_back(m.sources[0]);
+    CHECK(invalidModule(m, "duplicate source 'test.sch'"));
+    m = good;
+    m.sources.clear();
+    CHECK(invalidModule(m, "the module has no sources"));
+    m = good;
+    m.functions[m.behaviours[0].handlers[0].function].nameIndex = stringIndex("helper");
     CHECK(invalidModule(m, "which has a different name"));
     // Handlers are started by dispatch only, never by Call (blender.look_at calls helper).
     m = good;
@@ -551,7 +583,7 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
     for (Function& function : m.functions) {
         for (Instruction& instruction : function.code) {
             if (instruction.opcode == Opcode::Call && !patched) {
-                instruction.b = static_cast<std::uint16_t>(m.objects[1].handlers[0].function);
+                instruction.b = static_cast<std::uint16_t>(m.behaviours[1].handlers[0].function);
                 patched = true;
             }
         }
@@ -560,10 +592,10 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
     CHECK(invalidModule(m, "calls handler 'cupboard.look_at'; handlers are only started by event dispatch"));
     // A truncated objects section.
     std::vector<std::byte> bytes = encodeModule(good);
-    const std::size_t objects = sectionOffset(bytes, format::SectionId::Objects);
+    const std::size_t objects = sectionOffset(bytes, format::SectionId::Behaviours);
     putU32(bytes, objects, 1000);
     fixCrc(bytes);
-    CHECK(failsWith(bytes, "truncated object table"));
+    CHECK(failsWith(bytes, "truncated behaviour table"));
 }
 
 SCHUIMM_TEST(Bytecode_RandomCorruptionOfObjectsNeverCrashes)
@@ -606,7 +638,8 @@ SCHUIMM_TEST(Bytecode_RandomCorruptionOfObjectsNeverCrashes)
                 for (const TypeRef type : module.functions[f].parameters) arguments.push_back(argumentFor(type));
                 (void)scheduler.start(*program, (*program)->functionName(f), arguments);
             }
-            for (const ObjectEntry& object : module.objects) {
+            for (const BehaviourEntry& object : module.behaviours) {
+                if (object.kind != BehaviourKind::Object) continue;
                 for (const HandlerEntry& handler : object.handlers) {
                     const Function& function = module.functions[handler.function];
                     std::vector<Value> arguments;

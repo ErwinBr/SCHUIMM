@@ -97,10 +97,14 @@ ScriptError Coroutine::makeError(ScriptErrorKind kind, std::string message, std:
         const std::uint32_t ip = (i + 1 == frames_.size()) ? innermostIp : (frame.ip > 0 ? frame.ip - 1 : 0);
         StackFrameInfo info;
         info.function = program_->functionDisplayName(frame.function);
+        info.script = program_->functionSource(frame.function);
         if (ip < function.positions.size()) {
             info.position = function.positions[ip];
         }
         error.stack.push_back(std::move(info));
+    }
+    if (!frames_.empty()) {
+        error.script = program_->functionSource(frames_.back().function);
     }
     if (!error.stack.empty()) {
         error.function = error.stack.front().function;

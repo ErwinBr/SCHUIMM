@@ -1,7 +1,8 @@
 # Script compiler
 
 `schuimm_script_compiler` (`Source/Script/Compiler`) turns source text into a bytecode
-[module](Bytecode.md). It depends only on `schuimm_core` and `schuimm_script_bytecode`: no
+[module](Bytecode.md): one file on its own, or the scripts of a whole game into one program
+([Project compilation](#project-compilation)). It depends only on `schuimm_core` and `schuimm_script_bytecode`: no
 platform, graphics or audio code, no file I/O, and nothing of the game runtime. The game does not
 link it; scripts are compiled ahead of time with `schuimmc`.
 
@@ -15,9 +16,55 @@ SourceFile ──tokenize──► tokens ──parse──► AST ──checkTy
           └──validateModule (the runtime's own validator, as a self-check)
 ```
 
-`compile()` (`Compiler.h`) runs all stages and returns a `CompileResult` with every
-intermediate product (tokens, AST, semantic model, IR before and after optimisation, module) for
-dumps and tests. Each stage is also a separate function with its own header and tests.
+`compileProject()` (`Compiler.h`) runs all stages over a set of sources and returns a
+`CompileResult` with every intermediate product (per source its tokens and AST, then the
+semantic model, IR before and after optimisation and the module) for dumps and tests.
+`compile()` is the same for one file, as a room script. Each stage is also a separate function
+with its own header and tests.
+
+## Project compilation
+
+A game's scripts form **one program**: every top-level declaration of every participating file
+(functions, `extern func`, enums) is visible in every other file, without imports, exports or a
+file that lists them. The design choice (*Strategy A*): all sources compile into **one linked
+module**. That module has one function table and one enum table, so a call into another file is
+an ordinary `Call`, an enum has one identity everywhere, and the runtime needs no linker between
+scripts. Compiled code stays immutable; the mutable state of a game (later: its variables)
+lives outside the program.
+
+`compileProject(sources, options)` takes `ProjectSource`s: a `SourceFile` (its name is the
+source's path, e.g. `Rooms/Kitchen/Kitchen.sch`, and its id identifies it in source ranges) and
+a role ([Language.md §1](Language.md#1-source-files)):
+
+1. **Order.** The sources are sorted by name. Everything after this works in that order, so the
+   output is byte-identical whatever order the sources were given in. Two sources with the same
+   name or id are an error.
+2. **Front end, per source:** tokenize and parse. Syntax errors of all files are reported; type
+   checking runs only if there are none.
+3. **Declarations, all sources:** the interfaces, then the enums of every source, then every
+   function signature (so a call or a type may refer to a declaration in any file, before or after
+   it), then the behaviours (object declarations) of every source.
+4. **Bodies:** every function is checked against that one environment.
+5. **IR, optimisation, code generation and validation** as for one file. The module records the
+   sources (path and role) and the source of every function.
+
+Duplicates are never resolved by file order: a second declaration of a game-wide name is an
+error at that declaration, and the note names the first one with its file:
+
+```text
+Scripts/Global.sch:1:6: error: Duplicate declaration of function 'award'.
+    func award(points: int):
+         ^^^^^
+    note: 'award' was first declared in 'Rooms/Kitchen.sch' on line 3.
+```
+
+Identical `extern func` declarations in several files declare one native; differing ones are an
+error. Object names belong to their room script, so two rooms may each declare `object door:`.
+
+**Future incremental builds.** Declaration collection (step 3) only needs signatures. A later
+build cache could therefore keep the compiled body of a source as long as its text and the
+signatures it uses are unchanged, without recompiling it because another function's body
+changed. There is no such cache yet: a game is compiled in one run.
 
 | Stage | Files | Output |
 |---|---|---|
@@ -54,6 +101,8 @@ syntax errors throughout the file. Semantic analysis runs only on syntactically 
 
 A separate pass over the AST, never mixed into parsing:
 
+Across all sources of the program (see [Project compilation](#project-compilation)):
+
 1. Declare the native interfaces: the core interface and those in `CompileOptions::interfaces`
    (each at most once). Their functions become natives and their enums become engine enums,
    qualified by the interface name. Two interfaces declaring the same function or enum name are
@@ -63,11 +112,12 @@ A separate pass over the AST, never mixed into parsing:
 3. Collect all function and `extern` signatures (functions may be called before their
    declaration), resolving type names to enums. Duplicate and reserved names, and names an
    interface declares, are reported here.
-4. Collect the object declarations ([Language.md §8](Language.md#8-objects-and-handlers)): object
-   names (unique, not clashing with functions, natives or reserved names) and per object its
-   handlers (unique within the object). Handlers are appended to the function list after the
-   room-level functions, each with the index of its object; handler names are kept in the
-   object's scope only, never in the room scope used to resolve calls.
+4. Collect the behaviours ([Language.md §8](Language.md#8-objects-and-handlers)): object
+   declarations, only in room scripts, with names unique per source (they are not game-wide
+   names) and per object its handlers (unique within the object). Handlers are appended to the
+   function list after the global functions of all sources, each with the index of its
+   behaviour; handler names are kept in the behaviour's scope only, never in the game-wide scope
+   used to resolve calls.
 5. Check every function body with a stack of block scopes:
    - `var` declarations and assignments, and whether values are assignable;
    - lookups; operator typing, including vectors, enums and references;
@@ -83,7 +133,7 @@ A separate pass over the AST, never mixed into parsing:
      the end).
 
 In a handler, variable 0 is the hidden parameter `self` (type `object`); the `self` expression
-resolves to it, and is an error in room-level functions.
+resolves to it, and is an error in global functions.
 
 Compiler types (`Types.h`) are a `Type` enumeration with one value per built-in type. Enum types
 are `Type::EnumBase + i`, where `i` indexes `SemanticModel::enums()`: engine enums first, then the
@@ -201,20 +251,26 @@ transformations, common subexpression elimination.
 * Constants and strings are deduplicated. Only natives that are actually called become imports.
 * Every instruction gets its source line and column as debug information.
 * Format limits (65 535 registers per function, 65 536 constants) are reported as diagnostics.
-* The objects table becomes the bytecode's Objects section; handler functions keep their plain
+* The behaviours table becomes the bytecode's Behaviours section; handler functions keep their plain
   names in the function table.
 
 ## Command-line compiler: `schuimmc`
 
 ```bash
-schuimmc [options] input.sch
+schuimmc [options] input.sch...
+schuimmc [options] --global a.sch --room b.sch --actor c.sch ...
 ```
+
+All inputs are compiled into one program ([Project compilation](#project-compilation)). An
+input without a role option is a room script.
 
 | Option | |
 |---|---|
 | `-o FILE` | write the bytecode (without `-o` the file is only checked) |
 | `-O0` / `-O1` | disable / enable (default) the optimizer |
-| `--name NAME` | the source name stored in diagnostics and debug information |
+| `--global FILE`, `--room FILE`, `--actor FILE` | an input with that role (repeatable) |
+| `--source-root DIR` | name each input by its path relative to `DIR` (`Rooms/Kitchen.sch`), the name resources use |
+| `--name NAME` | the source name of the only input, stored in diagnostics and debug information |
 | `--interface NAME` | let the script use the native interface `NAME` besides the core interface (repeatable) |
 | `--list-interfaces` | print the interfaces the compiler knows, with their enums and signatures |
 | `--tokens` | dump the token stream |

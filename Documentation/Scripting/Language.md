@@ -1,14 +1,18 @@
-# SCHUIMM Script — language specification (version 2.0)
+# SCHUIMM Script — language specification (version 3.0)
 
 SCHUIMM Script is a small, statically typed scripting language with Python-inspired syntax,
 made for 2D adventure games: readable scripts that call engine functions and wait without
 blocking the game. It is **not** Python; see [Differences from Python](#differences-from-python).
 
 This document describes the language as implemented by `schuimmc` and the SCHUIMM runtime.
-The language version (2.0) is recorded in every bytecode file and is independent of the bytecode
+The language version (3.0) is recorded in every bytecode file and is independent of the bytecode
 format version ([Bytecode.md](Bytecode.md)).
 
-Version 2.0 adds:
+Version 3.0 compiles the scripts of a game into one program: functions, `extern func`
+declarations and enums declared in any file can be used in every other file, without imports
+(§1).
+
+Version 2.0 added:
 - `var` declarations, which are now required (§7);
 - the entity reference types `actor`, `object` and `entity` (§3.3);
 - scoped enums (§3.4);
@@ -41,10 +45,38 @@ More examples: [Examples/](Examples/).
 ## 1. Source files
 
 * Source files are UTF-8. Invalid UTF-8 is an error. Line endings may be `\n`, `\r\n` or `\r`.
-* A file is one *module*: a sequence of function declarations (`func`), native function
-  declarations (`extern func`), object declarations (`object`, [§8](#8-objects-and-handlers))
-  and enum declarations (`enum`, [§3.4](#34-enums)).
-  There are no global variables and no statements at the top level.
+* A file is a sequence of function declarations (`func`), native function declarations
+  (`extern func`), object declarations (`object`, [§8](#8-objects-and-handlers)) and enum
+  declarations (`enum`, [§3.4](#34-enums)). There are no global variables and no statements at
+  the top level.
+* **The scripts of a game form one program.** Every function, `extern func` and enum declared at
+  the top level of any participating file is visible in all of them. There is no `import`,
+  `export` or `global`, and no file of declarations: put a declaration where it belongs, for
+  example a function about the kitchen in the kitchen's script.
+
+  ```python
+  # Scripts/Global.sch
+  func award_points(amount: int):
+  	print("Points: " + str(amount))
+  ```
+
+  ```python
+  # Rooms/Kitchen/Kitchen.sch
+  object oven:
+  	func use():
+  		award_points(10)        # declared in another file
+  ```
+
+  * Declarations may be used before or after their place, in the same or another file; the
+    order of the files does not matter.
+  * A name can be declared once in the whole game. A second declaration is an error naming both
+    places, never "the later file wins". Identical `extern func` declarations in several files
+    are fine; differing ones are an error.
+* Every file has a **role**, given by whatever refers to it (the build):
+  * a *global* script holds game-wide declarations only (`func`, `extern func`, `enum`);
+  * a *room* script may also hold the `object` declarations of its room;
+  * an *actor* script holds the declarations of an actor's script.
+  A file compiled on its own (`schuimmc file.sch`) is a room script.
 * Diagnostics give `file:line:column`; lines and columns are 1-based and columns count bytes
   (a tab is one column).
 
@@ -517,10 +549,13 @@ object NAME:
   without handlers is an error ("Expected an indented block of handler functions"); leave out the
   declaration instead.
 * Handlers are ordinary functions: typed parameters, an optional return type, the usual
-  statements, `wait()`/`yield()`, calls of room-level functions and natives.
-* Object names follow the identifier rules (§2.3). They must be unique in the file and cannot be
-  the name of a function, native or reserved name. Handler names must be unique within their
-  object; the same handler name may appear in several objects and as a room-level function.
+  statements, `wait()`/`yield()`, calls of global functions and natives.
+* `object` declarations appear only in room scripts (§1).
+* Object names follow the identifier rules (§2.3) and cannot be a reserved name. They must be
+  unique in the file. They belong to their room: they are not game-wide names, so another room
+  may have an object of the same name, and an object may be named like a function. Handler
+  names must be unique within their object; the same handler name may appear in several objects
+  and as a global function.
 
 ### 8.2 Room resources and room scripts
 
@@ -567,26 +602,27 @@ The engine API is `ScriptHost::dispatch` ([Runtime.md](Runtime.md#object-handler
   A handler may pass `self` where an `entity` is expected.
 * Object references follow §3.3: they can be stored, passed, returned and compared, and have no
   members. Object state is owned by the engine and accessed through engine functions
-  (`self.name` property syntax is not part of version 2.0).
+  (`self.name` property syntax is not part of version 3.0).
 
 ### 8.5 Scopes
 
 | Scope | Contains |
 |---|---|
-| Script (room) | room-level functions, natives (interfaces and `extern func`), enums and object names |
+| Game | the global functions, natives (interfaces and `extern func`) and enums of every file (§1) |
+| Script (room) | the room's object names |
 | Object | the handlers of one object |
 | Function | parameters and variables (§7) |
 | Handler context | the implicit `self` |
 
-A handler calls room-level functions and natives by name. Handlers are not in the script scope:
-a room-level function cannot call a handler, and a handler cannot call another handler (not even
-of its own object) — put shared code in a room-level function. Room-level functions are started
-by the engine by name as before; handlers only through dispatch.
+A handler calls global functions and natives by name. Handlers are not in the game scope: a
+global function cannot call a handler, and a handler cannot call another handler (not even of
+its own object) — put shared code in a global function. Global functions are started by the
+engine by name; handlers only through dispatch.
 
 ## 9. Coroutines
 
 Script functions run as **coroutines** on the game thread, managed by the engine's scheduler
-([Runtime.md](Runtime.md#scheduler)). The engine starts a coroutine by calling a room-level function
+([Runtime.md](Runtime.md#scheduler)). The engine starts a coroutine by calling a global function
 (usually `main`) or by dispatching an object handler (§8.3); several coroutines run concurrently, interleaved cooperatively:
 
 * A coroutine runs until it calls `wait()` or `yield()`, finishes, fails, or uses up its
@@ -708,14 +744,14 @@ Deliberate, so that scripts stay predictable and fast to check:
 * Function parameters require types; there are no default or keyword arguments.
 * `wait`/`yield` are functions provided by the engine, not keywords.
 
-## 12. Limitations (version 2.0)
+## 12. Limitations (version 3.0)
 
 * No `break`/`continue`, no `+=`, no compound data types (lists, dictionaries, structures)
   besides `vec2`.
 * No spawned blocks, closures or function values; no joining of coroutines (`wait(coroutine)`),
   no coroutine groups or structured concurrency.
-* No modules or imports: one file is one program. No global (script-level) variables or
-  constants, including for room scripts.
+* No modules or imports: the files of a game form one program (§1). No global (script-level)
+  variables or constants, including for room scripts.
 * Objects (§8): no `self.property` access (object state goes through natives), no variables in
   object declarations, no calls between handlers, no default or fallback handlers.
 * Up to 255 parameters per function, 65 535 registers per function and 65 536 distinct constants

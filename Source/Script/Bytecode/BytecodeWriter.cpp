@@ -175,6 +175,7 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     std::uint32_t codeOffset = 0;
     for (const Function& function : module.functions) {
         out.u32(function.nameIndex);
+        out.u32(function.source);
         writeType(out, function.returnType);
         writeTypes(out, function.parameters);
         out.u16(function.registerCount());
@@ -201,19 +202,21 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     }
     endSection();
 
-    // Objects and Enums (sections 7 and 8) follow Debug.
-    const auto writeObjects = [&]() -> Status {
-        if (!fitsU32(module.objects.size())) {
-            return tooLarge("objects");
+    // Behaviours, Enums and Sources (sections 7 to 9) follow Debug.
+    const auto writeBehaviours = [&]() -> Status {
+        if (!fitsU32(module.behaviours.size())) {
+            return tooLarge("behaviours");
         }
-        out.u32(static_cast<std::uint32_t>(module.objects.size()));
-        for (const ObjectEntry& object : module.objects) {
-            if (!fitsU32(object.handlers.size())) {
+        out.u32(static_cast<std::uint32_t>(module.behaviours.size()));
+        for (const BehaviourEntry& behaviour : module.behaviours) {
+            if (!fitsU32(behaviour.handlers.size())) {
                 return tooLarge("handlers");
             }
-            out.u32(object.nameIndex);
-            out.u32(static_cast<std::uint32_t>(object.handlers.size()));
-            for (const HandlerEntry& handler : object.handlers) {
+            out.u8(static_cast<std::uint8_t>(behaviour.kind));
+            out.u32(behaviour.source);
+            out.u32(behaviour.nameIndex);
+            out.u32(static_cast<std::uint32_t>(behaviour.handlers.size()));
+            for (const HandlerEntry& handler : behaviour.handlers) {
                 out.u32(handler.nameIndex);
                 out.u32(handler.function);
             }
@@ -222,7 +225,6 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     };
 
     beginSection(); // Debug
-    out.u32(module.sourceNameIndex);
     out.u32(static_cast<std::uint32_t>(totalInstructions));
     for (const Function& function : module.functions) {
         for (const SourcePosition& position : function.positions) {
@@ -232,8 +234,8 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     }
     endSection();
 
-    beginSection(); // Objects
-    if (auto status = writeObjects(); !status) {
+    beginSection(); // Behaviours
+    if (auto status = writeBehaviours(); !status) {
         return std::unexpected(status.error());
     }
     endSection();
@@ -253,6 +255,17 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
         for (const std::uint32_t member : entry.members) {
             out.u32(member);
         }
+    }
+    endSection();
+
+    beginSection(); // Sources
+    if (!fitsU32(module.sources.size())) {
+        return std::unexpected(tooLarge("sources").error());
+    }
+    out.u32(static_cast<std::uint32_t>(module.sources.size()));
+    for (const SourceEntry& source : module.sources) {
+        out.u32(source.pathIndex);
+        out.u8(static_cast<std::uint8_t>(source.role));
     }
     endSection();
 

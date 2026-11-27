@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Script/Bytecode/Module.h"
 #include "Script/Bytecode/NativeInterface.h"
 #include "Script/Compiler/Ast.h"
 #include "Script/Compiler/Diagnostics.h"
@@ -70,28 +71,39 @@ struct VariableInfo {
 
 struct FunctionSemantics {
     const FunctionDecl* declaration = nullptr;
-    // Handlers: index of the owning object in SemanticModel::objects(); invalidIndex for
-    // room-level functions. A handler's variable 0 is the hidden parameter "self" (type object),
-    // followed by the declared parameters.
-    std::uint32_t object = invalidIndex;
+    std::uint32_t source = 0; // Index into SemanticModel::sources().
+    // Handlers: index of the owning behaviour in SemanticModel::behaviours(); invalidIndex for
+    // global functions. An object handler's variable 0 is the hidden parameter "self" (type
+    // object), followed by the declared parameters.
+    std::uint32_t behaviour = invalidIndex;
     std::vector<VariableInfo> variables; // Parameters first, in order.
     std::vector<Type> parameters;        // The declared parameters (without "self"), resolved.
     Type returnType = Type::None;
 
-    [[nodiscard]] bool isHandler() const noexcept { return object != invalidIndex; }
+    [[nodiscard]] bool isHandler() const noexcept { return behaviour != invalidIndex; }
 };
 
-// A handler of an object declaration: the event name and the function implementing it.
+// A handler of a behaviour: the event name and the function implementing it.
 struct HandlerSemantics {
     std::string name;
     std::uint32_t function = invalidIndex; // Index into SemanticModel::functions().
 };
 
-// An "object" declaration: a named scope of handlers. Handler names live in this scope only,
-// never in the room scope of functions and natives.
-struct ObjectSemantics {
-    const ObjectDecl* declaration = nullptr;
-    std::vector<HandlerSemantics> handlers; // In declaration order.
+// A behaviour declaration ("object name:"): a named scope of handlers. Handler names live in
+// this scope only, never in the game-wide scope of functions and natives.
+struct BehaviourSemantics {
+    BehaviourKind kind = BehaviourKind::Object;
+    std::uint32_t source = 0;               // Index into SemanticModel::sources().
+    const ObjectDecl* declaration = nullptr; // Object behaviours.
+    std::string name;                        // The object id; empty for room and actor behaviours.
+    std::vector<HandlerSemantics> handlers;  // In declaration order.
+};
+
+// A source file of the program: its name (path) and role.
+struct SourceSemantics {
+    std::string name;
+    ScriptRole role = ScriptRole::Room;
+    std::uint32_t file = 0; // SourceRange::file of its tokens.
 };
 
 struct StatementInfo {
@@ -108,11 +120,13 @@ public:
     [[nodiscard]] const ExprInfo* findExpression(const Expr& expression) const;
     [[nodiscard]] const StatementInfo& statement(const Stmt& statement) const;
 
-    // User functions: room-level functions in declaration order (extern declarations excluded),
-    // followed by the handlers of every object in declaration order.
+    // The source files, in the order they were checked.
+    [[nodiscard]] const std::vector<SourceSemantics>& sources() const noexcept { return sources_; }
+    // User functions: the global functions of every source in declaration order (extern
+    // declarations excluded), followed by the handlers of every behaviour in declaration order.
     [[nodiscard]] const std::vector<FunctionSemantics>& functions() const noexcept { return functions_; }
-    // Object declarations in declaration order.
-    [[nodiscard]] const std::vector<ObjectSemantics>& objects() const noexcept { return objects_; }
+    // Behaviour declarations, by source and declaration order.
+    [[nodiscard]] const std::vector<BehaviourSemantics>& behaviours() const noexcept { return behaviours_; }
     // Interface functions (core first) followed by extern declarations.
     [[nodiscard]] const std::vector<NativeSignature>& natives() const noexcept { return natives_; }
     // Natives the script spawns ("spawn walk_to(...)"), as indices into natives(). Each gets a
@@ -129,20 +143,37 @@ private:
     friend class TypeCheckerImpl;
     std::unordered_map<const Expr*, ExprInfo> expressions_;
     std::unordered_map<const Stmt*, StatementInfo> statements_;
+    std::vector<SourceSemantics> sources_;
     std::vector<FunctionSemantics> functions_;
-    std::vector<ObjectSemantics> objects_;
+    std::vector<BehaviourSemantics> behaviours_;
     std::vector<NativeSignature> natives_;
     std::vector<EnumInfo> enums_;
     std::vector<std::uint32_t> spawnWrappers_;
 };
 
+// One parsed source file of a program.
+struct SourceUnitInput {
+    const SourceUnit* unit = nullptr;
+    std::string name;  // The source path, for messages that refer to another file.
+    ScriptRole role = ScriptRole::Room;
+    std::uint32_t file = 0; // SourceRange::file of its tokens (SourceFile::id).
+};
+
 // Resolves names and checks types (Language.md, "Types" and "Scopes"). Reports every error it
 // finds; the model is only meaningful for code generation if no error was reported.
 //
-// The script sees the core interface (coreInterface()) and every interface in `interfaces`:
+// All units form one program: their enums, functions and natives share one game-wide namespace,
+// independent of the order of the units (declarations are collected before any body is
+// checked). The units are processed, and their functions numbered, in the given order.
+//
+// The scripts see the core interface (coreInterface()) and every interface in `interfaces`:
 // their functions can be called and their enums used without declaring them. Two interfaces
 // declaring the same function or enum name, and script declarations (functions, extern
-// functions, objects, enums) reusing such a name, are errors.
+// functions, enums) reusing such a name, are errors. Identical extern declarations in several
+// units declare one native; conflicting ones are an error.
+[[nodiscard]] SemanticModel checkTypes(std::span<const SourceUnitInput> units, Diagnostics& diagnostics,
+                                       std::span<const NativeInterface* const> interfaces = {});
+// A single room script (file id 0).
 [[nodiscard]] SemanticModel checkTypes(const SourceUnit& unit, Diagnostics& diagnostics,
                                        std::span<const NativeInterface* const> interfaces = {});
 

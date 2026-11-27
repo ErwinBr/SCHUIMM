@@ -39,8 +39,9 @@ std::string typeName(Type type, const IrModule& module)
 
 std::string displayName(const IrFunction& function, const IrModule& module)
 {
-    if (function.object < module.objects.size()) {
-        return concat(module.objects[function.object].name, ".", function.name);
+    if (function.behaviour < module.behaviours.size()) {
+        const IrBehaviour& behaviour = module.behaviours[function.behaviour];
+        return concat(behaviour.kind == BehaviourKind::Object ? behaviour.name : toString(behaviour.kind), ".", function.name);
     }
     return function.name;
 }
@@ -125,9 +126,9 @@ std::string dumpIr(const IrModule& module)
         }
         out += "\n";
     }
-    for (const IrObject& object : module.objects) {
-        out += concat("object ", object.name, ":");
-        for (const IrHandler& handler : object.handlers) {
+    for (const IrBehaviour& behaviour : module.behaviours) {
+        out += behaviour.kind == BehaviourKind::Object ? concat("object ", behaviour.name, ":") : concat(toString(behaviour.kind), ":");
+        for (const IrHandler& handler : behaviour.handlers) {
             out += concat(" ", handler.name, "=f", handler.function);
         }
         out += "\n";

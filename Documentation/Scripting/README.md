@@ -9,7 +9,11 @@ the engine dispatches an event by object identifier and event name, and the hand
 the object as `self` ([Language.md §8](Language.md#8-objects-and-handlers),
 [Runtime.md](Runtime.md#object-handlers-and-dispatch), [Examples/kitchen.sch](Examples/kitchen.sch)).
 
-Language 2.0 (Milestone 4.4) adds:
+Language 3.0 (Milestone 4.4 Part II) compiles the scripts of a game into one program: functions,
+natives and enums declared in any file are usable in every other file, without imports
+([Language.md §1](Language.md#1-source-files), [Compiler.md](Compiler.md#project-compilation)).
+
+Language 2.0 (Milestone 4.4) added:
 - required `var` declarations;
 - the entity reference types `actor`, `object` and `entity`;
 - scoped enums;
@@ -20,7 +24,7 @@ Language 2.0 (Milestone 4.4) adds:
   completion tokens ([Language.md §9](Language.md#9-coroutines),
   [Runtime.md](Runtime.md#completion-tokens)).
 
-Bytecode is format 2.0, with typed registers.
+Bytecode is format 3.0: typed registers, and one module for all the scripts of a game.
 
 | Document | Contents |
 |---|---|

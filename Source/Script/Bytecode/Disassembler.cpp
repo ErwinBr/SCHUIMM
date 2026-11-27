@@ -114,8 +114,15 @@ std::string formatInstruction(const Module& module, const Instruction& instructi
 std::string disassemble(const Module& module)
 {
     std::string out = concat("; SCHUIMM bytecode ", bytecodeFormatMajor, ".", module.formatMinor, ", language ",
-                             module.languageMajor, ".", module.languageMinor, ", source ",
-                             quoteString(module.sourceName()), "\n");
+                             module.languageMajor, ".", module.languageMinor);
+    if (module.sources.size() == 1) {
+        out += concat(", source ", quoteString(module.sourceName()), "\n");
+    } else {
+        out += "\nsources:\n";
+        for (std::size_t i = 0; i < module.sources.size(); ++i) {
+            out += concat("  s", i, " ", toString(module.sources[i].role), " ", quoteString(module.sourcePath(static_cast<std::uint32_t>(i))), "\n");
+        }
+    }
     if (!module.constants.empty()) {
         out += "constants:\n";
         for (std::size_t i = 0; i < module.constants.size(); ++i) {
@@ -142,14 +149,18 @@ std::string disassemble(const Module& module)
             out += "\n";
         }
     }
-    // Handlers are listed as "object.handler"; their parameter 0 is self.
+    // Handlers are listed as "object.handler" ("room.handler", "actor.handler"); the parameter 0
+    // of object and actor handlers is self.
     std::vector<std::string> prefix(module.functions.size());
-    if (!module.objects.empty()) {
-        out += "objects:\n";
-        for (const ObjectEntry& object : module.objects) {
-            const std::string& name = module.strings[object.nameIndex];
-            out += concat("  ", name, ":");
-            for (const HandlerEntry& handler : object.handlers) {
+    if (!module.behaviours.empty()) {
+        out += "behaviours:\n";
+        for (const BehaviourEntry& behaviour : module.behaviours) {
+            const std::string name = behaviour.kind == BehaviourKind::Object ? module.strings[behaviour.nameIndex]
+                                                                              : std::string(toString(behaviour.kind));
+            out += concat("  ", behaviour.kind == BehaviourKind::Object ? "object " : "", name);
+            if (module.sources.size() > 1) out += concat(" (s", behaviour.source, ")");
+            out += ":";
+            for (const HandlerEntry& handler : behaviour.handlers) {
                 out += concat(" ", module.strings[handler.nameIndex], " -> f", handler.function);
                 prefix[handler.function] = name + ".";
             }
@@ -160,7 +171,9 @@ std::string disassemble(const Module& module)
         const Function& function = module.functions[f];
         out += concat("\nfunction f", f, " ", prefix[f],
                       signature(module, function.nameIndex, function.parameters, function.returnType), "  ; ",
-                      function.registerCount(), " registers\n");
+                      function.registerCount(), " registers");
+        if (module.sources.size() > 1 && function.source != noSource) out += concat(", s", function.source);
+        out += "\n";
         if (function.registerCount() > 0) {
             std::string types = "  ; register types:";
             for (std::size_t r = 0; r < function.registerTypes.size(); ++r) {

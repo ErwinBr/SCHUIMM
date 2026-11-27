@@ -1,5 +1,5 @@
 // Language 2.0 types: var declarations, entity references, scoped enums, vec2, typed registers
-// in bytecode 2.0, and native API interfaces shared by the compiler and the runtime.
+// in the bytecode, and native API interfaces shared by the compiler and the runtime.
 
 #include "ScriptTestSupport.h"
 
@@ -189,7 +189,7 @@ SCHUIMM_TEST(Language_EnumErrors)
     CHECK(errors("func f(x: Colour):\n\tpass\n").has("Unknown type 'Colour'"));
     CHECK(errors("func f():\n\tvar Light = 1\n").has("name of an enum"));
     CHECK(errors("func Light():\n\tpass\n").has("same name as an enum"));
-    CHECK(errors("object Side:\n\tfunc use():\n\t\tpass\n").has("same name as an enum"));
+    CHECK(compileSource("enum Side:\n\tLEFT\nobject Side:\n\tfunc use():\n\t\tpass\n").result.success); // Object names are the room's own.
     CHECK(compileSource("enum A:\n\tX\nenum A:\n\tY\n").has("Duplicate declaration of 'A'"));
     CHECK(compileSource("enum A:\n\tX\n\tX\n").has("Duplicate member 'X' in enum 'A'"));
     CHECK(compileSource("enum int:\n\tX\n").has("built-in name"));
@@ -433,7 +433,7 @@ SCHUIMM_TEST(Interface_ConflictingDeclarationsAreRejected)
     CHECK(compileSource("func length(v: vec2) -> float:\n\treturn 0.0\n").has("'length' is a built-in function"));
     CHECK(withTestInterface("enum Mood:\n\tX\n").has("Duplicate declaration of 'Mood'"));
     CHECK(withTestInterface("enum Mood:\n\tX\n").hasNote("built-in enum"));
-    CHECK(withTestInterface("object Mood:\n\tfunc use():\n\t\tpass\n").has("same name as an enum"));
+    CHECK(withTestInterface("object Mood:\n\tfunc use():\n\t\tpass\n").result.success); // Object names are the room's own.
     CHECK(withTestInterface("func main():\n\tvar mood_of = 1\n").has("name of a function"));
     // Two interfaces declaring the same names.
     NativeInterface other = testInterface();

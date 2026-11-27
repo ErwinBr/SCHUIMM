@@ -141,20 +141,21 @@ SCHUIMM_TEST(Objects_OneHandler)
 {
     const Compiled c = compileSource("object blender:\n\tfunc look_at():\n\t\tprint(\"A blender.\")\n");
     REQUIRE(c.result.success);
-    REQUIRE(c.result.ast->objects.size() == 1);
-    const ObjectDecl& object = *c.result.ast->objects[0];
+    REQUIRE(c.result.units[0].ast->objects.size() == 1);
+    const ObjectDecl& object = *c.result.units[0].ast->objects[0];
     CHECK_EQ(object.name, std::string("blender"));
     CHECK_EQ(object.nameRange.begin.line, 1u);
     REQUIRE(object.handlers.size() == 1);
     CHECK(object.handlers[0]->isHandler);
-    CHECK(c.result.ast->functions.empty()); // Handlers are not room-level functions.
-    CHECK_EQ(dumpAst(*c.result.ast), std::string("Object blender\n  Func look_at() -> None\n    ExprStmt\n"
+    CHECK(c.result.units[0].ast->functions.empty()); // Handlers are not room-level functions.
+    CHECK_EQ(dumpAst(*c.result.units[0].ast), std::string("Object blender\n  Func look_at() -> None\n    ExprStmt\n"
                                                  "      Call print\n        String \"A blender.\"\n"));
     // The handler is an ordinary function whose hidden parameter 0 is self.
     REQUIRE(c.result.module.functions.size() == 1);
     CHECK(c.result.module.functions[0].parameters == std::vector<TypeRef>{ScriptType::Object});
-    REQUIRE(c.result.module.objects.size() == 1);
-    CHECK_EQ(c.result.module.string(c.result.module.objects[0].nameIndex), std::string("blender"));
+    REQUIRE(c.result.module.behaviours.size() == 1);
+    CHECK(c.result.module.behaviours[0].kind == BehaviourKind::Object);
+    CHECK_EQ(c.result.module.string(c.result.module.behaviours[0].nameIndex), std::string("blender"));
 }
 
 SCHUIMM_TEST(Objects_SeveralObjectsHandlersAndRoomFunctions)
@@ -163,19 +164,19 @@ SCHUIMM_TEST(Objects_SeveralObjectsHandlersAndRoomFunctions)
     if (!c.result.success) std::fprintf(stderr, "%s", c.diagnostics().c_str());
     REQUIRE(c.result.success);
     const SemanticModel& semantics = c.result.semantics;
-    REQUIRE(semantics.objects().size() == 2);
-    const ObjectSemantics& blender = semantics.objects()[0];
+    REQUIRE(semantics.behaviours().size() == 2);
+    const BehaviourSemantics& blender = semantics.behaviours()[0];
     REQUIRE(blender.handlers.size() == 3);
     CHECK_EQ(blender.handlers[0].name, std::string("look_at"));
     CHECK_EQ(blender.handlers[1].name, std::string("use"));
     CHECK_EQ(blender.handlers[2].name, std::string("use_with"));
-    CHECK_EQ(semantics.objects()[1].handlers.size(), std::size_t{1});
+    CHECK_EQ(semantics.behaviours()[1].handlers.size(), std::size_t{1});
     // Room-level functions first, then the handlers, each linked to its object.
     REQUIRE(semantics.functions().size() == 6);
     CHECK(!semantics.functions()[0].isHandler());
     CHECK(!semantics.functions()[1].isHandler());
-    CHECK_EQ(semantics.functions()[blender.handlers[2].function].object, 0u);
-    CHECK_EQ(semantics.functions()[semantics.objects()[1].handlers[0].function].object, 1u);
+    CHECK_EQ(semantics.functions()[blender.handlers[2].function].behaviour, 0u);
+    CHECK_EQ(semantics.functions()[semantics.behaviours()[1].handlers[0].function].behaviour, 1u);
     // use_with(item: object) has self plus its declared parameter.
     const FunctionSemantics& useWith = semantics.functions()[blender.handlers[2].function];
     REQUIRE(useWith.variables.size() >= 2);
@@ -185,7 +186,7 @@ SCHUIMM_TEST(Objects_SeveralObjectsHandlersAndRoomFunctions)
     // IR dump and disassembly show handlers as object.handler.
     CHECK(dumpIr(c.result.ir).find("func blender.use_with(r0: object, r1: object) -> None") != std::string::npos);
     const std::string listing = disassemble(c.result.module);
-    CHECK(listing.find("objects:\n  blender: look_at -> f2 use -> f3 use_with -> f4\n  cupboard: look_at -> f5\n") !=
+    CHECK(listing.find("behaviours:\n  object blender: look_at -> f2 use -> f3 use_with -> f4\n  object cupboard: look_at -> f5\n") !=
           std::string::npos);
     CHECK(listing.find("function f4 blender.use_with(object, object) -> None") != std::string::npos);
 }
@@ -250,8 +251,9 @@ SCHUIMM_TEST(Objects_DuplicatesAndNameClashes)
     const Compiled handler = compileSource("object a:\n\tfunc f():\n\t\tpass\n\tfunc f(x: int):\n\t\tpass\n");
     CHECK(handler.has("Duplicate handler 'f' in object 'a'", 4));
     CHECK(handler.hasNote("first declared on line 2"));
-    CHECK(compileSource("func a():\n\tpass\nobject a:\n\tfunc f():\n\t\tpass\n").has("Object 'a' has the same name as a function", 3));
-    CHECK(compileSource("object print:\n\tfunc f():\n\t\tpass\n").has("same name as a function"));
+    // Object names are the room's own: they may coincide with game-wide functions and natives.
+    CHECK(compileSource("func a():\n\tpass\nobject a:\n\tfunc f():\n\t\tpass\n").result.success);
+    CHECK(compileSource("object print:\n\tfunc f():\n\t\tpass\n").result.success);
     CHECK(compileSource("object int:\n\tfunc f():\n\t\tpass\n").has("built-in name"));
     CHECK(compileSource("object a:\n\tfunc f(x: int, x: int):\n\t\tpass\n").has("Duplicate parameter 'x'", 2));
     CHECK(compileSource("object 7:\n\tfunc f():\n\t\tpass\n").has("Expected identifier for the object name", 1));

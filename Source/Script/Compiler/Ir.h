@@ -151,13 +151,15 @@ struct IrBlock {
     Terminator terminator;
 };
 
-inline constexpr std::uint32_t noObject = 0xFFFFFFFFu;
+inline constexpr std::uint32_t noBehaviour = 0xFFFFFFFFu;
 
-// A function. Block 0 is the entry; a block's id is its index. Parameters are r0..rn-1; for a
-// handler r0 is the hidden "self" parameter (type object), followed by the declared parameters.
+// A function. Block 0 is the entry; a block's id is its index. Parameters are r0..rn-1; for an
+// object handler r0 is the hidden "self" parameter (type object), followed by the declared
+// parameters.
 struct IrFunction {
     std::string name;
-    std::uint32_t object = noObject; // Handlers: index into IrModule::objects.
+    std::uint32_t source = noSource;       // Index into IrModule::sources; noSource if generated.
+    std::uint32_t behaviour = noBehaviour; // Handlers: index into IrModule::behaviours.
     std::vector<Type> parameters;
     Type returnType = Type::None;
     std::vector<Type> registerTypes; // Static type of each virtual register.
@@ -173,15 +175,22 @@ struct IrNative {
     bool pure = false;
 };
 
-// An object declaration: handler (event) names mapped to the functions implementing them.
+// A behaviour declaration: handler (event) names mapped to the functions implementing them.
 struct IrHandler {
     std::string name;
     std::uint32_t function = 0; // Index into IrModule::functions.
 };
 
-struct IrObject {
-    std::string name;
+struct IrBehaviour {
+    BehaviourKind kind = BehaviourKind::Object;
+    std::uint32_t source = 0;
+    std::string name; // The object id; empty for room and actor behaviours.
     std::vector<IrHandler> handlers;
+};
+
+struct IrSource {
+    std::string name;
+    ScriptRole role = ScriptRole::Room;
 };
 
 // An enum type (Type enumType(i) is enums[i]). Engine enums have a qualifier (the interface).
@@ -192,10 +201,10 @@ struct IrEnum {
 };
 
 struct IrModule {
-    std::string sourceName;
+    std::vector<IrSource> sources;
     std::vector<IrFunction> functions;
     std::vector<IrNative> natives;
-    std::vector<IrObject> objects;
+    std::vector<IrBehaviour> behaviours;
     std::vector<IrEnum> enums;
 };
 

@@ -84,9 +84,9 @@ Result<std::shared_ptr<const Program>> Program::link(Module module, const Native
         }
     }
     program->owner_.assign(module.functions.size(), noOwner);
-    for (std::size_t o = 0; o < module.objects.size(); ++o) {
-        for (const HandlerEntry& handler : module.objects[o].handlers) {
-            program->owner_[handler.function] = static_cast<std::uint32_t>(o); // Validated: unique, in range.
+    for (std::size_t b = 0; b < module.behaviours.size(); ++b) {
+        for (const HandlerEntry& handler : module.behaviours[b].handlers) {
+            program->owner_[handler.function] = static_cast<std::uint32_t>(b); // Validated: unique, in range.
         }
     }
     program->module_ = std::move(module);
@@ -105,26 +105,44 @@ std::optional<std::uint32_t> Program::findFunction(std::string_view name) const
     return std::nullopt;
 }
 
-std::optional<std::uint32_t> Program::findHandler(std::string_view object, std::string_view event) const
+std::optional<std::uint32_t> Program::findBehaviour(BehaviourKind kind, std::string_view source,
+                                                   std::string_view name) const
 {
-    for (const ObjectEntry& entry : module_.objects) {
-        if (module_.string(entry.nameIndex) != object) {
+    for (std::size_t b = 0; b < module_.behaviours.size(); ++b) {
+        const BehaviourEntry& entry = module_.behaviours[b];
+        if (entry.kind != kind || (!source.empty() && module_.sourcePath(entry.source) != source)) {
             continue;
         }
-        for (const HandlerEntry& handler : entry.handlers) {
-            if (module_.string(handler.nameIndex) == event) {
-                return handler.function;
-            }
+        if (kind == BehaviourKind::Object && module_.string(entry.nameIndex) != name) {
+            continue;
         }
-        return std::nullopt; // Object names are unique.
+        return static_cast<std::uint32_t>(b);
     }
     return std::nullopt;
 }
 
+std::optional<std::uint32_t> Program::findHandler(std::uint32_t behaviour, std::string_view event) const
+{
+    if (behaviour >= module_.behaviours.size()) {
+        return std::nullopt;
+    }
+    for (const HandlerEntry& handler : module_.behaviours[behaviour].handlers) {
+        if (module_.string(handler.nameIndex) == event) {
+            return handler.function;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::uint32_t> Program::findHandler(std::string_view object, std::string_view event) const
+{
+    const auto behaviour = findBehaviour(BehaviourKind::Object, {}, object);
+    return behaviour ? findHandler(*behaviour, event) : std::nullopt;
+}
+
 bool Program::hasObject(std::string_view object) const
 {
-    return std::any_of(module_.objects.begin(), module_.objects.end(),
-                       [&](const ObjectEntry& entry) { return module_.string(entry.nameIndex) == object; });
+    return findBehaviour(BehaviourKind::Object, {}, object).has_value();
 }
 
 std::string Program::functionDisplayName(std::size_t index) const
@@ -133,7 +151,17 @@ std::string Program::functionDisplayName(std::size_t index) const
     if (owner_[index] == noOwner) {
         return name;
     }
-    return concat(module_.string(module_.objects[owner_[index]].nameIndex), ".", name);
+    const BehaviourEntry& behaviour = module_.behaviours[owner_[index]];
+    if (behaviour.kind == BehaviourKind::Object) {
+        return concat(module_.string(behaviour.nameIndex), ".", name);
+    }
+    return concat(toString(behaviour.kind), ".", name);
+}
+
+const std::string& Program::functionSource(std::size_t index) const
+{
+    const std::uint32_t source = module_.functions[index].source;
+    return source < module_.sources.size() ? module_.sourcePath(source) : name_;
 }
 
 } // namespace schuimm::script

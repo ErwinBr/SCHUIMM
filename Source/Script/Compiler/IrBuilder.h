@@ -8,7 +8,8 @@
 
 namespace schuimm::script {
 
-// Lowers a type-checked AST to IR. Must only be called when type checking reported no errors.
-[[nodiscard]] IrModule buildIr(const SourceUnit& unit, const SemanticModel& semantics, std::string sourceName);
+// Lowers the type-checked program (the ASTs the model refers to) to IR. Must only be called when
+// type checking reported no errors.
+[[nodiscard]] IrModule buildIr(const SemanticModel& semantics);
 
 } // namespace schuimm::script

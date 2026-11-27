@@ -23,7 +23,8 @@ public:
     {
         const FunctionDecl& declaration = *function_.declaration;
         out_.name = declaration.name;
-        out_.object = function_.isHandler() ? function_.object : noObject;
+        out_.source = function_.source;
+        out_.behaviour = function_.isHandler() ? function_.behaviour : noBehaviour;
         out_.returnType = function_.returnType;
         if (function_.isHandler()) {
             out_.parameters.push_back(Type::Object); // Hidden "self" (variable 0).
@@ -452,11 +453,12 @@ private:
 
 } // namespace
 
-IrModule buildIr(const SourceUnit& unit, const SemanticModel& semantics, std::string sourceName)
+IrModule buildIr(const SemanticModel& semantics)
 {
-    (void)unit;
     IrModule module;
-    module.sourceName = std::move(sourceName);
+    for (const SourceSemantics& source : semantics.sources()) {
+        module.sources.push_back({source.name, source.role});
+    }
     for (const NativeSignature& native : semantics.natives()) {
         module.natives.push_back({native.name, native.parameters, native.returnType, native.pure});
     }
@@ -495,13 +497,15 @@ IrModule buildIr(const SourceUnit& unit, const SemanticModel& semantics, std::st
         wrapper.blocks.push_back(std::move(block));
         module.functions.push_back(std::move(wrapper));
     }
-    for (const ObjectSemantics& object : semantics.objects()) {
-        IrObject out;
-        out.name = object.declaration->name;
-        for (const HandlerSemantics& handler : object.handlers) {
+    for (const BehaviourSemantics& behaviour : semantics.behaviours()) {
+        IrBehaviour out;
+        out.kind = behaviour.kind;
+        out.source = behaviour.source;
+        out.name = behaviour.name;
+        for (const HandlerSemantics& handler : behaviour.handlers) {
             out.handlers.push_back({handler.name, handler.function});
         }
-        module.objects.push_back(std::move(out));
+        module.behaviours.push_back(std::move(out));
     }
     return module;
 }

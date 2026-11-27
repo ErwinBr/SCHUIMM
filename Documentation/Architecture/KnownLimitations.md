@@ -125,7 +125,7 @@ See [Navigation.md](Navigation.md) and [Actors.md](Actors.md#movement).
 
 ## Scripting
 
-Language scope (version 2.0, see [Language.md](../Scripting/Language.md#12-limitations-version-20)):
+Language scope (version 3.0, see [Language.md](../Scripting/Language.md#12-limitations-version-30)):
 * no `break`/`continue`, augmented assignment, lists, dictionaries, structures (besides `vec2`),
   modules/imports, global variables or exception handling;
 * no joining of coroutines (`wait(coroutine)`), spawned blocks, closures or coroutine groups;

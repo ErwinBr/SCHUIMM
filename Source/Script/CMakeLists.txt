@@ -10,6 +10,7 @@ add_library(schuimm_script_bytecode STATIC
     Bytecode/BytecodeWriter.cpp
     Bytecode/Crc32.cpp
     Bytecode/Disassembler.cpp
+    Bytecode/Module.cpp
     Bytecode/NativeInterface.cpp
     Bytecode/Opcode.cpp
     Bytecode/ScriptType.cpp

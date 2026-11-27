@@ -90,6 +90,10 @@ Scripts/demo.sch:4:8: Runtime error in 'inner': Division by zero
     called from 'main' (line 6)
 ```
 
+The script of the error is the source file of the failing function (its entry in the program's
+Sources table). A caller in another file is shown with its file:
+`called from 'use' (Rooms/Kitchen.sch:12)`.
+
 The `ScriptHost` logs it through the engine `Logger` (category `Script`, level error).
 
 ### Tracing
@@ -229,9 +233,12 @@ if (!result) {
 }
 ```
 
-* `Program::findHandler(object, event)`, `hasHandler`, `hasObject` look handlers up without
-  running anything. Event names are arbitrary strings; nothing in the compiler or VM knows
-  `look_at` or `use`.
+* `Program::findBehaviour(kind, source, name)` finds a behaviour of a program that holds several
+  scripts: the object `door` of `Rooms/Kitchen.sch` is not the `door` of `Rooms/Garden.sch`.
+  `findHandler(behaviour, event)` finds a handler of it. `findHandler(object, event)`,
+  `hasHandler` and `hasObject` look an object's handler up by object name alone (in the first
+  room script declaring that object). None of them runs anything. Event names are arbitrary
+  strings; nothing in the compiler or VM knows `look_at` or `use`.
 * `ScriptScheduler::dispatch` (and `ScriptHost::dispatch`, which adds logging) returns
   `Result<DispatchResult>`: an error only for invalid arguments, a null `self` (id 0, checked
   first) or no program;
@@ -239,9 +246,10 @@ if (!result) {
   coroutine's handle. Its outcome is observed as for every coroutine: `state()`, `result()`,
   `error()` and the event callback. A runtime error inside the handler is a `Failed` coroutine
   with a normal `ScriptError`; handlers appear as `blender.use` in errors, stacks and traces.
-* `Program::findFunction` (and so `start()`) only finds room-level functions: a handler cannot
+* `Program::findFunction` (and so `start()`) only finds global functions: a handler cannot
   be started without its object.
-* Room-level functions of the same script stay startable by name (`start(program, "enter")`).
+* Global functions stay startable by name (`start(program, "enter")`), whichever file declares
+  them.
 
 **Context: a hidden parameter.** A handler's parameter 0 is `self`; dispatch passes
 `[Value::fromObject(self), arguments...]` to an ordinary entry frame (`Coroutine::createHandler`).
@@ -250,7 +258,7 @@ validation of argument windows, and the coroutine's register stack. `self` is ju
 of the handler's frame, so it is valid for exactly as long as the coroutine — across `wait()`,
 `yield()` and budget preemption — and every invocation has its own. The alternative, a context
 field in `CallFrame`, would have needed a new call path and opcode to read it, and propagation
-rules for nested calls; there is no need for that, because a handler's callees are room-level
+rules for nested calls; there is no need for that, because a handler's callees are global
 functions without `self`.
 
 **Integration boundary.** The script side ends at the `ObjectRef`. The engine:

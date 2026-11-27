@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace schuimm::script {
@@ -12,14 +13,14 @@ namespace schuimm::script {
 // Versions. The bytecode *format* version describes the binary layout and instruction set; the
 // *language* version describes the source language the compiler accepts. They change
 // independently (see Bytecode.md).
-// Format 2.0: typed registers, enum, vector, entity-reference, coroutine and operation types, the
-// Enums section and their instructions. Language 2.0: var declarations, entity/actor/object
-// references, scoped enums, vec2, spawn. Earlier formats are rejected (recompile the source).
-inline constexpr std::uint16_t bytecodeFormatMajor = 2;
+// Format 3.0: one module holds the scripts of a whole game (the Sources section, a source per
+// function) and its behaviours (room, actor and object declarations). Language 3.0: game-wide
+// declarations across source files. Earlier formats are rejected (recompile the sources).
+inline constexpr std::uint16_t bytecodeFormatMajor = 3;
 inline constexpr std::uint16_t bytecodeFormatMinor = 0;
-inline constexpr std::uint16_t languageVersionMajor = 2;
+inline constexpr std::uint16_t languageVersionMajor = 3;
 inline constexpr std::uint16_t languageVersionMinor = 0;
-inline constexpr std::uint32_t compilerVersion = 0x000300; // 0.3.0 as (major << 16 | minor << 8 | patch)
+inline constexpr std::uint32_t compilerVersion = 0x000400; // 0.4.0 as (major << 16 | minor << 8 | patch)
 
 struct Instruction {
     Opcode opcode = Opcode::Nop;
@@ -61,8 +62,29 @@ struct NativeImport {
     TypeRef returnType = ScriptType::None;
 };
 
+inline constexpr std::uint32_t noString = 0xFFFFFFFFu;
+// Function::source of a compiler-generated function that belongs to no source file.
+inline constexpr std::uint32_t noSource = 0xFFFFFFFFu;
+
+// What a source file of a game is: it decides which declarations the file may contain.
+//   Global  game-wide declarations only (var, func, extern func, enum);
+//   Room    also the room's behaviour (room:) and its objects' behaviours (object NAME:);
+//   Actor   also the behaviour of the actors that use it (actor:).
+// A script compiled on its own is a Room script.
+enum class ScriptRole : std::uint8_t { Global, Room, Actor };
+inline constexpr std::uint8_t scriptRoleCount = 3;
+[[nodiscard]] const char* toString(ScriptRole role) noexcept;
+
+// A source file the module was compiled from: its path (the identity resources refer to it by,
+// e.g. "Rooms/Kitchen/Kitchen.sch") and its role.
+struct SourceEntry {
+    std::uint32_t pathIndex = 0;
+    ScriptRole role = ScriptRole::Room;
+};
+
 struct Function {
     std::uint32_t nameIndex = 0;
+    std::uint32_t source = noSource; // Index into Module::sources (debug information, errors).
     std::vector<TypeRef> parameters; // Arguments arrive in registers 0..n-1.
     TypeRef returnType = ScriptType::None;
     // The static type of every register (registers 0..n-1 have the parameter types). Each
@@ -74,8 +96,6 @@ struct Function {
 
     [[nodiscard]] std::uint16_t registerCount() const noexcept { return static_cast<std::uint16_t>(registerTypes.size()); }
 };
-
-inline constexpr std::uint32_t noString = 0xFFFFFFFFu;
 
 // A scoped enum the module uses: declared by the script (qualifierIndex == noString), or defined
 // by the engine in a native interface (qualifierIndex names the interface, e.g. "adventure").
@@ -89,17 +109,25 @@ struct EnumEntry {
     [[nodiscard]] bool isEngine() const noexcept { return qualifierIndex != noString; }
 };
 
-// A handler of an object declaration: the event name and the function implementing it. The
-// function's parameter 0 is the hidden "self" (ScriptType::Object, a room object).
+// A handler of a behaviour: the event name and the function implementing it. An object
+// handler's parameter 0 is the hidden "self" (ScriptType::Object, a room object).
 struct HandlerEntry {
     std::uint32_t nameIndex = 0;
     std::uint32_t function = 0; // Index into Module::functions.
 };
 
-// An object declaration of the script: the object identifier (as used by the room resource)
-// and its handlers. Not a runtime object; only a lookup table for dispatch.
-struct ObjectEntry {
-    std::uint32_t nameIndex = 0;
+enum class BehaviourKind : std::uint8_t { Room, Actor, Object };
+inline constexpr std::uint8_t behaviourKindCount = 3;
+[[nodiscard]] const char* toString(BehaviourKind kind) noexcept;
+
+// A behaviour declaration: the handlers of a room ("room:"), of the actors using an actor script
+// ("actor:") or of one room object ("object NAME:", NAME being the object's id in the room
+// resource). Not a runtime object; only a lookup table for dispatch. Its functions are listed
+// nowhere else: functions no behaviour refers to are the game-wide (global) functions.
+struct BehaviourEntry {
+    BehaviourKind kind = BehaviourKind::Object;
+    std::uint32_t source = 0;          // Index into Module::sources.
+    std::uint32_t nameIndex = noString; // The object id; noString for room and actor behaviours.
     std::vector<HandlerEntry> handlers;
 };
 
@@ -112,16 +140,24 @@ struct Module {
     std::uint16_t languageMajor = languageVersionMajor;
     std::uint16_t languageMinor = languageVersionMinor;
     std::uint32_t compilerVersion = script::compilerVersion;
-    std::uint32_t sourceNameIndex = 0; // Debug information: the source file name.
     std::vector<std::string> strings;
+    std::vector<SourceEntry> sources; // At least one.
     std::vector<Constant> constants;
     std::vector<NativeImport> imports;
     std::vector<Function> functions;
-    std::vector<ObjectEntry> objects;
+    std::vector<BehaviourEntry> behaviours;
     std::vector<EnumEntry> enums;
 
     [[nodiscard]] const std::string& string(std::uint32_t index) const { return strings[index]; }
-    [[nodiscard]] const std::string& sourceName() const { return strings[sourceNameIndex]; }
+    [[nodiscard]] const std::string& sourcePath(std::uint32_t source) const { return strings[sources[source].pathIndex]; }
+    // The path of the first source: the name of a module compiled from one file.
+    [[nodiscard]] const std::string& sourceName() const { return sourcePath(0); }
+    // The source file of function `function`; empty for compiler-generated functions.
+    [[nodiscard]] std::string_view functionSource(std::size_t function) const
+    {
+        const std::uint32_t source = functions[function].source;
+        return source < sources.size() ? std::string_view(sourcePath(source)) : std::string_view();
+    }
 };
 
 } // namespace schuimm::script

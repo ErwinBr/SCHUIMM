@@ -27,8 +27,9 @@ Status validateRoomScript(const RoomResource& room, const script::Program* progr
 {
     if (program == nullptr) return {};
     const script::Module& module = program->module();
-    for (const script::ObjectEntry& object : module.objects) {
-        const std::string& name = module.string(object.nameIndex);
+    for (const script::BehaviourEntry& behaviour : module.behaviours) {
+        if (behaviour.kind != script::BehaviourKind::Object) continue;
+        const std::string& name = module.string(behaviour.nameIndex);
         if (room.findObject(name) == nullptr) {
             return makeError(ErrorCode::InvalidData, concat("script '", program->name(), "' declares object '", name,
                                                             "', which room '", room.id, "' does not define"));

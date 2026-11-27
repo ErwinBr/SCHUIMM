@@ -3,6 +3,7 @@
 #include "Script/Compiler/SourceFile.h"
 
 #include <cstddef>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -47,5 +48,8 @@ private:
 // "scripts/main.sch:8:10: error: Undefined variable 'player_speed'." followed by the source
 // line, a caret marker under the range and the notes.
 [[nodiscard]] std::string formatDiagnostic(const Diagnostic& diagnostic, const SourceFile& source);
+// The same, with the file the diagnostic's range refers to (SourceRange::file == SourceFile::id);
+// the first file if none matches (diagnostics without a location).
+[[nodiscard]] std::string formatDiagnostic(const Diagnostic& diagnostic, std::span<const SourceFile* const> files);
 
 } // namespace schuimm::script

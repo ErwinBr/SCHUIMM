@@ -12,6 +12,7 @@ schuimm_add_test(ScriptTests
         ObjectTests.cpp
         OptimizerTests.cpp
         ParserTests.cpp
+        ProjectTests.cpp
         SchedulerTests.cpp
         TypeCheckerTests.cpp
         VmTests.cpp
@@ -42,6 +43,17 @@ if(TARGET schuimmc AND TARGET schuimm-run)
     set_tests_properties(ScriptCompilerObjectsCli PROPERTIES LABELS unit FIXTURES_SETUP script_objects_bytecode)
     set_tests_properties(ScriptRunnerDispatchCli PROPERTIES LABELS unit FIXTURES_REQUIRED script_objects_bytecode
         PASS_REGULAR_EXPRESSION "You see a lamp\\..*object#7.*Click\\..*The lamp is on\\.")
+    # Project compilation: two sources, named relative to their root, compiled into one program.
+    set(project_dir "${PROJECT_SOURCE_DIR}/Tests/Script/Data/Project")
+    set(project_bytecode "${CMAKE_CURRENT_BINARY_DIR}/project.schb")
+    add_test(NAME ScriptCompilerProjectCli
+        COMMAND schuimmc --source-root "${project_dir}" --global "${project_dir}/Scripts/Global.sch"
+                --room "${project_dir}/Rooms/Kitchen.sch" -o "${project_bytecode}" --verify --disasm)
+    set_tests_properties(ScriptCompilerProjectCli PROPERTIES LABELS unit FIXTURES_SETUP script_project_bytecode
+        PASS_REGULAR_EXPRESSION "s0 room \"Rooms/Kitchen.sch\".*s1 global \"Scripts/Global.sch\"")
+    add_test(NAME ScriptRunnerProjectCli COMMAND schuimm-run "${project_bytecode}")
+    set_tests_properties(ScriptRunnerProjectCli PROPERTIES LABELS unit FIXTURES_REQUIRED script_project_bytecode
+        PASS_REGULAR_EXPRESSION "Hello, kitchen")
     add_test(NAME ScriptCompilerCliRejectsErrors
         COMMAND schuimmc "${PROJECT_SOURCE_DIR}/Tests/Script/Data/type_error.sch")
     set_tests_properties(ScriptCompilerCliRejectsErrors PROPERTIES LABELS unit WILL_FAIL TRUE)

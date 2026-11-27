@@ -226,7 +226,10 @@ struct Validator {
         const Function& function = module.functions[index];
         std::string name = function.nameIndex < module.strings.size() ? module.strings[function.nameIndex] : concat("#", index);
         if (index < owner.size() && owner[index] != noOwner) {
-            return concat(module.strings[module.objects[owner[index]].nameIndex], ".", name);
+            const BehaviourEntry& behaviour = module.behaviours[owner[index]];
+            const std::string prefix =
+                behaviour.kind == BehaviourKind::Object ? module.strings[behaviour.nameIndex] : toString(behaviour.kind);
+            return concat(prefix, ".", name);
         }
         return name;
     }
@@ -273,39 +276,77 @@ struct Validator {
         return {};
     }
 
-    // The Objects table: unique object names that clash with no room-level function or native,
-    // at least one handler per object, unique handler names per object, existing functions named
-    // like their handler, each function a handler at most once, and "self" (object) as parameter 0.
-    Status checkObjects()
+    // The Sources table: at least one source, with existing, unique paths.
+    Status checkSources()
+    {
+        if (module.sources.empty()) {
+            return invalid("the module has no sources");
+        }
+        std::set<std::string_view> paths;
+        for (std::size_t i = 0; i < module.sources.size(); ++i) {
+            const SourceEntry& source = module.sources[i];
+            if (source.pathIndex >= module.strings.size()) {
+                return invalid(concat("source ", i, " refers to a missing path"));
+            }
+            if (!paths.insert(module.strings[source.pathIndex]).second) {
+                return invalid(concat("duplicate source '", module.strings[source.pathIndex], "'"));
+            }
+        }
+        return {};
+    }
+
+    // The Behaviours table:
+    //   * every behaviour belongs to an existing source of the matching role: room and object
+    //     behaviours to room scripts, actor behaviours to actor scripts;
+    //   * a source has at most one room and one actor behaviour; object behaviours are named,
+    //     uniquely per source, the others unnamed;
+    //   * handler names are unique per behaviour; each handler is an existing function of the same
+    //     name and source, and no function is the handler of two events;
+    //   * an object handler takes the object (self) as parameter 0, an actor handler the actor.
+    Status checkBehaviours()
     {
         owner.assign(module.functions.size(), noOwner);
-        std::set<std::string_view> objectNames;
-        for (std::size_t o = 0; o < module.objects.size(); ++o) {
-            const ObjectEntry& object = module.objects[o];
-            if (object.nameIndex >= module.strings.size()) {
-                return invalid(concat("object ", o, " refers to a missing name"));
+        std::set<std::pair<std::uint32_t, std::string>> objectNames;
+        std::set<std::pair<std::uint32_t, BehaviourKind>> unnamed;
+        for (std::size_t b = 0; b < module.behaviours.size(); ++b) {
+            const BehaviourEntry& behaviour = module.behaviours[b];
+            if (behaviour.source >= module.sources.size()) {
+                return invalid(concat("behaviour ", b, " refers to missing source ", behaviour.source));
             }
-            const std::string& name = module.strings[object.nameIndex];
-            if (!objectNames.insert(name).second) {
-                return invalid(concat("duplicate object '", name, "'"));
+            const ScriptRole role = module.sources[behaviour.source].role;
+            const ScriptRole expected = behaviour.kind == BehaviourKind::Actor ? ScriptRole::Actor : ScriptRole::Room;
+            if (role != expected) {
+                return invalid(concat("behaviour ", b, " (", toString(behaviour.kind), ") belongs to a ", toString(role),
+                                      " script"));
             }
-            if (object.handlers.empty()) {
-                return invalid(concat("object '", name, "' has no handlers"));
-            }
-            for (const NativeImport& import : module.imports) {
-                if (module.strings[import.nameIndex] == name) {
-                    return invalid(concat("object '", name, "' has the same name as a native import"));
+            std::string name;
+            if (behaviour.kind == BehaviourKind::Object) {
+                if (behaviour.nameIndex >= module.strings.size()) {
+                    return invalid(concat("object behaviour ", b, " refers to a missing name"));
+                }
+                name = module.strings[behaviour.nameIndex];
+                if (!objectNames.insert({behaviour.source, name}).second) {
+                    return invalid(concat("duplicate object '", name, "' in source '", module.sourcePath(behaviour.source), "'"));
+                }
+            } else {
+                if (behaviour.nameIndex != noString) {
+                    return invalid(concat("behaviour ", b, " (", toString(behaviour.kind), ") must not have a name"));
+                }
+                name = toString(behaviour.kind);
+                if (!unnamed.insert({behaviour.source, behaviour.kind}).second) {
+                    return invalid(concat("source '", module.sourcePath(behaviour.source), "' has more than one ", name,
+                                          " behaviour"));
                 }
             }
             std::set<std::string_view> handlerNames;
-            for (std::size_t h = 0; h < object.handlers.size(); ++h) {
-                const HandlerEntry& handler = object.handlers[h];
+            for (std::size_t h = 0; h < behaviour.handlers.size(); ++h) {
+                const HandlerEntry& handler = behaviour.handlers[h];
                 if (handler.nameIndex >= module.strings.size()) {
-                    return invalid(concat("handler ", h, " of object '", name, "' refers to a missing name"));
+                    return invalid(concat("handler ", h, " of '", name, "' refers to a missing name"));
                 }
                 const std::string& handlerName = module.strings[handler.nameIndex];
                 if (!handlerNames.insert(handlerName).second) {
-                    return invalid(concat("duplicate handler '", handlerName, "' in object '", name, "'"));
+                    return invalid(concat("duplicate handler '", handlerName, "' in '", name, "'"));
                 }
                 if (handler.function >= module.functions.size()) {
                     return invalid(concat("handler '", name, ".", handlerName, "' refers to missing function ", handler.function));
@@ -318,19 +359,17 @@ struct Validator {
                     return invalid(concat("handler '", name, ".", handlerName, "' refers to function ", handler.function,
                                           ", which has a different name"));
                 }
-                if (function.parameters.empty() || function.parameters[0] != TypeRef(ScriptType::Object)) {
-                    return invalid(concat("handler '", name, ".", handlerName,
-                                          "' must take the object (self) as its first parameter"));
+                if (function.source != behaviour.source) {
+                    return invalid(concat("handler '", name, ".", handlerName, "' is a function of another source"));
                 }
-                owner[handler.function] = static_cast<std::uint32_t>(o);
-            }
-        }
-        for (std::size_t i = 0; i < module.functions.size(); ++i) {
-            const Function& function = module.functions[i];
-            if (owner[i] == noOwner && function.nameIndex < module.strings.size() &&
-                objectNames.contains(module.strings[function.nameIndex])) {
-                return invalid(concat("object '", module.strings[function.nameIndex],
-                                      "' has the same name as a room-level function"));
+                if (behaviour.kind != BehaviourKind::Room) {
+                    const TypeRef self(behaviour.kind == BehaviourKind::Actor ? ScriptType::Actor : ScriptType::Object);
+                    if (function.parameters.empty() || function.parameters[0] != self) {
+                        return invalid(concat("handler '", name, ".", handlerName, "' must take the ", toString(self.kind),
+                                              " (self) as its first parameter"));
+                    }
+                }
+                owner[handler.function] = static_cast<std::uint32_t>(b);
             }
         }
         return {};
@@ -343,8 +382,8 @@ struct Validator {
                 return invalid(concat("string ", i, " is not valid UTF-8"));
             }
         }
-        if (module.sourceNameIndex >= module.strings.size()) {
-            return invalid("source name refers to a missing string");
+        if (auto status = checkSources(); !status) {
+            return status;
         }
         if (module.constants.size() > 0x10000) {
             return invalid("more than 65536 constants");
@@ -381,7 +420,7 @@ struct Validator {
         if (module.functions.size() > 0x10000 || module.imports.size() > 0x10000) {
             return invalid("more than 65536 functions or imports");
         }
-        if (auto status = checkObjects(); !status) {
+        if (auto status = checkBehaviours(); !status) {
             return status;
         }
         names.clear();
@@ -390,7 +429,10 @@ struct Validator {
             if (function.nameIndex >= module.strings.size()) {
                 return invalid(concat("function ", i, " refers to a missing name"));
             }
-            // Room-level function names are unique; a handler's name is unique within its object.
+            if (function.source != noSource && function.source >= module.sources.size()) {
+                return invalid(concat("function ", i, " refers to missing source ", function.source));
+            }
+            // Global function names are unique; a handler's name is unique within its behaviour.
             if (owner[i] == noOwner && !names.insert(module.strings[function.nameIndex]).second) {
                 return invalid(concat("duplicate function '", module.strings[function.nameIndex], "'"));
             }
@@ -845,12 +887,12 @@ Result<Module> readBytecode(std::span<const std::byte> data)
     {   // Functions
         ByteReader r = reader(format::SectionId::Functions);
         std::uint32_t count = 0;
-        if (!r.u32(count) || !plausibleCount(r, count, 20)) return truncated(r, "function table");
+        if (!r.u32(count) || !plausibleCount(r, count, 24)) return truncated(r, "function table");
         module.functions.resize(count);
         rawFunctions.resize(count);
         for (std::uint32_t i = 0; i < count; ++i) {
             Function& function = module.functions[i];
-            if (!r.u32(function.nameIndex)) return truncated(r, "function");
+            if (!r.u32(function.nameIndex) || !r.u32(function.source)) return truncated(r, "function");
             std::string problem;
             if (!readType(r, function.returnType, problem)) return invalid(problem);
             auto parameters = readTypes(r, "function");
@@ -869,22 +911,39 @@ Result<Module> readBytecode(std::span<const std::byte> data)
         }
         if (auto s = checkEnd(r, "function"); !s) return std::unexpected(s.error());
     }
-    {   // Objects
-        ByteReader r = reader(format::SectionId::Objects);
+    {   // Behaviours
+        ByteReader r = reader(format::SectionId::Behaviours);
         std::uint32_t count = 0;
-        if (!r.u32(count) || !plausibleCount(r, count, 8)) return truncated(r, "object table");
-        module.objects.resize(count);
-        for (ObjectEntry& object : module.objects) {
+        if (!r.u32(count) || !plausibleCount(r, count, 13)) return truncated(r, "behaviour table");
+        module.behaviours.resize(count);
+        for (BehaviourEntry& behaviour : module.behaviours) {
+            std::uint8_t kind = 0;
             std::uint32_t handlers = 0;
-            if (!r.u32(object.nameIndex) || !r.u32(handlers) || !plausibleCount(r, handlers, 8)) {
-                return truncated(r, "object");
+            if (!r.u8(kind) || !r.u32(behaviour.source) || !r.u32(behaviour.nameIndex) || !r.u32(handlers) ||
+                !plausibleCount(r, handlers, 8)) {
+                return truncated(r, "behaviour");
             }
-            object.handlers.resize(handlers);
-            for (HandlerEntry& handler : object.handlers) {
+            if (kind >= behaviourKindCount) return invalid(concat("unknown behaviour kind ", static_cast<unsigned>(kind)));
+            behaviour.kind = static_cast<BehaviourKind>(kind);
+            behaviour.handlers.resize(handlers);
+            for (HandlerEntry& handler : behaviour.handlers) {
                 if (!r.u32(handler.nameIndex) || !r.u32(handler.function)) return truncated(r, "handler");
             }
         }
-        if (auto s = checkEnd(r, "object"); !s) return std::unexpected(s.error());
+        if (auto s = checkEnd(r, "behaviour"); !s) return std::unexpected(s.error());
+    }
+    {   // Sources
+        ByteReader r = reader(format::SectionId::Sources);
+        std::uint32_t count = 0;
+        if (!r.u32(count) || !plausibleCount(r, count, 5)) return truncated(r, "source table");
+        module.sources.resize(count);
+        for (SourceEntry& source : module.sources) {
+            std::uint8_t role = 0;
+            if (!r.u32(source.pathIndex) || !r.u8(role)) return truncated(r, "source");
+            if (role >= scriptRoleCount) return invalid(concat("unknown script role ", static_cast<unsigned>(role)));
+            source.role = static_cast<ScriptRole>(role);
+        }
+        if (auto s = checkEnd(r, "source"); !s) return std::unexpected(s.error());
     }
     {   // Enums
         ByteReader r = reader(format::SectionId::Enums);
@@ -928,7 +987,7 @@ Result<Module> readBytecode(std::span<const std::byte> data)
     {   // Debug
         ByteReader r = reader(format::SectionId::Debug);
         std::uint32_t count = 0;
-        if (!r.u32(module.sourceNameIndex) || !r.u32(count) || !plausibleCount(r, count, format::debugEntrySize)) {
+        if (!r.u32(count) || !plausibleCount(r, count, format::debugEntrySize)) {
             return truncated(r, "debug information");
         }
         positions.resize(count);

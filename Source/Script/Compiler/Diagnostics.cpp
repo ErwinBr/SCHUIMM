@@ -57,4 +57,23 @@ std::string formatDiagnostic(const Diagnostic& diagnostic, const SourceFile& sou
     return text;
 }
 
+std::string formatDiagnostic(const Diagnostic& diagnostic, std::span<const SourceFile* const> files)
+{
+    const SourceFile* match = nullptr;
+    for (const SourceFile* file : files) {
+        if (file != nullptr && file->id() == diagnostic.range.file) {
+            match = file;
+            break;
+        }
+    }
+    if (match == nullptr && !files.empty()) {
+        match = files.front();
+    }
+    if (match == nullptr) {
+        const SourceFile none("<input>", {});
+        return formatDiagnostic(diagnostic, none);
+    }
+    return formatDiagnostic(diagnostic, *match);
+}
+
 } // namespace schuimm::script

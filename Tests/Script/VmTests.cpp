@@ -166,6 +166,7 @@ SCHUIMM_TEST(Vm_TypeMismatchInHandWrittenBytecodeIsAControlledError)
     // validator rejects it statically from the register types.
     Module module;
     module.strings = {"bad.sch", "main"};
+    module.sources = {{0, ScriptRole::Room}};
     Function main;
     main.nameIndex = 1;
     main.registerTypes = {ScriptType::Bool, ScriptType::Int};

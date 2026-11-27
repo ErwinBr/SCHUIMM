@@ -285,7 +285,7 @@ std::shared_ptr<const script::Program> tickProgram(script::ScriptHost& host, int
                 .has_value());
     Module module;
     module.strings = {"test.sch", "main", "tick", "yield"};
-    module.sourceNameIndex = 0;
+    module.sources = {{0, ScriptRole::Room}};
     module.imports = {{2, {}, ScriptType::None}, {3, {}, ScriptType::None}};
     Function main;
     main.nameIndex = 1;

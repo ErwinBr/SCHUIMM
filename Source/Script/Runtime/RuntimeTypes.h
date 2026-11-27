@@ -50,11 +50,13 @@ enum class ScriptErrorKind : std::uint8_t {
 
 struct StackFrameInfo {
     std::string function;
+    std::string script; // The function's source file.
     SourcePosition position;
 };
 
 // A runtime error with the script location: the source file, the function and line/column of
-// the failing instruction, and the call stack (innermost first).
+// the failing instruction, and the call stack (innermost first). A frame of another source file
+// than the failing one is shown with its file.
 struct ScriptError {
     ScriptErrorKind kind = ScriptErrorKind::Runtime;
     std::string message;

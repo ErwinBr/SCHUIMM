@@ -69,10 +69,14 @@ bool isEqualityType(Type type) noexcept
 
 class TypeCheckerImpl {
 public:
-    TypeCheckerImpl(const SourceUnit& unit, Diagnostics& diagnostics, std::span<const NativeInterface* const> interfaces)
-        : unit_(unit)
+    TypeCheckerImpl(std::span<const SourceUnitInput> units, Diagnostics& diagnostics,
+                    std::span<const NativeInterface* const> interfaces)
+        : units_(units)
         , diagnostics_(diagnostics)
     {
+        for (const SourceUnitInput& unit : units_) {
+            model_.sources_.push_back({unit.name, unit.role, unit.file});
+        }
         interfaces_.push_back(&coreInterface());
         for (const NativeInterface* interface : interfaces) {
             if (interface != nullptr && interface != &coreInterface()) {
@@ -84,9 +88,9 @@ public:
     SemanticModel run()
     {
         declareInterfaces();
-        declareEnums();
-        declareFunctions();
-        declareObjects();
+        for (std::uint32_t u = 0; u < units_.size(); ++u) declareEnums(u);
+        for (std::uint32_t u = 0; u < units_.size(); ++u) declareFunctions(u);
+        for (std::uint32_t u = 0; u < units_.size(); ++u) declareBehaviours(u);
         for (std::size_t i = 0; i < model_.functions_.size(); ++i) {
             checkFunction(*model_.functions_[i].declaration, i);
         }
@@ -105,6 +109,20 @@ private:
     }
 
     [[nodiscard]] std::string quoted(Type type) const { return concat("'", model_.typeName(type), "'"); }
+
+    // Where `declared` is, as seen from a message about `reported`: "on line 3" in the same file,
+    // "in 'Rooms/Kitchen.sch' on line 3" in another one.
+    [[nodiscard]] std::string where(const SourceRange& declared, const SourceRange& reported) const
+    {
+        if (declared.file != reported.file) {
+            for (const SourceUnitInput& unit : units_) {
+                if (unit.file == declared.file && !unit.name.empty()) {
+                    return concat("in '", unit.name, "' on line ", declared.begin.line);
+                }
+            }
+        }
+        return concat("on line ", declared.begin.line);
+    }
 
     // --- Pass 0: interfaces and enums ---------------------------------------------------------
     // Interface functions and engine enums. They have no source position (line 0), which the
@@ -185,29 +203,29 @@ private:
 
     // Where a name is already used at the top level, for "X has the same name as ..." notes;
     // empty if it is free. Functions and natives are in symbols_, enums in enumNames_.
-    [[nodiscard]] std::string describeExisting(const std::string& name) const
+    [[nodiscard]] std::string describeExisting(const std::string& name, const SourceRange& reported) const
     {
         if (const auto symbol = symbols_.find(name); symbol != symbols_.end()) {
             if (symbol->second.declaration.begin.line == 0) return concat("'", name, "' is a built-in function.");
-            return concat("A function '", name, "' was declared on line ", symbol->second.declaration.begin.line, ".");
+            return concat("A function '", name, "' was declared ", where(symbol->second.declaration, reported), ".");
         }
         if (const auto found = enumNames_.find(name); found != enumNames_.end()) {
             const EnumInfo& info = model_.enums_[found->second];
             if (info.isEngine()) return concat("'", name, "' is a built-in enum.");
-            return concat("An enum '", name, "' was declared on line ", info.declaration.begin.line, ".");
+            return concat("An enum '", name, "' was declared ", where(info.declaration, reported), ".");
         }
         return {};
     }
 
-    void declareEnums()
+    void declareEnums(std::uint32_t u)
     {
-        for (const auto& declaration : unit_.enums) {
+        for (const auto& declaration : units_[u].unit->enums) {
             const std::string& name = declaration->name;
             if (isReservedName(name)) {
                 error(declaration->nameRange, concat("'", name, "' is a built-in name and cannot be used as an enum name."));
                 continue;
             }
-            if (const std::string existing = describeExisting(name); !existing.empty()) {
+            if (const std::string existing = describeExisting(name, declaration->nameRange); !existing.empty()) {
                 error(declaration->nameRange, concat("Duplicate declaration of '", name, "'."), {existing});
                 continue;
             }
@@ -251,12 +269,31 @@ private:
     }
 
     // --- Pass 1: function and extern signatures ----------------------------------------------
-    void declareFunctions()
+    void declareFunctions(std::uint32_t u)
     {
-        std::uint32_t functionIndex = 0;
-        for (const auto& function : unit_.functions) {
+        for (const auto& function : units_[u].unit->functions) {
             const std::string& name = function->name;
             bool valid = true;
+            std::vector<Type> parameters;
+            for (const Parameter& parameter : function->parameters) {
+                parameters.push_back(resolve(parameter.type));
+            }
+            const Type returnType = resolve(function->returnType);
+            if (function->isExtern) {
+                // The same extern declaration in several files declares one native.
+                if (const auto existing = symbols_.find(name); existing != symbols_.end() &&
+                    existing->second.kind == CallKind::Native && existing->second.declaration.begin.line != 0) {
+                    const NativeSignature& native = model_.natives_[existing->second.index];
+                    if (native.parameters != parameters || native.returnType != returnType) {
+                        error(function->nameRange, concat("Conflicting declaration of native function '", name, "'."),
+                              {concat("'", name, "' was declared with another signature ",
+                                      where(existing->second.declaration, function->nameRange),
+                                      "; every file must declare it alike.")});
+                    }
+                    checkParameterNames(*function);
+                    continue;
+                }
+            }
             if (isReservedName(name)) {
                 error(function->nameRange, concat("'", name, "' is a built-in name and cannot be redefined."));
                 valid = false;
@@ -268,19 +305,15 @@ private:
                                   "', which every script of this kind can call without declaring it.")});
                 } else {
                     error(function->nameRange, concat("Duplicate declaration of function '", name, "'."),
-                          {concat("'", name, "' was first declared on line ", existing->second.declaration.begin.line, ".")});
+                          {concat("'", name, "' was first declared ", where(existing->second.declaration, function->nameRange),
+                                  ".")});
                 }
                 valid = false;
-            } else if (const std::string other = describeExisting(name); !other.empty()) {
+            } else if (const std::string other = describeExisting(name, function->nameRange); !other.empty()) {
                 error(function->nameRange, concat("Function '", name, "' has the same name as an enum."), {other});
                 valid = false;
             }
             checkParameterNames(*function);
-            std::vector<Type> parameters;
-            for (const Parameter& parameter : function->parameters) {
-                parameters.push_back(resolve(parameter.type));
-            }
-            const Type returnType = resolve(function->returnType);
             if (function->isExtern) {
                 NativeSignature native;
                 native.name = name;
@@ -294,13 +327,14 @@ private:
             } else {
                 FunctionSemantics semantics;
                 semantics.declaration = function.get();
+                semantics.source = u;
                 semantics.parameters = std::move(parameters);
                 semantics.returnType = returnType;
+                const auto functionIndex = static_cast<std::uint32_t>(model_.functions_.size());
                 model_.functions_.push_back(std::move(semantics));
                 if (valid) {
                     symbols_[name] = {CallKind::Function, functionIndex, function->nameRange};
                 }
-                ++functionIndex;
             }
         }
     }
@@ -316,37 +350,43 @@ private:
         }
     }
 
-    // Object declarations and their handlers. Objects share the room namespace (an object
-    // cannot be named like a function or native); handler names are scoped to their object.
-    void declareObjects()
+    // Behaviour declarations and their handlers. Object names are unique per room script and do
+    // not enter the game-wide namespace (two rooms may each have a "door"); handler names are
+    // scoped to their behaviour.
+    void declareBehaviours(std::uint32_t u)
     {
+        const SourceUnitInput& input = units_[u];
         std::unordered_map<std::string, SourceRange> objectNames;
-        for (std::size_t o = 0; o < unit_.objects.size(); ++o) {
-            const ObjectDecl& object = *unit_.objects[o];
-            const auto objectIndex = static_cast<std::uint32_t>(o);
+        for (const auto& declaration : input.unit->objects) {
+            const ObjectDecl& object = *declaration;
+            if (input.role != ScriptRole::Room) {
+                error(object.nameRange, concat("Object declarations belong in room scripts; this is ",
+                                               input.role == ScriptRole::Actor ? "an actor" : "a global", " script."),
+                      {"Declare the object's handlers in the script of the room that contains it."});
+            }
             if (isReservedName(object.name)) {
                 error(object.nameRange, concat("'", object.name, "' is a built-in name and cannot be used as an object name."));
             } else if (const auto existing = objectNames.find(object.name); existing != objectNames.end()) {
                 error(object.nameRange, concat("Duplicate declaration of object '", object.name, "'."),
                       {concat("'", object.name, "' was first declared on line ", existing->second.begin.line,
                               "; put all handlers of an object in one declaration.")});
-            } else if (const std::string other = describeExisting(object.name); !other.empty()) {
-                error(object.nameRange,
-                      concat("Object '", object.name, "' has the same name as ",
-                             symbols_.count(object.name) != 0 ? "a function." : "an enum."),
-                      {other});
             } else {
                 objectNames.emplace(object.name, object.nameRange);
             }
-            ObjectSemantics semantics;
+            const auto behaviourIndex = static_cast<std::uint32_t>(model_.behaviours_.size());
+            BehaviourSemantics semantics;
+            semantics.kind = BehaviourKind::Object;
+            semantics.source = u;
             semantics.declaration = &object;
+            semantics.name = object.name;
             std::unordered_map<std::string, SourceRange> handlerNames;
             for (const auto& handler : object.handlers) {
                 checkParameterNames(*handler);
                 const auto functionIndex = static_cast<std::uint32_t>(model_.functions_.size());
                 FunctionSemantics function;
                 function.declaration = handler.get();
-                function.object = objectIndex;
+                function.source = u;
+                function.behaviour = behaviourIndex;
                 for (const Parameter& parameter : handler->parameters) {
                     function.parameters.push_back(resolve(parameter.type));
                 }
@@ -363,7 +403,7 @@ private:
                     semantics.handlers.push_back({handler->name, functionIndex});
                 }
             }
-            model_.objects_.push_back(std::move(semantics));
+            model_.behaviours_.push_back(std::move(semantics));
         }
     }
 
@@ -371,7 +411,9 @@ private:
     [[nodiscard]] std::string displayName(const FunctionDecl& function) const
     {
         if (current_ != nullptr && current_->isHandler()) {
-            return concat(unit_.objects[current_->object]->name, ".", function.name);
+            const BehaviourSemantics& behaviour = model_.behaviours_[current_->behaviour];
+            return concat(behaviour.kind == BehaviourKind::Object ? behaviour.name : toString(behaviour.kind), ".",
+                          function.name);
         }
         return function.name;
     }
@@ -890,9 +932,9 @@ private:
                 error(call.nameRange, concat("'", name, "' is a variable, not a function."));
             } else if (isSiblingHandler(name)) {
                 error(call.nameRange, concat("Undefined function '", name, "'."),
-                      {concat("'", name, "' is a handler of object '", unit_.objects[current_->object]->name,
+                      {concat("'", name, "' is a handler of object '", model_.behaviours_[current_->behaviour].name,
                               "'; handlers are invoked by the engine and cannot be called directly. "
-                              "Move shared code into a room-level function.")});
+                              "Move shared code into a global function.")});
             } else {
                 error(call.nameRange, concat("Undefined function '", name, "'."),
                       {"Declare engine functions with 'extern func name(...)'."});
@@ -974,8 +1016,8 @@ private:
         if (current_ == nullptr || !current_->isHandler()) {
             return false;
         }
-        for (const auto& handler : unit_.objects[current_->object]->handlers) {
-            if (handler->name == name) return true;
+        for (const HandlerSemantics& handler : model_.behaviours_[current_->behaviour].handlers) {
+            if (handler.name == name) return true;
         }
         return false;
     }
@@ -1050,7 +1092,7 @@ private:
         }
     }
 
-    const SourceUnit& unit_;
+    std::span<const SourceUnitInput> units_;
     Diagnostics& diagnostics_;
     SemanticModel model_;
     std::vector<const NativeInterface*> interfaces_;
@@ -1060,9 +1102,16 @@ private:
     FunctionSemantics* current_ = nullptr;
 };
 
+SemanticModel checkTypes(std::span<const SourceUnitInput> units, Diagnostics& diagnostics,
+                         std::span<const NativeInterface* const> interfaces)
+{
+    return TypeCheckerImpl(units, diagnostics, interfaces).run();
+}
+
 SemanticModel checkTypes(const SourceUnit& unit, Diagnostics& diagnostics, std::span<const NativeInterface* const> interfaces)
 {
-    return TypeCheckerImpl(unit, diagnostics, interfaces).run();
+    const SourceUnitInput input{&unit, {}, ScriptRole::Room, 0};
+    return checkTypes(std::span<const SourceUnitInput>(&input, 1), diagnostics, interfaces);
 }
 
 } // namespace schuimm::script

@@ -89,10 +89,13 @@ public:
 
     Module run()
     {
-        module_.sourceNameIndex = intern(ir_.sourceName);
+        for (const IrSource& source : ir_.sources) {
+            module_.sources.push_back({intern(source.name), source.role});
+        }
         for (const IrFunction& function : ir_.functions) {
             Function out;
             out.nameIndex = intern(function.name);
+            out.source = function.source;
             for (const Type type : function.parameters) {
                 out.parameters.push_back(typeRef(type));
             }
@@ -102,13 +105,15 @@ public:
         for (std::size_t i = 0; i < ir_.functions.size(); ++i) {
             generate(ir_.functions[i], module_.functions[i]);
         }
-        for (const IrObject& object : ir_.objects) {
-            ObjectEntry out;
-            out.nameIndex = intern(object.name);
-            for (const IrHandler& handler : object.handlers) {
+        for (const IrBehaviour& behaviour : ir_.behaviours) {
+            BehaviourEntry out;
+            out.kind = behaviour.kind;
+            out.source = behaviour.source;
+            out.nameIndex = behaviour.kind == BehaviourKind::Object ? intern(behaviour.name) : noString;
+            for (const IrHandler& handler : behaviour.handlers) {
                 out.handlers.push_back({intern(handler.name), handler.function});
             }
-            module_.objects.push_back(std::move(out));
+            module_.behaviours.push_back(std::move(out));
         }
         if (module_.constants.size() > maxConstants) {
             fail(concat("The script uses ", module_.constants.size(), " distinct constants; the limit is ", maxConstants, "."));
