@@ -664,7 +664,7 @@ void copyTree(const std::string& from, const std::string& to)
 
 } // namespace
 
-SCHUIMM_TEST(Adventure_TheDemoCourtyardScriptRunsToTheEnd)
+SCHUIMM_TEST(Adventure_TheDemoGameRunsThroughItsRooms)
 {
     // The demo's real assets and scripts, headless: the game is compiled the way the build
     // compiles it (the game build, with the adventure interface) and run by an AdventureRuntime,
@@ -722,25 +722,79 @@ SCHUIMM_TEST(Adventure_TheDemoCourtyardScriptRunsToTheEnd)
         CHECK(contains(output[5], "the gardener came over, facing True"));
         CHECK_EQ(output.back(), std::string("demonstrate: done"));
         CHECK_EQ(courtyard->object("fan")->animation(), std::string("spinning"));
-        // The fan's handler toggles it.
+        // The fan's handler toggles it; its first use repairs the fan and awards points through a
+        // global function that waits.
         output.clear();
         REQUIRE((*runtime)->dispatchObject("fan", "use")->handled);
         host.update(dt);
         CHECK_EQ(output, std::vector<std::string>{"fan: off"});
         CHECK_EQ(courtyard->object("fan")->animation(), std::string("idle"));
-        // The gardener is back on its rounds; leaving the room ends them.
-        CHECK_EQ(courtyard->activeCoroutineCount(), std::size_t{1});
-        // The courtyard's movers have no script; the hall's walkers run their actor script, each
-        // as itself with its own variables.
-        CHECK(!(*runtime)->dispatchActor("gardener", "look_at")->handled);
-        REQUIRE((*runtime)->enterRoom(AssetPath::parse("Rooms/Hall.room.json").value()).has_value());
-        output.clear();
-        REQUIRE((*runtime)->dispatchActor("guard_01", "look_at")->handled);
-        REQUIRE((*runtime)->dispatchActor("guard_01", "look_at")->handled);
-        REQUIRE((*runtime)->dispatchActor("guard_02", "look_at")->handled);
+        CHECK_EQ(courtyard->activeCoroutineCount(), std::size_t{2}); // The patrol, and the fan awarding points.
+        const auto run = [&](double seconds) {
+            for (double t = 0; t < seconds; t += dt) {
+                (*runtime)->update(dt);
+                host.update(dt);
+            }
+        };
+        run(1.0);
+        CHECK_EQ(output.back(), std::string("score: 10 (the fan works)"));
+        CHECK_EQ(courtyard->activeCoroutineCount(), std::size_t{1}); // The gardener is back on its rounds.
+        const script::GlobalState& globals = *(*runtime)->globals();
+        CHECK(globals.find("fan_repaired")->asBool());
+        CHECK_EQ(courtyard->objectScript("fan")->find("switches")->asInt(), 1);
+        CHECK_EQ(courtyard->roomScript()->find("demonstrations")->asInt(), 1);
+        // A coroutine of the game session survives the room changes below.
+        REQUIRE((*runtime)->start("session_clock").has_value());
+
+        // The courtyard's movers have no script.
+        CHECK(!(*runtime)->dispatchActor("gardener", "interact")->handled);
+        REQUIRE((*runtime)->dispatchRoom("exit")->handled);
         host.update(dt);
-        CHECK_EQ(output, std::vector<std::string>({"Looking good, as always. (1)", "Looking good, as always. (2)",
-                                                   "Looking good, as always. (1)"}));
+        CHECK_EQ(output.back(), std::string("courtyard: leaving after 1 demonstration(s), visit 1"));
+
+        // The garden reads the courtyard's globals and calls its global function; its walkers run
+        // the walker's actor script, each as itself.
+        output.clear();
+        REQUIRE((*runtime)->enterRoom(AssetPath::parse("Rooms/Garden.room.json").value()).has_value());
+        CHECK((*runtime)->activeRoom()->actor("lamp") != nullptr);
+        REQUIRE((*runtime)->dispatchRoom("init")->handled);
+        REQUIRE((*runtime)->dispatchRoom("ready")->handled);
+        host.update(dt);
+        CHECK((*runtime)->activeRoom()->actor("lamp")->visible()); // init: the fan works, so the lamp is on.
+        REQUIRE((*runtime)->dispatchActor("hero", "interact")->handled); // Verb "look at".
+        for (int i = 0; i < 2; ++i) REQUIRE((*runtime)->start("cycle_verb").has_value());
+        host.update(dt);
+        REQUIRE((*runtime)->dispatchActor("hero", "interact")->handled); // Verb "talk to".
+        REQUIRE((*runtime)->dispatchActor("gardener", "interact")->handled);
+        run(2.0); // The walkers wave and award a point each.
+        for (const script::ScriptError& error : errors) std::fprintf(stderr, "%s\n", script::describe(error).c_str());
+        CHECK(errors.empty());
+        CHECK_EQ(output, std::vector<std::string>({
+                             "garden: visit 1 of this garden, courtyard visits so far: 1",
+                             "An old stone fountain stands in the courtyard; its water still runs.",
+                             "Looking good, as always. (looked at 1 times)",
+                             "verb: use",
+                             "verb: talk to",
+                             "walker: conversation 1 with me, 1 with walkers",
+                             "walker: thanks for fixing the courtyard fan!",
+                             "walker: conversation 1 with me, 2 with walkers",
+                             "walker: thanks for fixing the courtyard fan!",
+                             "score: 11 (a friendly wave)",
+                             "score: 12 (a friendly wave)",
+                         }));
+        CHECK_EQ((*runtime)->activeRoom()->actorScript("hero")->find("looks")->asInt(), 1);
+        CHECK_EQ((*runtime)->activeRoom()->actorScript("gardener")->find("looks")->asInt(), 0);
+        CHECK_EQ(globals.find("walker_conversations")->asInt(), 2);
+        CHECK_EQ(globals.find("rooms_entered")->asInt(), 2);
+        // Back in a new courtyard: its room and object variables start again, the globals stay.
+        REQUIRE((*runtime)->enterRoom(AssetPath::parse("Rooms/Courtyard.room.json").value()).has_value());
+        REQUIRE((*runtime)->dispatchRoom("ready")->handled);
+        host.update(dt);
+        CHECK_EQ((*runtime)->activeRoom()->roomScript()->find("demonstrations")->asInt(), 0);
+        CHECK_EQ((*runtime)->activeRoom()->objectScript("fan")->find("switches")->asInt(), 0);
+        CHECK_EQ(globals.find("courtyard_visits")->asInt(), 2);
+        CHECK_EQ(globals.find("score")->asInt(), 12);
+        CHECK_EQ((*runtime)->sessionCoroutineCount(), std::size_t{1}); // The session clock.
         host.stopAll();
     }
 }

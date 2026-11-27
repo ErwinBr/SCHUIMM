@@ -59,14 +59,14 @@ Start `EngineDemo` normally and check:
 `ActorDemo` exercises actors, animation, navigation, movement and script-driven adventure
 behaviour ([Actors.md](Actors.md), [Navigation.md](Navigation.md), [Adventure.md](Adventure.md)).
 - **Automatic run:** `ActorDemoSmoke` (`ctest -L integration`) runs
-  `ActorDemo --auto --frames 560`.
+  `ActorDemo --auto --frames 760`.
   - For 240 frames it runs the courtyard script: it starts the demonstration (P) and uses the fan
     (F) twice.
   - Then it runs a timed sequence of the actions below: it walks (which interrupts the
     demonstration), replaces and redirects walks, clicks an unreachable spot, and leaves and
-    re-enters rooms.
+    re-enters rooms. In the garden it uses each verb on the walkers (C, T).
 
-  The whole demonstration runs headlessly in `Adventure_TheDemoCourtyardScriptRunsToTheEnd`; press
+  The whole demonstration runs headlessly in `Adventure_TheDemoGameRunsThroughItsRooms`; press
   P to watch it.
 - **Handles:** the log names every actor with its handle, so fresh handles after each room change
   are visible.
@@ -89,7 +89,20 @@ behaviour ([Actors.md](Actors.md), [Navigation.md](Navigation.md), [Adventure.md
 | **G** | debug overlay | Walkable polygons (green), corner nodes (yellow), visibility edges (blue), current paths (orange), requested (red cross) and resolved (green square) destinations, ground points (white). |
 | (watch) | perspective | Actors get smaller and slower towards the wall, larger and faster towards the bottom, and are drawn in front of or behind the columns, crates and fountain according to their feet. The gardener walks its rounds (the script's `patrol`), pausing and turning at two corners. |
 | **P** | scripted demonstration | The log shows `[Script]` lines as `demonstrate()` runs: a second patrol takes over the gardener, which cancels the first one; the hero walks towards the balcony and stops at the nearest reachable point; it walks to the fan, turns east, presses the button and only then does the fan spin; it walks off while the camera zooms in and back; the patrol is cancelled and the gardener appears beside the hero, facing west; then the gardener resumes its rounds. Pressing P again restarts the demonstration. A click during it walks the hero elsewhere and ends the demonstration without the rest of its sequence. |
-| **F** | use the fan | Dispatches the fan's `use` handler: it toggles between spinning (looping) and idle, and logs "fan: on" / "fan: off". |
+| **F** | use the fan | Dispatches the fan's `use` handler: it toggles between spinning (looping) and idle, and logs "fan: on" / "fan: off". The first use repairs the fan (the global `fan_repaired`) and, half a second later, logs "score: 10 (the fan works)": `award_points` is a global function that waits. |
+| **Tab** / **R** | leave the room | The room's `exit` handler runs first ("courtyard: leaving after N demonstration(s), visit N"); the room is left at the next frame. Coming back starts the room's and the fan's variables afresh (`demonstrations`, `switches`), while the globals (`courtyard_visits`, `score`, `fan_repaired`) keep counting. |
+
+**The game around the rooms** (`Assets/ActorDemo.game.json`) is one program of five scripts:
+`Scripts/Global.sch` (the score, `award_points`, the session clock), `Scripts/Interface.sch` (the
+`Verb` enum and `selected_verb`), the courtyard's and the garden's room scripts, and the walker's
+actor script. `session_clock`, started once as a coroutine of the game session, logs the play
+time every 15 seconds whatever room is active.
+
+| Input | Action | What to check |
+|---|---|---|
+| **C** | next verb | Logs "verb: use", "verb: talk to", "verb: look at" (the game-wide `selected_verb`). |
+| **T** | the verb on the selected actor | Walkers (hall and garden) run their actor script's `interact()`: "look at" counts this walker's looks; "talk to" counts this walker's conversations and all walkers' (a global declared in the actor script), thanks you once the courtyard fan works, waves, and then awards a point. Each walker counts on its own; in a re-entered room the counts start again. The courtyard's movers have no actor script ("has no script behaviour"). |
+| (enter the garden) | room handlers | `init` turns the lamp on if the courtyard fan works; `ready` logs this garden visit and the courtyard's visit count, and calls the courtyard script's `describe_fountain()` while the courtyard does not exist. |
 
 If `Applications/ActorDemo/LocalAssets` exists (it is not in git; see its README), its files replace
 the repository's generated walker art when the demo is built.

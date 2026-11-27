@@ -2,7 +2,7 @@
 # animation operations, camera and room lifetime. Headless (PNG headers only).
 schuimm_add_test(AdventureTests
     SOURCES AdventureTests.cpp RuntimeTests.cpp
-    LIBRARIES Schuimm::Adventure Schuimm::GameBuild Schuimm::ScriptCompiler
+    LIBRARIES Schuimm::Adventure Schuimm::GameBuild
     LABELS unit)
 target_include_directories(AdventureTests PRIVATE
     "${PROJECT_SOURCE_DIR}/Tests/Resource"

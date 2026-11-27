@@ -2,8 +2,17 @@
 # adventure interface (schuimmc --game), so get_actor, walk_to, Direction and the rest need no
 # declarations.
 #
-# Its global functions (patrol, left_of) are game-wide like every global function; the room's
-# handlers are in the "room:" declaration below. ActorDemo dispatches fan.use on F.
+# Its global variables and functions (courtyard_visits, fan_repaired, describe_fountain, patrol,
+# left_of) are game-wide like every global declaration: the garden and the walkers use them. The
+# room's handlers are in the "room:" declaration below. ActorDemo dispatches fan.use on F.
+
+var courtyard_visits: int = 0
+var fan_repaired: bool = False
+
+
+# Also called by the garden's script, while the courtyard does not exist.
+func describe_fountain():
+	print("An old stone fountain stands in the courtyard; its water still runs.")
 
 
 # The gardener's rounds. walk_to waits until the gardener arrives; wait() pauses the round.
@@ -26,18 +35,26 @@ func left_of(target: entity, gap: float) -> vec2:
 	return point
 
 
-# The room's own behaviour. ActorDemo dispatches ready() when the room is entered and
-# demonstrate() on P; both run for this room only, and their coroutines (and the global functions
-# they call or spawn) belong to the room: leaving the room cancels them.
+# The room's own behaviour. ActorDemo dispatches ready() when the room is entered, exit() before
+# it is left and demonstrate() on P; they run for this room only, and their coroutines (and the
+# global functions they call or spawn) belong to the room: leaving the room cancels them.
 room:
+	var demonstrations: int = 0    # this visit's own: starts at 0 with every visit
+
 	func ready():
+		courtyard_visits += 1
+		rooms_entered += 1
 		print("courtyard: the gardener starts its rounds")
 		spawn patrol(get_actor("gardener"))
+
+	func exit():
+		print("courtyard: leaving after " + str(demonstrations) + " demonstration(s), visit " + str(courtyard_visits))
 
 	func demonstrate():
 		var hero: actor = get_actor("hero")
 		var gardener: actor = get_actor("gardener")
 		var fan: object = get_object("fan")
+		demonstrations += 1
 		print("demonstrate: start")
 
 		# A second patrol for the gardener, in its own coroutine. Its first walk replaces the room's
@@ -79,10 +96,16 @@ room:
 
 
 object fan:
+	var switches: int = 0    # this fan's own
+
 	func use():
+		switches += 1
 		if get_animation(self) == "spinning":
 			play_animation(self, "idle")
 			print("fan: off")
 		else:
 			play_animation(self, "spinning")
 			print("fan: on")
+		if not fan_repaired:
+			fan_repaired = True
+			award_points(10, "the fan works")

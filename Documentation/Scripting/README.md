@@ -1,4 +1,4 @@
-# Scripting (Milestone 3)
+# Scripting
 
 SCHUIMM runs game logic in **SCHUIMM Script**, a small, statically typed language with
 Python-inspired syntax. Scripts are compiled ahead of time into validated, platform-independent
@@ -9,9 +9,60 @@ the engine dispatches an event by object identifier and event name, and the hand
 the object as `self` ([Language.md §8](Language.md#8-behaviours-rooms-actors-and-objects),
 [Runtime.md](Runtime.md#behaviour-handlers-and-dispatch), [Examples/kitchen.sch](Examples/kitchen.sch)).
 
-Language 3.0 (Milestone 4.4 Part II) compiles the scripts of a game into one program: functions,
-natives and enums declared in any file are usable in every other file, without imports
+Language 3.0 (Milestone 4.4 Part II) compiles the scripts of a game into one program: variables,
+functions, natives and enums declared in any file are usable in every other file, without imports
 ([Language.md §1](Language.md#1-source-files), [Compiler.md](Compiler.md#project-compilation)).
+Rooms, actors and objects have behaviours (`room:`, `actor:`, `object NAME:`) with their own
+private variables ([Language.md §7, §8](Language.md#7-variables-and-scope)).
+
+### A game's scripts in short
+
+Put each declaration where it belongs; the game finds it:
+
+```python
+# Scripts/Global.sch: game-wide things
+var score: int = 0
+
+func award_points(amount: int):
+	score += amount
+```
+
+```python
+# Rooms/Kitchen/Kitchen.sch: the kitchen's script
+var oven_repaired: bool = False          # global, though declared here: every script sees it
+
+room:
+	var visits: int = 0                   # this kitchen visit's own
+	func ready():
+		visits += 1
+
+object oven:
+	func use():
+		if not oven_repaired:
+			oven_repaired = True
+			award_points(10)              # declared in another file
+```
+
+```python
+# Actors/Cook/Cook.sch: every actor using the cook's resource
+actor:
+	var conversations: int = 0            # each cook's own
+	func talk_to():
+		conversations += 1
+		if oven_repaired:
+			print("Thank you for repairing the oven.")
+```
+
+| Where a `var` is | It is | It lasts |
+|---|---|---|
+| at the top of any file | global | the whole game session |
+| in `room:`, `actor:` or `object` | the room's, actor's or object's own | until the room is left |
+| in a function | local | one call |
+
+The game resource (`*.game.json`) lists the global scripts and the rooms; the build finds the
+room and actor scripts through them and compiles everything into one program
+([ResourceFormats.md](../Architecture/ResourceFormats.md#the-game-resource),
+[Adventure.md](../Architecture/Adventure.md#game-sessions-adventureruntime)).
 
 Language 2.0 (Milestone 4.4) added:
 - required `var` declarations;

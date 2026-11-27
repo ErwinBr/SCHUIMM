@@ -97,6 +97,8 @@ Status ActorDemoListener::onInitialize(Application& app)
     if (!runtime) return std::unexpected(runtime.error());
     runtime_ = std::move(*runtime);
     rooms_ = runtime_->game().rooms;
+    // A coroutine of the game session: it lives as long as the game, whatever room is active.
+    if (auto clock = runtime_->start("session_clock"); !clock) app.logger().error(category, describe(clock.error()));
     images_ = std::make_unique<ResourceCache<Image>>(assets_, loadImage);
     textures_ = std::make_unique<TextureCache>(app.graphics().renderer(), *images_);
     camera_.setViewport(app.graphics().presentation().virtualResolution);
@@ -105,8 +107,23 @@ Status ActorDemoListener::onInitialize(Application& app)
     if (!room_) return makeError(ErrorCode::InvalidData, "the first room could not be entered (see the log)");
     app.logger().info(category, "Click: walk   Right-click/S: stop   G: debug overlay   Tab: next room   R: re-enter   "
                                 "1-9: select actor   arrows: facing   W: wave   I: idle   Space: pause   V: visible   "
-                                "-/=: scale   P: scripted demonstration   F: use the fan   Esc: quit");
+                                "-/=: scale   P: scripted demonstration   F: use the fan   C: next verb   "
+                                "T: verb on the selected actor   Esc: quit");
     return {};
+}
+
+void ActorDemoListener::changeRoom(Application& app, std::size_t index)
+{
+    if (pendingRoom_) return; // Already leaving.
+    // The room's exit handler runs in this frame's script update; the room is left at the next
+    // frame, before anything else happens in it.
+    auto exited = runtime_->dispatchRoom("exit");
+    if (exited && exited->handled) {
+        pendingRoom_ = index;
+        return;
+    }
+    if (!exited) app.logger().error(category, describe(exited.error()));
+    enterRoom(app, index);
 }
 
 void ActorDemoListener::enterRoom(Application& app, std::size_t index)
@@ -144,9 +161,13 @@ void ActorDemoListener::enterRoom(Application& app, std::size_t index)
     roomTextures_ = std::move(*textures);
     room_ = runtime_->activeRoom();
     selected_ = 0;
-    // A room with a "room:" declaration sets itself up in its ready() handler (the courtyard
-    // starts the gardener's rounds); it runs in the next script update. Rooms without one ignore it.
-    if (auto started = runtime_->dispatchRoom("ready"); !started) app.logger().error(category, describe(started.error()));
+    // The room's lifecycle handlers, dispatched explicitly (the automatic lifecycle comes later):
+    // init prepares the scene (every actor and object exists), ready starts its behaviour (the
+    // courtyard sends the gardener on its rounds). They run in the next script update; rooms
+    // without them ignore them.
+    for (const char* event : {"init", "ready"}) {
+        if (auto started = runtime_->dispatchRoom(event); !started) app.logger().error(category, describe(started.error()));
+    }
     const Extent2D size = room_->resource().size;
     camera_.setBounds(RectF{0, 0, static_cast<float>(size.width), static_cast<float>(size.height)});
     const ActorInstance* hero = room_->actor("hero");
@@ -176,8 +197,22 @@ void ActorDemoListener::perform(Application& app, Action action)
         }
     };
     switch (action) {
-    case Action::NextRoom: enterRoom(app, roomIndex_ + 1); return;
-    case Action::ReenterRoom: enterRoom(app, roomIndex_); return;
+    case Action::NextRoom: changeRoom(app, roomIndex_ + 1); return;
+    case Action::ReenterRoom: changeRoom(app, roomIndex_); return;
+    case Action::CycleVerb:
+        // A global function, run as a session coroutine: it changes the game-wide selected_verb.
+        if (auto started = runtime_->start("cycle_verb"); !started) app.logger().error(category, describe(started.error()));
+        return;
+    case Action::Interact: {
+        if (actor == nullptr) return;
+        auto result = runtime_->dispatchActor(actor->id(), "interact");
+        if (!result) {
+            app.logger().error(category, describe(result.error()));
+        } else if (!result->handled) {
+            app.logger().info(category, concat(actor->id(), " has no script behaviour (its actor resource has no actor script)"));
+        }
+        return;
+    }
     case Action::SelectNext:
         if (room_ && !room_->actors().empty()) selected_ = (selected_ + 1) % room_->actors().size();
         break;
@@ -248,6 +283,8 @@ void ActorDemoListener::handleKeys(Application& app)
     if (input.wasPressed(Key::V)) perform(app, Action::ToggleVisible);
     if (input.wasPressed(Key::Equals)) perform(app, Action::ScaleUp);
     if (input.wasPressed(Key::Minus)) perform(app, Action::ScaleDown);
+    if (input.wasPressed(Key::C)) perform(app, Action::CycleVerb);
+    if (input.wasPressed(Key::T)) perform(app, Action::Interact);
     static constexpr std::array<Key, 9> digits = {Key::Digit1, Key::Digit2, Key::Digit3, Key::Digit4, Key::Digit5,
                                                   Key::Digit6, Key::Digit7, Key::Digit8, Key::Digit9};
     for (std::size_t i = 0; i < digits.size(); ++i) {
@@ -291,7 +328,7 @@ void ActorDemoListener::runAutomaticStep(Application& app)
     // and re-entering rooms.
     const std::uint64_t frame = app.frameIndex() - automaticSequenceStart_;
     if (frame == 0 || frame % 20 != 0) return;
-    switch (automaticStep_++ % 21) {
+    switch (automaticStep_++ % 27) {
     // The courtyard: walking, around the fountain, replacement, stopping, an unreachable click.
     case 0: debug_ = true; walkHero(app, {880, 300}); break;
     case 1: walkHero(app, {500, 500}); break;   // Replaces the walk, from where the hero is.
@@ -311,9 +348,16 @@ void ActorDemoListener::runAutomaticStep(Application& app)
     case 15: perform(app, Action::TogglePause); break;
     case 16: perform(app, Action::NextRoom); break;
     case 17: perform(app, Action::Wave); break;
-    case 18: perform(app, Action::NextRoom); break; // Back to the courtyard: fresh actors from the placements.
-    case 19: perform(app, Action::ReenterRoom); break;
-    case 20: perform(app, Action::NextRoom); break;
+    // The garden: its walkers run the walker's actor script, each with its own variables.
+    case 18: perform(app, Action::Interact); break;  // Verb "look at" (the first time round).
+    case 19: perform(app, Action::CycleVerb); break; // "use"
+    case 20: perform(app, Action::CycleVerb); break; // "talk to"
+    case 21: perform(app, Action::Interact); break;  // The hero talks, waves, scores a point.
+    case 22: perform(app, Action::SelectNext); perform(app, Action::Interact); break; // The gardener: its own count.
+    case 23: perform(app, Action::CycleVerb); break; // Back to "look at" for the next round.
+    case 24: perform(app, Action::NextRoom); break;  // Back to the courtyard: fresh actors from the placements.
+    case 25: perform(app, Action::ReenterRoom); break;
+    case 26: perform(app, Action::NextRoom); break;
     }
 }
 
@@ -379,6 +423,11 @@ void ActorDemoListener::useFan(Application& app)
 
 void ActorDemoListener::onUpdate(Application& app, double deltaSeconds)
 {
+    if (pendingRoom_) {
+        const std::size_t index = *pendingRoom_;
+        pendingRoom_.reset();
+        enterRoom(app, index);
+    }
     handleKeys(app);
     handleMouse(app);
     if (options_.automatic) runAutomaticStep(app);

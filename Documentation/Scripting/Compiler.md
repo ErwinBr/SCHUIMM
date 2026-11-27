@@ -288,7 +288,7 @@ All inputs are compiled into one program ([Project compilation](#project-compila
 input without a role option is a room script.
 
 ```bash
-schuimmc --game ActorDemo.game.json --assets Applications/ActorDemo/Assets -o ActorDemo.schb
+schuimmc --game ActorDemo.game.json --assets "$PWD/Applications/ActorDemo/Assets" -o ActorDemo.schb
 ```
 
 `--game` compiles a whole game: the game build (`Adventure/GameBuild.h`) reads the game
@@ -305,7 +305,7 @@ library on top of it and the resource loaders.
 | `-O0` / `-O1` | disable / enable (default) the optimizer |
 | `--global FILE`, `--room FILE`, `--actor FILE` | an input with that role (repeatable) |
 | `--source-root DIR` | name each input by its path relative to `DIR` (`Rooms/Kitchen.sch`), the name resources use |
-| `--game ASSET`, `--assets DIR` | compile the game of game resource `ASSET` (an asset path below `DIR`, default `.`) |
+| `--game ASSET`, `--assets DIR` | compile the game of game resource `ASSET`, an asset path below the absolute asset root `DIR` |
 | `--name NAME` | the source name of the only input, stored in diagnostics and debug information |
 | `--interface NAME` | let the script use the native interface `NAME` besides the core interface (repeatable) |
 | `--list-interfaces` | print the interfaces the compiler knows, with their enums and signatures |

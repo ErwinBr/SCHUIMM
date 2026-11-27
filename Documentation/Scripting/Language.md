@@ -816,8 +816,14 @@ func start_scene(guard: actor, hero: actor):
 * A spawned coroutine is independent: it keeps running after the coroutine that spawned it
   returns or is cancelled. It belongs to the same owner as the coroutine that spawned it, e.g. the
   room whose handler spawned it: when the room is destroyed, it is cancelled too.
+* **Ownership follows who started a coroutine, not where its function is written.** A room's
+  and its objects' handlers run for the room, an actor's handlers for that actor (both end when
+  the room is destroyed), and a global function the game starts itself runs for the game session.
+  Calling or spawning a global function keeps the owner: `spawn delayed_reward()` in a room
+  handler ends with the room, the same function started by the game lives on
+  ([Adventure.md](../Architecture/Adventure.md#coroutine-ownership)).
 * A spawned function's result is discarded. There is no joining (`wait(coroutine)`) in version
-  2.0.
+  3.0.
 
 ### 9.3 Coroutine references and cancel
 

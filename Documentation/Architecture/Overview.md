@@ -35,6 +35,15 @@ objects, walking, animation and the camera. It is one native interface, which th
 and `AdventureContext` binds. Waiting for walks and animations goes through completion tokens,
 so the VM stays free of adventure concepts.
 
+**Game-wide scripting** ([Adventure.md](Adventure.md#game-sessions-adventureruntime),
+[Language.md](../Scripting/Language.md)) makes the scripts of a game one program:
+* global variables, functions and enums declared in any file, used in every other file without
+  imports; `room:`, `actor:` and `object` behaviours with private instance variables;
+* project-wide compilation of a game's scripts into one linked, validated program, found
+  through a minimal game resource (`schuimmc --game`);
+* `AdventureRuntime`, the game session: the program, the global variables, the active room and
+  who owns which coroutines.
+
 Later milestones (adventure systems, editor) build on the interfaces described here, never on
 native APIs.
 
@@ -106,7 +115,10 @@ on the platform, graphics and audio *interfaces*, which in turn depend on `schui
 
 * The resource layer depends neither on windowing, graphics nor audio.
 * The script libraries depend on `schuimm_core` only. The compiler is used by the `schuimmc`
-  tool and the tests; the game links the runtime and loads precompiled bytecode.
+  tool, the game build (`schuimm_game_build`, on top of the compiler and the resource loaders)
+  and the tests; the game links the runtime and loads its precompiled program.
+* `schuimm_adventure` (room, graphics state, script runtime, the adventure interface and the
+  game resource) holds the adventure API and the game session (`AdventureRuntime`).
 * `schuimm_navigation` depends on `schuimm_core` only. `schuimm_animation` depends on
   `schuimm_resource` only. `schuimm_room` depends on `schuimm_resource`, `schuimm_animation`,
   `schuimm_navigation` and `schuimm_script_runtime`, but not on the compiler,
@@ -138,6 +150,13 @@ Rules enforced by this layout:
 
 ## Design principles
 
+* **Designers first.** SCHUIMM is for adventure game designers, many with little programming
+  experience. Prefer language features and engine APIs that let them say what they mean
+  directly, with minimal programming knowledge and boilerplate; add abstractions only when they
+  solve a demonstrated problem. So the scripts of a game are one program without imports,
+  exports or module declarations; a variable's place (a function, a behaviour, the top level)
+  decides its lifetime; there are no classes, inheritance or member access; execution is
+  sequential unless a script spawns; and the engine, not the script, decides what persists.
 * **Dependency injection, no singletons.** `Logger`, `Platform`, `Window`, `GraphicsDevice`
   and `AudioDevice` are created in `main` and passed by reference. The `Clock` takes its time source as a function,
   which makes it deterministic in tests. The only process-wide state lives where the OS forces it

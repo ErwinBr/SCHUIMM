@@ -67,9 +67,13 @@ private:
         ToggleVisible,
         ScaleUp,
         ScaleDown,
+        CycleVerb,
+        Interact,
     };
 
     void enterRoom(Application& app, std::size_t index);
+    // Leaving a room: its "exit" handler first (one script update), then enterRoom.
+    void changeRoom(Application& app, std::size_t index);
     void perform(Application& app, Action action);
     void setFacing(Application& app, room::Facing facing);
     void handleKeys(Application& app);
@@ -98,6 +102,7 @@ private:
     std::optional<adventure::AdventureNatives> natives_;
     std::unique_ptr<adventure::AdventureRuntime> runtime_;
     room::RoomInstance* room_ = nullptr; // The runtime's active room.
+    std::optional<std::size_t> pendingRoom_; // Entered at the next frame, after the exit handler ran.
     script::CoroutineHandle demonstration_;
     bool debug_ = false;
 

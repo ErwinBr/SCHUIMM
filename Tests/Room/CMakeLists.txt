@@ -4,7 +4,7 @@
 # checked for existence or read for their headers (TestPng.h).
 schuimm_add_test(RoomTests
     SOURCES ActorTests.cpp MovementTests.cpp ObjectAnimationTests.cpp RoomTests.cpp
-    LIBRARIES Schuimm::Room Schuimm::ScriptCompiler Schuimm::ThirdParty::Json
+    LIBRARIES Schuimm::GameBuild Schuimm::ThirdParty::Json # GameBuild brings the room layer and the compiler
     LABELS unit)
 target_include_directories(RoomTests PRIVATE
     "${PROJECT_SOURCE_DIR}/Tests/Resource"

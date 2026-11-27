@@ -7,6 +7,8 @@
 #include "TestFramework.h"
 #include "TestPng.h"
 
+#include "Adventure/AdventureInterface.h"
+#include "Adventure/GameBuild.h"
 #include "Animation/AnimationResourceLoader.h"
 #include "Core/Logging/Logger.h"
 #include "Platform/FileSystem/FileSystem.h"
@@ -28,6 +30,7 @@
 #include <string_view>
 #include <tuple>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 using namespace schuimm;
@@ -1074,20 +1077,24 @@ void copyTree(const std::string& from, const std::string& to)
 
 SCHUIMM_TEST(RoomActors_DemoRoomsAreValid)
 {
-    // A copy of the demo's assets, with a stand-in for the walker script that the build compiles.
+    // A copy of the demo's assets and its game, compiled by the game build. The program links
+    // against stand-ins for the adventure natives: the room layer does not run them here.
     const std::string root = test::makeScratchDirectory("actordemo");
     copyTree(SCHUIMM_ACTOR_DEMO_ASSET_DIR, root);
     Logger logger{LogLevel::Error};
     script::ScriptHost host{logger};
-    auto walkerSource = fs::readFile(path::join(root, "Actors/Walker/walker.sch"));
-    REQUIRE(walkerSource.has_value());
-    const script::test::Project project = script::test::compileFiles(
-        {{"Actors/Walker/walker.sch", std::string(reinterpret_cast<const char*>(walkerSource->data()), walkerSource->size()),
-          script::ScriptRole::Actor}},
-        script::CompileOptions{});
-    if (!project.result.success) std::fprintf(stderr, "%s", project.diagnostics().c_str());
-    REQUIRE(project.result.success);
-    auto program = script::Program::load(script::writeBytecode(project.result.module).value(), host.natives(), "game.schb");
+    std::unordered_map<std::string, script::NativeImplementation> standIns;
+    for (const script::NativeDeclaration& declaration : adventure::adventureInterface().functions) {
+        standIns[declaration.name] = [](script::NativeContext&, std::span<const script::Value>) {
+            return script::NativeResult::error("not available in this test");
+        };
+    }
+    REQUIRE(host.natives().bind(adventure::adventureInterface(), std::move(standIns)).has_value());
+    auto build = adventure::compileGame(AssetLocator::create(root).value(), AssetPath::parse("ActorDemo.game.json").value());
+    REQUIRE(build.has_value());
+    if (!(*build)->result.success) std::fprintf(stderr, "%s", script::formatDiagnostics((*build)->result).c_str());
+    REQUIRE((*build)->result.success);
+    auto program = script::Program::load(script::writeBytecode((*build)->result.module).value(), host.natives(), "game.schb");
     REQUIRE(program.has_value());
     const AssetLocator locator = AssetLocator::create(root).value();
     RoomLibrary library(locator, *program);

@@ -32,7 +32,7 @@ namespace {
 constexpr const char* usage =
     "Usage: schuimmc [options] <input.sch>...\n"
     "       schuimmc [options] [--global FILE] [--room FILE] [--actor FILE] ...\n"
-    "       schuimmc [options] --game GAME.game.json [--assets DIR]\n"
+    "       schuimmc [options] --game GAME.game.json --assets DIR\n"
     "\n"
     "Compiles SCHUIMM scripts into platform-independent bytecode. All inputs form one\n"
     "program: their global variables, functions and enums share one namespace.\n"
@@ -47,7 +47,8 @@ constexpr const char* usage =
     "  --game ASSET   Compile a game: the global scripts of the game resource ASSET and\n"
     "                 the scripts of its rooms and their actors, with the adventure\n"
     "                 interface; ASSET is an asset path below --assets\n"
-    "  --assets DIR   The asset root of --game (default: the current directory)\n"
+    "  --assets DIR   The asset root of --game: an absolute path (the engine never\n"
+    "                 resolves paths against the current directory)\n"
     "  --source-root DIR\n"
     "                 Name each source by its path relative to DIR, as resources refer\n"
     "                 to it (default: the path as given)\n"
@@ -111,7 +112,7 @@ struct Options {
     std::vector<Input> inputs;
     std::string sourceRoot;
     std::string game;
-    std::string assets = ".";
+    std::string assets;
     std::string output;
     std::string name;
     bool optimize = true;
@@ -209,6 +210,10 @@ int main(int argc, char** argv)
         } else {
             options.inputs.push_back({std::string(argument), ScriptRole::Room});
         }
+    }
+    if (!options.game.empty() && options.assets.empty()) {
+        std::fprintf(stderr, "--game needs --assets DIR, the absolute asset root\n\n%s", usage);
+        return 2;
     }
     if (!options.game.empty() && !options.inputs.empty()) {
         std::fprintf(stderr, "--game takes no other inputs: the game resource lists them\n\n%s", usage);

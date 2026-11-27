@@ -338,7 +338,7 @@ ActorDemo runs it through its game session (`AdventureRuntime`) and dispatches f
 The walker actors of the hall and garden run their actor script, `walker.sch`.
 
 There is no mouse-driven interaction dispatch yet. A headless test runs this script to the end
-on the demo's own assets (`Adventure_TheDemoCourtyardScriptRunsToTheEnd`).
+on the demo's own assets (`Adventure_TheDemoGameRunsThroughItsRooms`).
 
 ## Not in this milestone
 

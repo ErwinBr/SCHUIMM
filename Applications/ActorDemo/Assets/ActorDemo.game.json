@@ -2,6 +2,10 @@
   "version": 1,
   "id": "actor_demo",
   "program": "Scripts/ActorDemo.schb",
+  "global_scripts": [
+    "Scripts/Global.sch",
+    "Scripts/Interface.sch"
+  ],
   "rooms": [
     "Rooms/Courtyard.room.json",
     "Rooms/Hall.room.json",

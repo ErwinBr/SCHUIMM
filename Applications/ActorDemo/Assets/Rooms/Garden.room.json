@@ -2,6 +2,7 @@
   "version": 1,
   "id": "garden",
   "size": { "width": 640, "height": 360 },
+  "script": "Rooms/Garden/Garden.sch",
   "actors": [
     { "id": "hero", "actor": "Actors/Walker/walker.actor.json", "position": [140, 320], "facing": "east",
       "scale": 2.5 },

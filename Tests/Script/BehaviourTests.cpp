@@ -321,3 +321,20 @@ SCHUIMM_TEST(Behaviours_ScriptsCompiledOnTheirOwnStillWork)
     for (int i = 0; i < 3; ++i) scheduler.update(0.1);
     CHECK(output == std::vector<std::string>({"object#12", "1", "2"}));
 }
+
+SCHUIMM_TEST(Behaviours_InstanceVariablesArePrivate)
+{
+    const auto check = [](std::string text, ScriptRole role) { return compileFiles({{"A.sch", std::move(text), role}}); };
+    const std::string guard = "actor:\n\tvar patrol_count: int = 0\n\tfunc patrol():\n\t\tpatrol_count += 1\n";
+    // No member access on another entity.
+    CHECK(check(guard + "\nfunc reset(other: actor):\n\tother.patrol_count = 10\n", ScriptRole::Actor)
+              .find("Variable 'other' of type 'actor' has no component 'patrol_count'") != nullptr);
+    CHECK(check(guard + "\nfunc read(other: actor) -> int:\n\treturn other.patrol_count\n", ScriptRole::Actor)
+              .find("A value of type 'actor' has no member 'patrol_count'") != nullptr);
+    // A global function declared in the same file does not see the behaviour's variables.
+    CHECK(check(guard + "\nfunc helper():\n\tprint(patrol_count)\n", ScriptRole::Actor)
+              .find("Undefined variable 'patrol_count'") != nullptr);
+    // Nor does another behaviour.
+    CHECK(check("object a:\n\tvar n = 1\n\tfunc f():\n\t\tpass\nobject b:\n\tfunc g():\n\t\tprint(n)\n", ScriptRole::Room)
+              .find("Undefined variable 'n'") != nullptr);
+}

@@ -20,6 +20,6 @@ if(SCHUIMM_BUILD_DEMO)
     set_tests_properties(EngineDemoSmoke PROPERTIES LABELS integration TIMEOUT 60)
     # Starts the courtyard script's demonstration and uses the fan (240 frames), then runs the timed
     # key interactions, including leaving (which cancels the demonstration) and re-entering rooms.
-    add_test(NAME ActorDemoSmoke COMMAND ActorDemo --auto --frames 560)
+    add_test(NAME ActorDemoSmoke COMMAND ActorDemo --auto --frames 760)
     set_tests_properties(ActorDemoSmoke PROPERTIES LABELS integration TIMEOUT 60)
 endif()
