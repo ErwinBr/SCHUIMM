@@ -240,7 +240,7 @@ SCHUIMM_TEST(Objects_EmptyObjectIsAnError)
     CHECK(compileSource("object a:\n").has("Expected an indented block of handler functions for object 'a'"));
     CHECK(compileSource("object a:\nfunc main():\n\tpass\n").has("Expected an indented block of handler functions", 2));
     const Compiled pass = compileSource("object a:\n\tpass\n");
-    CHECK(pass.has("Only function declarations are allowed in object 'a'", 2));
+    CHECK(pass.has("Only functions and variables are allowed in object 'a'", 2));
 }
 
 SCHUIMM_TEST(Objects_DuplicatesAndNameClashes)
@@ -281,11 +281,11 @@ SCHUIMM_TEST(Objects_UnsupportedLocations)
     CHECK(compileSource("func main():\n\tobject a:\n\t\tfunc f():\n\t\t\tpass\n").has("only allowed at the top level", 2));
     CHECK(compileSource("object a:\n\tobject b:\n\t\tfunc f():\n\t\t\tpass\n").has("Object declarations cannot be nested", 2));
     CHECK(compileSource("object a:\n\textern func say(text: string)\n").has("Extern functions cannot be declared inside object 'a'", 2));
-    CHECK(compileSource("object a:\n\tvar x = 1\n").has("Only function declarations are allowed in object 'a'", 2));
+    CHECK(compileSource("object a:\n\tprint(1)\n").has("Only functions and variables are allowed in object 'a'", 2));
     CHECK(compileSource("object a:\n\tfunc f():\n\t\tfunc g():\n\t\t\tpass\n").has("cannot be declared inside other functions", 3));
     // Errors in one object do not hide errors in the next.
-    const Compiled two = compileSource("object a:\n\tvar x = 1\n\tfunc f():\n\t\tvar y = undefined\nobject b:\n\tfunc g():\n\t\tprint(self)\n");
-    CHECK(two.has("Only function declarations", 2));
+    const Compiled two = compileSource("object a:\n\tpass\n\tfunc f():\n\t\tvar y = undefined\nobject b:\n\tfunc g():\n\t\tprint(self)\n");
+    CHECK(two.has("Only functions and variables", 2));
     CHECK(!two.result.success);
 }
 

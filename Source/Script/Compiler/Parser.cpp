@@ -2,6 +2,8 @@
 
 #include "Core/Common/StringBuilder.h"
 
+#include <optional>
+
 namespace schuimm::script {
 
 const char* toString(UnaryOp op) noexcept { return op == UnaryOp::Negate ? "-" : "not"; }
@@ -109,6 +111,12 @@ public:
                 }
                 continue;
             }
+            if (check(TokenKind::KwVar)) {
+                if (auto variable = parseVariable()) {
+                    unit->variables.push_back(std::move(variable));
+                }
+                continue;
+            }
             if (check(TokenKind::KwObject)) {
                 if (auto object = parseObject()) {
                     unit->objects.push_back(std::move(object));
@@ -130,7 +138,7 @@ public:
                 advance();
                 continue;
             }
-            error(current(), "Expected a declaration ('func', 'extern func', 'object' or 'enum') at the top level.",
+            error(current(), "Expected a declaration ('var', 'func', 'extern func', 'object' or 'enum') at the top level.",
                   {"Statements must be inside a function, e.g. 'func main():'."});
             skipLine();
             if (check(TokenKind::Indent)) {
@@ -353,14 +361,21 @@ private:
                 }
                 continue;
             }
+            if (check(TokenKind::KwVar)) {
+                if (auto variable = parseVariable()) {
+                    object->variables.push_back(std::move(variable));
+                }
+                continue;
+            }
             if (check(TokenKind::KwExtern)) {
                 error(current(), concat("Extern functions cannot be declared inside object '", object->name, "'."),
                       {"Declare engine functions with 'extern func' at the top level of the script."});
             } else if (check(TokenKind::KwObject)) {
                 error(current(), "Object declarations cannot be nested.");
             } else {
-                error(current(), concat("Only function declarations are allowed in object '", object->name, "'."),
-                      {"An object contains handler functions ('func name(...):'), not statements or variables."});
+                error(current(), concat("Only functions and variables are allowed in object '", object->name, "'."),
+                      {"An object contains handler functions ('func name(...):') and variables ('var name: type = value'), "
+                       "not statements."});
             }
             skipLine();
             if (check(TokenKind::Indent)) skipIndentedBlock();
@@ -561,9 +576,26 @@ private:
         if (first.kind == TokenKind::Identifier && peekToken(1).kind == TokenKind::Assign) {
             return parseAssignment();
         }
+        if (first.kind == TokenKind::Identifier && compoundOperator(peekToken(1).kind)) {
+            auto target = std::make_unique<Expr>();
+            target->kind = ExprKind::Name;
+            target->text = std::string(first.lexeme);
+            target->range = first.range;
+            advance();
+            return parseCompound(std::move(target));
+        }
         statement->kind = StmtKind::Expression;
         statement->value = parseExpression();
         if (!statement->value) {
+            return recover(std::move(statement));
+        }
+        if (compoundOperator(current().kind)) {
+            const Expr& target = *statement->value;
+            if (target.kind == ExprKind::Member && target.left->kind == ExprKind::Name) {
+                return parseCompound(std::move(statement->value));
+            }
+            error(current(), concat("Only a variable or a component of a vec2 variable can be the target of ",
+                                    describe(current().kind), "."));
             return recover(std::move(statement));
         }
         if (check(TokenKind::Assign)) {
@@ -622,7 +654,52 @@ private:
         return statement;
     }
 
-    // var := "var" NAME [":" type] "=" expression
+    // The binary operator of "+=", "-=", "*=" or "/=".
+    static std::optional<BinaryOp> compoundOperator(TokenKind kind) noexcept
+    {
+        switch (kind) {
+        case TokenKind::PlusAssign: return BinaryOp::Add;
+        case TokenKind::MinusAssign: return BinaryOp::Subtract;
+        case TokenKind::StarAssign: return BinaryOp::Multiply;
+        case TokenKind::SlashAssign: return BinaryOp::Divide;
+        default: return std::nullopt;
+        }
+    }
+
+    // target OP= expression, with target a variable name or "v.x": the assignment
+    // "target = target OP (expression)". The target has no side effects, so reading it twice is
+    // the same as reading it once.
+    std::unique_ptr<Stmt> parseCompound(std::unique_ptr<Expr> target)
+    {
+        auto statement = std::make_unique<Stmt>();
+        statement->kind = StmtKind::Assign;
+        const BinaryOp op = *compoundOperator(current().kind);
+        advance(); // the operator
+        if (target->kind == ExprKind::Member) {
+            statement->name = target->left->text;
+            statement->nameRange = target->left->range;
+            statement->member = target->text;
+            statement->memberRange = target->nameRange;
+        } else {
+            statement->name = target->text;
+            statement->nameRange = target->range;
+        }
+        auto operand = parseExpression();
+        if (!operand) {
+            return recover(std::move(statement));
+        }
+        auto value = std::make_unique<Expr>();
+        value->kind = ExprKind::Binary;
+        value->binaryOp = op;
+        value->range = join(target->range, operand->range);
+        value->left = std::move(target);
+        value->right = std::move(operand);
+        statement->range = value->range;
+        statement->value = std::move(value);
+        return endOfStatement(std::move(statement));
+    }
+
+    // var := "var" NAME [":" type] ["=" expression]   (without a value, the type is required)
     std::unique_ptr<Stmt> parseVariable()
     {
         auto statement = std::make_unique<Stmt>();
@@ -647,8 +724,19 @@ private:
             statement->annotation = std::move(*type);
         }
         if (!check(TokenKind::Assign)) {
-            error(current(), concat("Variable '", statement->name, "' must be initialised."),
-                  {concat("Write 'var ", statement->name, " = <value>'.")});
+            if (statement->annotation && (check(TokenKind::Newline) || check(TokenKind::Dedent) || check(TokenKind::EndOfFile))) {
+                // "var name: type": the default value of the type.
+                statement->range = join(first.range, previous().range);
+                return endOfStatement(std::move(statement));
+            }
+            if (!statement->annotation) {
+                error(current(), concat("Variable '", statement->name, "' needs a type or a value."),
+                      {concat("Write 'var ", statement->name, " = <value>' or 'var ", statement->name,
+                              ": <type>' (which starts with the type's default value).")});
+            } else {
+                error(current(), concat("Expected '=' or the end of the line after the type of variable '",
+                                        statement->name, "'."));
+            }
             return recover(std::move(statement));
         }
         advance(); // '='

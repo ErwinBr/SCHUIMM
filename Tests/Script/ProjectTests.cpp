@@ -13,47 +13,6 @@ using namespace schuimm::script::test;
 
 namespace {
 
-struct FileSpec {
-    std::string name;
-    std::string text;
-    ScriptRole role = ScriptRole::Global;
-};
-
-struct Project {
-    std::vector<std::unique_ptr<SourceFile>> files;
-    CompileResult result;
-
-    [[nodiscard]] std::string diagnostics() const { return formatDiagnostics(result); }
-    [[nodiscard]] const Diagnostic* find(std::string_view text) const
-    {
-        for (const Diagnostic& d : result.diagnostics.all()) {
-            if (d.message.find(text) != std::string::npos) return &d;
-        }
-        return nullptr;
-    }
-    [[nodiscard]] bool hasNote(std::string_view text) const
-    {
-        for (const Diagnostic& d : result.diagnostics.all()) {
-            for (const std::string& note : d.notes) {
-                if (note.find(text) != std::string::npos) return true;
-            }
-        }
-        return false;
-    }
-};
-
-Project compileFiles(const std::vector<FileSpec>& specs, CompileOptions options = {})
-{
-    Project project;
-    std::vector<ProjectSource> sources;
-    for (std::size_t i = 0; i < specs.size(); ++i) {
-        project.files.push_back(std::make_unique<SourceFile>(specs[i].name, specs[i].text, static_cast<std::uint32_t>(i)));
-        sources.push_back({project.files.back().get(), specs[i].role});
-    }
-    project.result = compileProject(sources, options);
-    return project;
-}
-
 struct Execution {
     std::vector<std::string> output;
     std::vector<ScriptError> errors;

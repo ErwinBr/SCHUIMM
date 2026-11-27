@@ -98,7 +98,7 @@ public:
             if (s.annotation) text += concat(": ", syntaxName(*s.annotation));
             if (semantics_ != nullptr) text += semantics_->statement(s).declares ? " (declare)" : " (assign)";
             line(depth, text);
-            expression(*s.value, depth + 1);
+            if (s.value) expression(*s.value, depth + 1);
             return;
         }
         case StmtKind::If:
@@ -161,11 +161,17 @@ std::string dumpAst(const SourceUnit& unit, const SemanticModel* semantics)
         }
         printer.line(0, text);
     }
+    for (const auto& variable : unit.variables) {
+        printer.statement(*variable, 0);
+    }
     for (const auto& function : unit.functions) {
         printFunction(*function, 0);
     }
     for (const auto& object : unit.objects) {
         printer.line(0, concat("Object ", object->name));
+        for (const auto& variable : object->variables) {
+            printer.statement(*variable, 1);
+        }
         for (const auto& handler : object->handlers) {
             printFunction(*handler, 1);
         }

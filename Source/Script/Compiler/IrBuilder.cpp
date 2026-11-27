@@ -100,6 +100,41 @@ private:
         return dest;
     }
 
+    // A fresh read of a global or instance variable: these may change between any two reads (a
+    // call, a native, another coroutine while this one waits), so a read is never reused.
+    VReg loadStorage(VariableStorage storage, std::uint32_t index, Type type, SourcePosition position)
+    {
+        const VReg dest = temporary(type);
+        emit(storage == VariableStorage::Global ? IrOp::LoadGlobal : IrOp::LoadInstance, dest, {}, position).callee = index;
+        return dest;
+    }
+
+    // The default value of `type` (defaultValue).
+    VReg loadDefault(Type type, SourcePosition position)
+    {
+        const VReg dest = temporary(type);
+        if (isEnum(type)) {
+            IrInstruction& load = emit(IrOp::LoadEnum, dest, {}, position);
+            load.callee = enumIndexOf(type);
+            load.intValue = 0;
+            return dest;
+        }
+        switch (type) {
+        case Type::Int: emit(IrOp::LoadInt, dest, {}, position).intValue = 0; break;
+        case Type::Float: emit(IrOp::LoadFloat, dest, {}, position).floatValue = 0.0; break;
+        case Type::Bool: emit(IrOp::LoadBool, dest, {}, position).boolValue = false; break;
+        case Type::String: emit(IrOp::LoadString, dest, {}, position); break;
+        case Type::Vec2: {
+            const VReg zero = temporary(Type::Float);
+            emit(IrOp::LoadFloat, zero, {}, position).floatValue = 0.0;
+            emit(IrOp::MakeVec2, dest, {zero, zero}, position);
+            break;
+        }
+        default: emit(IrOp::LoadNull, dest, {}, position); break; // The nullable types.
+        }
+        return dest;
+    }
+
     // --- Statements ---------------------------------------------------------------------------
     void block(const Block& b)
     {
@@ -116,13 +151,30 @@ private:
         case StmtKind::Pass: return;
         case StmtKind::Expression: expression(*s.value, true); return;
         case StmtKind::Assign: {
-            const VReg value = expression(*s.value);
             const StatementInfo& info = semantics_.statement(s);
-            if (info.component) {
-                emit(info.componentIndex == 0 ? IrOp::SetVec2X : IrOp::SetVec2Y, info.variable, {info.variable, value}, position);
-            } else {
+            if (!s.value) {
+                // "var name: type": the default value.
+                const VReg value = loadDefault(function_.variables[info.variable].type, position);
                 emit(IrOp::Move, info.variable, {value}, position);
+                return;
             }
+            const VReg value = expression(*s.value);
+            if (info.storage == VariableStorage::Local) {
+                if (info.component) {
+                    emit(info.componentIndex == 0 ? IrOp::SetVec2X : IrOp::SetVec2Y, info.variable, {info.variable, value}, position);
+                } else {
+                    emit(IrOp::Move, info.variable, {value}, position);
+                }
+                return;
+            }
+            // A global or instance variable: read, change and write back a component; store a value.
+            const bool global = info.storage == VariableStorage::Global;
+            VReg stored = value;
+            if (info.component) {
+                stored = loadStorage(info.storage, info.variable, Type::Vec2, position);
+                emit(info.componentIndex == 0 ? IrOp::SetVec2X : IrOp::SetVec2Y, stored, {stored, value}, position);
+            }
+            emit(global ? IrOp::StoreGlobal : IrOp::StoreInstance, noVReg, {stored}, position).callee = info.variable;
             return;
         }
         case StmtKind::If: {
@@ -281,10 +333,18 @@ private:
             emit(IrOp::LoadBool, dest, {}, position).boolValue = e.boolValue;
             return dest;
         }
-        case ExprKind::NoneLiteral: return noVReg;
-        // No copy: an expression cannot assign, so the variable keeps its value while the
-        // expression is evaluated. Values that must outlive a statement (range bounds) are copied.
+        case ExprKind::NoneLiteral: {
+            if (!isNullable(info.type)) return noVReg; // "return None" in a function without a result.
+            const VReg dest = temporary(info.type);
+            emit(IrOp::LoadNull, dest, {}, position);
+            return dest;
+        }
+        // A local: no copy. An expression cannot assign, so a function's own variable keeps its
+        // value while the expression is evaluated. Values that must outlive a statement (range
+        // bounds) are copied. Global and instance variables are read afresh (loadStorage).
         case ExprKind::Name:
+            if (info.storage != VariableStorage::Local) return loadStorage(info.storage, info.variable, info.type, position);
+            return info.variable;
         case ExprKind::Self: return info.variable;
         case ExprKind::Member: {
             if (info.isEnumMember) {
@@ -459,6 +519,9 @@ IrModule buildIr(const SemanticModel& semantics)
     for (const SourceSemantics& source : semantics.sources()) {
         module.sources.push_back({source.name, source.role});
     }
+    for (const PersistentVariable& variable : semantics.globals()) {
+        module.globals.push_back({variable.name, variable.type, variable.initial});
+    }
     for (const NativeSignature& native : semantics.natives()) {
         module.natives.push_back({native.name, native.parameters, native.returnType, native.pure});
     }
@@ -502,6 +565,9 @@ IrModule buildIr(const SemanticModel& semantics)
         out.kind = behaviour.kind;
         out.source = behaviour.source;
         out.name = behaviour.name;
+        for (const PersistentVariable& variable : behaviour.variables) {
+            out.variables.push_back({variable.name, variable.type, variable.initial});
+        }
         for (const HandlerSemantics& handler : behaviour.handlers) {
             out.handlers.push_back({handler.name, handler.function});
         }

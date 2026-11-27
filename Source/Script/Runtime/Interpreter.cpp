@@ -118,6 +118,41 @@ struct Interpreter {
             case Opcode::LoadTrue: r[in.a] = Value::fromBool(true); break;
             case Opcode::LoadFalse: r[in.a] = Value::fromBool(false); break;
             case Opcode::LoadNone: r[in.a] = Value::none(); break;
+            case Opcode::LoadNull: r[in.a] = Program::nullValue(function.registerTypes[in.a]); break;
+            case Opcode::LoadGlobal:
+                if (!co.globals_ || co.globals_->program().get() != &program || in.b >= co.globals_->size()) {
+                    return fail(ScriptErrorKind::InvalidBytecode, "The coroutine has no global variables of its program");
+                }
+                r[in.a] = co.globals_->value(in.b);
+                break;
+            case Opcode::StoreGlobal:
+                if (!co.globals_ || co.globals_->program().get() != &program || in.a >= co.globals_->size()) {
+                    return fail(ScriptErrorKind::InvalidBytecode, "The coroutine has no global variables of its program");
+                }
+                if (!r[in.b].matches(module.globals[in.a].type)) return typeMismatch();
+                co.globals_->value(in.a) = r[in.b];
+                break;
+            case Opcode::LoadInstance:
+            case Opcode::StoreInstance: {
+                // The validator only lets a behaviour's own functions use its variables, and only
+                // they run for an instance of it; checked again so that hand-made coroutines fail
+                // cleanly.
+                const auto behaviour = program.behaviourOf(frame.function);
+                BehaviourInstance* instance = co.instance_.get();
+                if (!behaviour || instance == nullptr || instance->behaviour() != *behaviour ||
+                    &instance->program() != &program) {
+                    return fail(ScriptErrorKind::InvalidBytecode, "The coroutine runs for no instance of this behaviour");
+                }
+                if (in.opcode == Opcode::LoadInstance) {
+                    if (in.b >= instance->size()) return typeMismatch();
+                    r[in.a] = instance->value(in.b);
+                } else {
+                    if (in.a >= instance->size()) return typeMismatch();
+                    if (!r[in.b].matches(module.behaviours[*behaviour].variables[in.a].type)) return typeMismatch();
+                    instance->value(in.a) = r[in.b];
+                }
+                break;
+            }
             case Opcode::Move: r[in.a] = r[in.b]; break;
             case Opcode::NegInt: {
                 SCHUIMM_REQUIRE(in.b, Int);
@@ -188,8 +223,11 @@ struct Interpreter {
             case Opcode::EqRef:
             case Opcode::NeRef: {
                 if (!r[in.b].matches(ScriptType::Entity) || !r[in.c].matches(ScriptType::Entity)) return typeMismatch();
-                // An actor and an object are never the same entity, even with equal ids.
-                const bool same = r[in.b].type() == r[in.c].type() && r[in.b].asReference() == r[in.c].asReference();
+                // An actor and an object are never the same entity, even with equal ids; every null
+                // reference (None) equals every other one.
+                const bool bothNull = r[in.b].asReference().isNull() && r[in.c].asReference().isNull();
+                const bool same = bothNull ||
+                                  (r[in.b].type() == r[in.c].type() && r[in.b].asReference() == r[in.c].asReference());
                 r[in.a] = Value::fromBool(in.opcode == Opcode::EqRef ? same : !same);
                 break;
             }

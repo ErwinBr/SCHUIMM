@@ -13,6 +13,7 @@ schuimm_add_test(ScriptTests
         OptimizerTests.cpp
         ParserTests.cpp
         ProjectTests.cpp
+        VariableTests.cpp
         SchedulerTests.cpp
         TypeCheckerTests.cpp
         VmTests.cpp

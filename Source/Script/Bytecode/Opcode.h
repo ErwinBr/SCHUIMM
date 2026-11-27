@@ -18,6 +18,8 @@ enum class OperandKind : std::uint8_t {
     Target,      // Field b and c together: absolute instruction index (b | c << 16) in the function.
     Enum,        // Index into the enum table.
     Immediate,   // A literal value (e.g. an enum ordinal), checked by the instruction's rules.
+    Global,      // Index into the global variables.
+    Instance,    // Index into the instance variables of the function's behaviour.
 };
 
 inline constexpr std::uint16_t noRegister = 0xFFFF;
@@ -31,6 +33,9 @@ inline constexpr std::uint16_t noRegister = 0xFFFF;
 // with the float in b. EqRef/NeRef compare two entity references (actor, object or entity).
 // Spawn starts function b with the arguments in the window at c as a new coroutine and stores
 // its coroutine handle in a (optional, a coroutine register); the caller continues at once.
+// LoadNull sets register a to the null value of its type (actor, object, entity, coroutine or
+// operation). LoadGlobal/LoadInstance read a variable into register a; StoreGlobal/StoreInstance
+// write register b into variable a.
 #define SCHUIMM_SCRIPT_OPCODES(X)                                                                   \
     X(Nop, Unused, Unused, Unused, false)                                                           \
     X(LoadConst, Register, Constant, Unused, false)                                                 \
@@ -105,7 +110,12 @@ inline constexpr std::uint16_t noRegister = 0xFFFF;
     X(NegVec2, Register, Register, Unused, false)                                                   \
     X(EqVec2, Register, Register, Register, false)                                                  \
     X(NeVec2, Register, Register, Register, false)                                                  \
-    X(Spawn, OptRegister, Function, ArgWindow, false)
+    X(Spawn, OptRegister, Function, ArgWindow, false)                                               \
+    X(LoadNull, Register, Unused, Unused, false)                                                    \
+    X(LoadGlobal, Register, Global, Unused, false)                                                  \
+    X(StoreGlobal, Global, Register, Unused, false)                                                 \
+    X(LoadInstance, Register, Instance, Unused, false)                                              \
+    X(StoreInstance, Instance, Register, Unused, false)
 
 enum class Opcode : std::uint8_t {
 #define SCHUIMM_X(name, a, b, c, terminator) name,

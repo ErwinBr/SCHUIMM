@@ -13,9 +13,11 @@
 #include "Platform/FileSystem/FileSystem.h"
 #include "Script/Bytecode/Disassembler.h"
 #include "Script/Runtime/ScriptHost.h"
+#include "Script/Runtime/ScriptState.h"
 
 #include <cstdio>
 #include <cstdlib>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -163,13 +165,31 @@ int main(int argc, char** argv)
     if (disassembly) {
         std::fputs(disassemble((*program)->module()).c_str(), stdout);
     }
+    // One run is one game session: every started function and handler shares the global
+    // variables, and each object (name and handle) keeps its instance variables across dispatches.
+    const std::shared_ptr<GlobalState> globals = GlobalState::create(*program);
     for (const std::string& entry : entries) {
-        if (!host.start(*program, entry)) {
+        if (!host.start(globals, entry)) {
             return 1;
         }
     }
+    std::map<std::pair<std::string, std::uint64_t>, std::shared_ptr<BehaviourInstance>> instances;
     for (const DispatchRequest& request : dispatches) {
-        auto result = host.dispatch(*program, request.object, request.event, ObjectRef{request.id});
+        const auto behaviour = (*program)->findBehaviour(BehaviourKind::Object, {}, request.object);
+        if (!behaviour) {
+            std::fprintf(stderr, "schuimm-run: no object %s (skipped)\n", request.object.c_str());
+            continue;
+        }
+        std::shared_ptr<BehaviourInstance>& instance = instances[{request.object, request.id}];
+        if (!instance) {
+            auto created = BehaviourInstance::create(globals, *behaviour, Value::fromObject(ObjectRef{request.id}));
+            if (!created) {
+                std::fprintf(stderr, "schuimm-run: %s\n", describe(created.error()).c_str());
+                return 1;
+            }
+            instance = std::move(*created);
+        }
+        auto result = host.dispatch(instance, request.event);
         if (!result) {
             return 1;
         }

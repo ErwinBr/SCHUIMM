@@ -1,6 +1,7 @@
 #include "Script/Runtime/ScriptScheduler.h"
 
 #include "Core/Common/Assert.h"
+#include "Core/Common/StringBuilder.h"
 
 #include <algorithm>
 #include <cmath>
@@ -96,6 +97,20 @@ Result<CoroutineHandle> ScriptScheduler::start(std::shared_ptr<const Program> pr
     return add(std::move(*coroutine), owner);
 }
 
+Result<CoroutineHandle> ScriptScheduler::start(std::shared_ptr<GlobalState> globals, std::string_view function,
+                                               std::vector<Value> arguments, ExecutionOwner owner)
+{
+    if (!globals || !globals->program()) {
+        return makeError(ErrorCode::InvalidArgument, "No global state");
+    }
+    auto coroutine = Coroutine::create(globals->program(), function, std::move(arguments), settings_.limits);
+    if (!coroutine) {
+        return std::unexpected(coroutine.error());
+    }
+    (*coroutine)->bindState(std::move(globals));
+    return add(std::move(*coroutine), owner);
+}
+
 Result<CoroutineHandle> ScriptScheduler::spawn(CoroutineHandle parent, std::shared_ptr<const Program> program,
                                                std::uint32_t index, std::vector<Value> arguments)
 {
@@ -104,6 +119,17 @@ Result<CoroutineHandle> ScriptScheduler::spawn(CoroutineHandle parent, std::shar
     auto coroutine = Coroutine::createCall(std::move(program), index, std::move(arguments), settings_.limits);
     if (!coroutine) {
         return std::unexpected(coroutine.error());
+    }
+    // The spawned call shares the spawner's state: the session's globals and, when it is a
+    // function of the spawner's behaviour, its instance.
+    if (spawner != nullptr && spawner->coroutine && spawner->coroutine->globals()) {
+        const Coroutine& parentCoroutine = *spawner->coroutine;
+        std::shared_ptr<BehaviourInstance> instance;
+        const auto behaviour = (*coroutine)->program().behaviourOf(index);
+        if (behaviour && parentCoroutine.instance() && parentCoroutine.instance()->behaviour() == *behaviour) {
+            instance = parentCoroutine.instance();
+        }
+        (*coroutine)->bindState(parentCoroutine.globals(), std::move(instance));
     }
     return add(std::move(*coroutine), owner);
 }
@@ -118,13 +144,38 @@ Result<DispatchResult> ScriptScheduler::dispatch(std::shared_ptr<const Program> 
     if (self.isNull()) {
         return makeError(ErrorCode::InvalidArgument, "Dispatch requires a non-null object handle");
     }
-    if (!program->hasHandler(object, event)) {
+    const auto behaviour = program->findBehaviour(BehaviourKind::Object, {}, object);
+    if (!behaviour || !program->findHandler(*behaviour, event)) {
         return DispatchResult{};
     }
-    auto coroutine = Coroutine::createHandler(std::move(program), object, event, self, std::move(arguments), settings_.limits);
+    // A fresh state for this call only (see the declaration).
+    auto instance = BehaviourInstance::create(GlobalState::create(std::move(program)), *behaviour, Value::fromObject(self));
+    if (!instance) {
+        return std::unexpected(instance.error());
+    }
+    return dispatch(std::move(*instance), event, std::move(arguments), owner);
+}
+
+Result<DispatchResult> ScriptScheduler::dispatch(std::shared_ptr<BehaviourInstance> instance, std::string_view event,
+                                                 std::vector<Value> arguments, ExecutionOwner owner)
+{
+    if (!instance) {
+        return makeError(ErrorCode::InvalidArgument, "No behaviour instance");
+    }
+    if (instance->isExpired()) {
+        return makeError(ErrorCode::InvalidState, concat("Cannot dispatch '", event, "': the behaviour instance has expired"));
+    }
+    const std::shared_ptr<const Program>& program = instance->globals()->program();
+    const auto function = program->findHandler(instance->behaviour(), event);
+    if (!function) {
+        return DispatchResult{};
+    }
+    auto coroutine = Coroutine::createHandler(program, *function, instance->self(), std::move(arguments), settings_.limits);
     if (!coroutine) {
         return std::unexpected(coroutine.error());
     }
+    std::shared_ptr<GlobalState> globals = instance->globals();
+    (*coroutine)->bindState(std::move(globals), std::move(instance));
     return DispatchResult{true, add(std::move(*coroutine), owner)};
 }
 

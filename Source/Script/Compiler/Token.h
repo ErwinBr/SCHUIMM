@@ -52,6 +52,10 @@ namespace schuimm::script {
     X(SlashSlash, "'//'")                                                                           \
     X(Percent, "'%'")                                                                               \
     X(Assign, "'='")                                                                                \
+    X(PlusAssign, "'+='")                                                                           \
+    X(MinusAssign, "'-='")                                                                          \
+    X(StarAssign, "'*='")                                                                           \
+    X(SlashAssign, "'/='")                                                                          \
     X(EqualEqual, "'=='")                                                                           \
     X(NotEqual, "'!='")                                                                             \
     X(Less, "'<'")                                                                                  \

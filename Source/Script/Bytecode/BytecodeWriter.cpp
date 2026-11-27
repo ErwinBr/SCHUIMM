@@ -202,7 +202,31 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     }
     endSection();
 
-    // Behaviours, Enums and Sources (sections 7 to 9) follow Debug.
+    // A variable: name, type and its initial value in the encoding of the type.
+    const auto writeVariable = [&](const VariableEntry& variable) {
+        out.u32(variable.nameIndex);
+        writeType(out, variable.type);
+        const InitialValue& initial = variable.initial;
+        const auto f64 = [&](double value) {
+            std::uint64_t bits = 0;
+            std::memcpy(&bits, &value, sizeof bits);
+            out.u64(bits);
+        };
+        switch (variable.type.kind) {
+        case ScriptType::Bool: out.u8(initial.boolValue ? 1 : 0); break;
+        case ScriptType::Int: out.u64(static_cast<std::uint64_t>(initial.intValue)); break;
+        case ScriptType::Float: f64(initial.x); break;
+        case ScriptType::String: out.u32(initial.stringIndex); break;
+        case ScriptType::Vec2:
+            f64(initial.x);
+            f64(initial.y);
+            break;
+        case ScriptType::Enum: out.u32(initial.ordinal); break;
+        default: break; // Nullable types: null.
+        }
+    };
+
+    // Behaviours, Enums, Sources and Globals (sections 7 to 10) follow Debug.
     const auto writeBehaviours = [&]() -> Status {
         if (!fitsU32(module.behaviours.size())) {
             return tooLarge("behaviours");
@@ -219,6 +243,13 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
             for (const HandlerEntry& handler : behaviour.handlers) {
                 out.u32(handler.nameIndex);
                 out.u32(handler.function);
+            }
+            if (!fitsU32(behaviour.variables.size())) {
+                return tooLarge("instance variables");
+            }
+            out.u32(static_cast<std::uint32_t>(behaviour.variables.size()));
+            for (const VariableEntry& variable : behaviour.variables) {
+                writeVariable(variable);
             }
         }
         return {};
@@ -266,6 +297,16 @@ Result<std::vector<std::byte>> writeBytecode(const Module& module)
     for (const SourceEntry& source : module.sources) {
         out.u32(source.pathIndex);
         out.u8(static_cast<std::uint8_t>(source.role));
+    }
+    endSection();
+
+    beginSection(); // Globals
+    if (!fitsU32(module.globals.size())) {
+        return std::unexpected(tooLarge("globals").error());
+    }
+    out.u32(static_cast<std::uint32_t>(module.globals.size()));
+    for (const VariableEntry& variable : module.globals) {
+        writeVariable(variable);
     }
     endSection();
 

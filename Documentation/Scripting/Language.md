@@ -8,9 +8,10 @@ This document describes the language as implemented by `schuimmc` and the SCHUIM
 The language version (3.0) is recorded in every bytecode file and is independent of the bytecode
 format version ([Bytecode.md](Bytecode.md)).
 
-Version 3.0 compiles the scripts of a game into one program: functions, `extern func`
+Version 3.0 compiles the scripts of a game into one program: variables, functions, `extern func`
 declarations and enums declared in any file can be used in every other file, without imports
-(§1).
+(§1). It adds global variables and object variables that keep their values between calls (§7),
+default values, `None` for references (§3.6), and `+=`, `-=`, `*=`, `/=`.
 
 Version 2.0 added:
 - `var` declarations, which are now required (§7);
@@ -45,12 +46,12 @@ More examples: [Examples/](Examples/).
 ## 1. Source files
 
 * Source files are UTF-8. Invalid UTF-8 is an error. Line endings may be `\n`, `\r\n` or `\r`.
-* A file is a sequence of function declarations (`func`), native function declarations
-  (`extern func`), object declarations (`object`, [§8](#8-objects-and-handlers)) and enum
-  declarations (`enum`, [§3.4](#34-enums)). There are no global variables and no statements at
-  the top level.
-* **The scripts of a game form one program.** Every function, `extern func` and enum declared at
-  the top level of any participating file is visible in all of them. There is no `import`,
+* A file is a sequence of variable declarations (`var`, global variables, §7.2), function
+  declarations (`func`), native function declarations (`extern func`), object declarations
+  (`object`, [§8](#8-objects-and-handlers)) and enum declarations (`enum`, [§3.4](#34-enums)).
+  There are no statements at the top level.
+* **The scripts of a game form one program.** Every variable, function, `extern func` and enum
+  declared at the top level of any participating file is visible in all of them. There is no `import`,
   `export` or `global`, and no file of declarations: put a declaration where it belongs, for
   example a function about the kitchen in the kitchen's script.
 
@@ -73,7 +74,7 @@ More examples: [Examples/](Examples/).
     places, never "the later file wins". Identical `extern func` declarations in several files
     are fine; differing ones are an error.
 * Every file has a **role**, given by whatever refers to it (the build):
-  * a *global* script holds game-wide declarations only (`func`, `extern func`, `enum`);
+  * a *global* script holds game-wide declarations only (`var`, `func`, `extern func`, `enum`);
   * a *room* script may also hold the `object` declarations of its room;
   * an *actor* script holds the declarations of an actor's script.
   A file compiled on its own (`schuimmc file.sch`) is a room script.
@@ -137,7 +138,7 @@ More examples: [Examples/](Examples/).
 
 ### 2.5 Operators and punctuation
 
-`+ - * / // % == != < <= > >= = ( ) , : -> .` and the keyword operators `and or not`.
+`+ - * / // % == != < <= > >= = += -= *= /= ( ) , : -> .` and the keyword operators `and or not`.
 
 ## 3. Types
 
@@ -156,8 +157,9 @@ More examples: [Examples/](Examples/).
 | `operation` | a reference to one engine operation, e.g. an animation playback, returned by engine functions (§9.4) |
 | `None` | the "no value" type: the result of a function without a return type |
 
-`None` is not a value a variable can hold. It is the return type of functions declared without
-`->`, and a call of such a function can only be used as a statement.
+`None` is also the return type of functions declared without `->`; a call of such a function has
+no value and can only be used as a statement. As a value, `None` is the *null* handle of the
+types `actor`, `object`, `entity`, `coroutine` and `operation` (§3.6).
 
 ### 3.1 Type inference and annotations
 
@@ -276,6 +278,26 @@ print(distance(start, target))
 * The core interface provides `length(v)`, `distance(a, b)`, `normalize(v)` and
   `lerp(a, b, t)` (§6.2).
 
+### 3.6 None, the null handle
+
+`None` is a value of the handle types `actor`, `object`, `entity`, `coroutine` and `operation`: "no
+entity", "no coroutine", "no operation". A variable of such a type declared without a value
+holds it (§7.4).
+
+```python
+var guard: actor = None
+func remember(someone: actor):
+	if guard == None:
+		guard = someone
+```
+
+* `None` can be assigned to, passed for and returned as any handle type. Its type cannot be
+  inferred: `var x = None` is an error; write the type.
+* References compare with `None` (`guard == None`, `None != target`); all null references are
+  equal. Coroutines and operations are not compared, also not with `None`.
+* An engine function given `None` reports an error, as for a reference to an entity that no
+  longer exists. `cancel(None)` does nothing.
+
 ## 4. Expressions
 
 ### 4.1 Precedence and associativity
@@ -363,6 +385,7 @@ statement := assignment | call | if | while | for | return | pass
 |---|---|
 | Declaration | `var name = expression` or `var name: type = expression` (§7) |
 | Assignment | `name = expression`; `name.x = expression` or `name.y = …` for a `vec2` variable |
+| Compound assignment | `name += expression`, `-=`, `*=`, `/=` (also `name.x += …`): `name = name + (expression)` |
 | Call | `function(arguments)` — the only expression allowed as a statement |
 | Conditional | `if c:` block, any number of `elif c:` blocks, optional `else:` block |
 | Loop | `while c:` block |
@@ -483,19 +506,107 @@ Only `print` accepts these:
 
 ## 7. Variables and scope
 
-* A variable is **declared with `var`**: `var x = 1` or `var x: float = 1`. It always has a value:
-  there are no uninitialised variables.
+A variable is **declared with `var`** and has a type that never changes. There are three kinds,
+by where the declaration is:
+
+| Declared | Kind | Exists | Visible in |
+|---|---|---|---|
+| inside a function (also parameters) | local | for one call | the rest of its block |
+| at the top level of any file | global | once per game session | every function and handler of every file |
+| in an `object` declaration | instance | once per object, per room instance | the handlers of that declaration |
+
+```python
+var score: int = 0                    # global: the whole game shares it
+
+object oven:
+	var inspections: int = 0          # instance: this oven's own
+	func look_at():
+		var message = "An old oven."  # local: this call's own
+		inspections += 1
+		score += 1
+		print(message)
+```
+
+### 7.1 Local variables
+
+* `var x = 1` or `var x: float = 1`; `var x: int` holds the default value (§7.4).
 * `x = expression` without `var` assigns an existing variable. Assigning a name that is not
   declared is an error ("Undefined variable 'x'"), with a hint to declare it with `var`.
-* Scopes are **lexical and block-based**: a variable declared in a block (function body, `if`
+  Assignment never creates a variable.
+* Scopes are **lexical and block-based**: a local declared in a block (function body, `if`
   branch, loop body) is visible from its declaration to the end of that block, including nested
   blocks. It is *not* visible after the block.
-* The value of an assignment must be assignable to the variable's type (`count = "many"` for an
-  `int` variable is an error).
-* **No shadowing**: declaring a name that is already visible (a `var` declaration, a `for` loop
-  variable or a parameter name) is an error. Sibling blocks may reuse a name.
-* Variables cannot use the name of a function, native, enum or reserved name.
-* Each call has its own variables; coroutines never share variables.
+* A local cannot be declared twice in a block, and cannot reuse the name of a local, loop
+  variable or parameter that is still visible (an error). Sibling blocks and different functions
+  may reuse names.
+* Each call has its own locals; coroutines never share them.
+
+### 7.2 Global variables
+
+* Every top-level `var` of any file is a **global variable**: there is exactly one of it for the
+  whole game session, whichever file declares it — a game-wide script, a room's or an actor's.
+* Every function and handler of every file can read and assign it by name. Entering a room or
+  creating an actor never makes another copy of it, and destroying a room or an actor does not
+  reset it: its value lasts as long as the game session. A new game session starts with every
+  global at its initial value.
+* A global variable cannot share its name with another global variable, a function, a native or
+  an enum, in any file.
+
+### 7.3 Instance variables
+
+* A `var` inside an `object` declaration (§8) is an **instance variable** of that object: each
+  object of each instance of the room has its own, starting at the initial value when the room
+  instance is created and gone when it is destroyed. Re-entering a room starts its objects'
+  variables afresh; keep what must last in a global variable.
+* Only the handlers of the same declaration use it. There is no way to reach another object's
+  variables (`door.locked` is an error): ask the object's handlers, or use a global.
+* All coroutines running for the same object share its variables.
+
+### 7.4 Initial and default values
+
+* A global or instance variable is initialised **once**, before anything runs: when the game
+  session (globals) or the instance (instance variables) is created. Its value must be a
+  **constant**: a literal (`1`, `2.5`, `"text"`, `True`), a negative number, an enum member
+  (`Verb.LOOK`), `vec2(x, y)` with numbers, or `None`. Anything else — a calculation, a
+  variable, a function call — is an error; compute it in a handler instead, for example the
+  room's `init()`. There is no code at the top level, so initialisation never depends on the
+  order of files.
+* A variable of any kind declared without a value holds the **default value** of its type:
+
+  | Type | Default |
+  |---|---|
+  | `int` | `0` |
+  | `float` | `0.0` |
+  | `bool` | `False` |
+  | `string` | `""` |
+  | `vec2` | `vec2(0, 0)` |
+  | an enum | its first member |
+  | `actor`, `object`, `entity`, `coroutine`, `operation` | `None` |
+
+  The type is then required: `var count: int`. A variable without value and type
+  (`var count`) is an error.
+
+### 7.5 Name resolution and shadowing
+
+A name is looked up from the nearest declaration outwards:
+
+1. in a function: its locals and parameters;
+2. in a handler: then the instance variables of its object;
+3. then the global variables.
+
+The nearest declaration wins, also for assignment: `door_locked = False` changes the global
+`door_locked` unless a local or instance variable of that name is visible, and `var door_locked =
+False` in a function makes a *new* local variable. Declaring a name that hides another visible
+variable is allowed, with a **warning** naming both places:
+
+```text
+Rooms/Kitchen.sch:6:6: warning: Variable 'score' shadows the global variable 'score'.
+    note: The global variable is declared in 'Scripts/Global.sch' on line 1. Here 'score' means the new variable; ...
+```
+
+This applies to locals and parameters hiding instance or global variables and to instance
+variables hiding globals. Variables cannot use the name of a function, native, enum or reserved
+name.
 
 ## 8. Objects and handlers
 
@@ -544,10 +655,10 @@ object NAME:
 
 * `object` declarations are top-level declarations, like `func`. They cannot be nested and
   cannot appear inside a function.
-* The body is an indented block (one tab, §2.1) of one or more `func` declarations. It contains
-  nothing else: no statements, `pass`, variables, `extern func` or nested `object`. An object
-  without handlers is an error ("Expected an indented block of handler functions"); leave out the
-  declaration instead.
+* The body is an indented block (one tab, §2.1) of `func` declarations (the handlers) and `var`
+  declarations (the object's instance variables, §7.3). It contains nothing else: no
+  statements, `pass`, `extern func` or nested `object`. An object without a body is an error
+  ("Expected an indented block of handler functions"); leave out the declaration instead.
 * Handlers are ordinary functions: typed parameters, an optional return type, the usual
   statements, `wait()`/`yield()`, calls of global functions and natives.
 * `object` declarations appear only in room scripts (§1).
@@ -562,8 +673,9 @@ object NAME:
 * A room's objects — their identifiers, sprites, positions and state — are defined by the **room
   resource**, not by the script. The object name of a declaration is the object's identifier in
   the room resource (`object blender:` belongs to the room object with id `"blender"`).
-* An object declaration **does not create an object**. It is a named scope of functions, not a
-  class: no instances, constructors, inheritance or member variables.
+* An object declaration **does not create an object**. It is a named scope of functions and
+  variables, not a class: no constructors or inheritance, and its variables are private to its
+  handlers (§7.3).
 * One room script holds the room's functions and the handlers of all its objects. There are no
   per-object script files, and the room resource lists no events or handlers.
 * An object of the room resource without a declaration (or without a handler for some event)
@@ -733,27 +845,28 @@ Deliberate, so that scripts stay predictable and fast to check:
 * Only tabs indent, one tab per level.
 * `True/False/None` as in Python, but `None` is only a return type, not a value.
 * Integers are 64-bit and overflow is an error (Python integers are unbounded).
-* Variables are declared with `var`, are block-scoped and must be declared before use; no
-  shadowing.
+* Variables are declared with `var`, are block-scoped and must be declared before use; a local
+  cannot hide another local, and hiding a global or instance variable is a warning. There is no
+  `global` keyword: assigning a global's name assigns the global.
 * `for` only iterates over `range(...)`; no `break`, `continue`, `else` on loops.
 * Comparisons do not chain; `and`/`or` return `bool`, not an operand.
 * Enums are scoped and not integers; `vec2` is a built-in value type.
 * No classes (`object` declarations are named groups of handlers, §8), closures, generators,
-  decorators, exceptions, imports, lists, dicts, `**`, augmented assignment (`+=`), conditional
-  expressions, f-strings or `global`.
+  decorators, exceptions, imports, lists, dicts, `**`, `//=` and `%=`, conditional expressions,
+  f-strings or `global`.
 * Function parameters require types; there are no default or keyword arguments.
 * `wait`/`yield` are functions provided by the engine, not keywords.
 
 ## 12. Limitations (version 3.0)
 
-* No `break`/`continue`, no `+=`, no compound data types (lists, dictionaries, structures)
-  besides `vec2`.
+* No `break`/`continue`, no `//=` or `%=`, no compound data types (lists, dictionaries,
+  structures) besides `vec2`.
 * No spawned blocks, closures or function values; no joining of coroutines (`wait(coroutine)`),
   no coroutine groups or structured concurrency.
-* No modules or imports: the files of a game form one program (§1). No global (script-level)
-  variables or constants, including for room scripts.
-* Objects (§8): no `self.property` access (object state goes through natives), no variables in
-  object declarations, no calls between handlers, no default or fallback handlers.
+* No modules or imports: the files of a game form one program (§1). No constants (`const`);
+  global and instance variables start at constant values only (§7.4).
+* Objects (§8): no `self.property` access (other objects' variables are private, engine state
+  goes through natives), no calls between handlers, no default or fallback handlers.
 * Up to 255 parameters per function, 65 535 registers per function and 65 536 distinct constants
   per file.
 * `print` output is the only built-in output; everything else comes from engine natives.
@@ -761,9 +874,10 @@ Deliberate, so that scripts stay predictable and fast to check:
 ## Appendix: grammar
 
 ```text
-module      := (NEWLINE | function | extern | object | enum)* EOF
+module      := (NEWLINE | variable | function | extern | object | enum)* EOF
+variable    := "var" NAME [":" type] ["=" expr] NEWLINE        (no value: the type is required)
 function    := "func" NAME "(" [params] ")" ["->" type] ":" block
-object      := "object" NAME ":" NEWLINE INDENT function+ DEDENT
+object      := "object" NAME ":" NEWLINE INDENT (function | variable)+ DEDENT
 extern      := "extern" "func" NAME "(" [params] ")" ["->" type] NEWLINE
 enum        := "enum" NAME ":" NEWLINE INDENT (NAME NEWLINE)+ DEDENT
 params      := param ("," param)* [","]
@@ -771,8 +885,8 @@ param       := NAME ":" type
 type        := "int" | "float" | "bool" | "string" | "vec2" | "actor" | "object" | "entity"
              | "coroutine" | "operation" | "None" | NAME            (NAME: an enum)
 block       := NEWLINE INDENT statement+ DEDENT
-statement   := "var" NAME [":" type] "=" expr NEWLINE
-             | NAME ["." NAME] "=" expr NEWLINE                    (assignment)
+statement   := variable
+             | NAME ["." NAME] ("=" | "+=" | "-=" | "*=" | "/=") expr NEWLINE   (assignment)
              | expr NEWLINE                                   (a call)
              | "if" expr ":" block ("elif" expr ":" block)* ["else" ":" block]
              | "while" expr ":" block

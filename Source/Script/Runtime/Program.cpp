@@ -3,6 +3,7 @@
 #include "Core/Common/StringBuilder.h"
 #include "Script/Bytecode/BytecodeReader.h"
 #include "Script/Bytecode/Disassembler.h"
+#include "Script/Runtime/Completion.h"
 
 #include <algorithm>
 
@@ -83,6 +84,26 @@ Result<std::shared_ptr<const Program>> Program::link(Module module, const Native
         default: program->constants_.push_back(Value::fromString(module.string(constant.stringIndex))); break;
         }
     }
+    const auto initialValue = [&](const VariableEntry& variable) {
+        const InitialValue& initial = variable.initial;
+        switch (variable.type.kind) {
+        case ScriptType::Bool: return Value::fromBool(initial.boolValue);
+        case ScriptType::Int: return Value::fromInt(initial.intValue);
+        case ScriptType::Float: return Value::fromFloat(initial.x);
+        case ScriptType::String: return Value::fromString(module.string(initial.stringIndex));
+        case ScriptType::Vec2: return Value::fromVec2(initial.x, initial.y);
+        case ScriptType::Enum: return Value::fromEnum(variable.type.enumIndex, initial.ordinal);
+        default: return nullValue(variable.type);
+        }
+    };
+    for (const VariableEntry& variable : module.globals) {
+        program->globalInitial_.push_back(initialValue(variable));
+    }
+    for (const BehaviourEntry& behaviour : module.behaviours) {
+        std::vector<Value> values;
+        for (const VariableEntry& variable : behaviour.variables) values.push_back(initialValue(variable));
+        program->instanceInitial_.push_back(std::move(values));
+    }
     program->owner_.assign(module.functions.size(), noOwner);
     for (std::size_t b = 0; b < module.behaviours.size(); ++b) {
         for (const HandlerEntry& handler : module.behaviours[b].handlers) {
@@ -91,6 +112,16 @@ Result<std::shared_ptr<const Program>> Program::link(Module module, const Native
     }
     program->module_ = std::move(module);
     return std::shared_ptr<const Program>(std::move(program));
+}
+
+Value Program::nullValue(TypeRef type) noexcept
+{
+    switch (type.kind) {
+    case ScriptType::Object: return Value::fromObject(ObjectRef{});
+    case ScriptType::Coroutine: return Value::fromCoroutine(CoroutineHandle{});
+    case ScriptType::Operation: return Value::fromOperation(CompletionRef{});
+    default: return Value::fromActor(ObjectRef{}); // actor and entity
+    }
 }
 
 std::optional<std::uint32_t> Program::findFunction(std::string_view name) const

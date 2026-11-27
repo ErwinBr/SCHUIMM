@@ -37,6 +37,11 @@ inline constexpr VReg noVReg = 0xFFFFFFFFu;
     X(LoadBool, 0, true, false)                                                                     \
     X(LoadString, 0, true, false)                                                                   \
     X(LoadNone, 0, true, false)                                                                     \
+    X(LoadNull, 0, true, false)                                                                     \
+    X(LoadGlobal, 0, true, false)                                                                   \
+    X(StoreGlobal, 1, false, false)                                                                 \
+    X(LoadInstance, 0, true, false)                                                                 \
+    X(StoreInstance, 1, false, false)                                                               \
     X(Move, 1, true, false)                                                                         \
     X(NegInt, 1, false, true)                                                                       \
     X(NegFloat, 1, true, false)                                                                     \
@@ -126,7 +131,10 @@ struct IrInstruction {
     double floatValue = 0.0;
     bool boolValue = false;
     std::string stringValue;
-    std::uint32_t callee = 0; // Call: function index; CallNative: index into IrModule::natives; LoadEnum: enum.
+    // Call: function index; CallNative: index into IrModule::natives; LoadEnum: enum;
+    // Load/StoreGlobal: index into IrModule::globals; Load/StoreInstance: index into the
+    // variables of the function's behaviour. LoadNull: the null value of the destination's type.
+    std::uint32_t callee = 0;
     SourcePosition position;
 };
 
@@ -181,11 +189,19 @@ struct IrHandler {
     std::uint32_t function = 0; // Index into IrModule::functions.
 };
 
+// A global or instance variable: its storage slot's type and initial value.
+struct IrVariable {
+    std::string name;
+    Type type = Type::Error;
+    ConstantValue initial;
+};
+
 struct IrBehaviour {
     BehaviourKind kind = BehaviourKind::Object;
     std::uint32_t source = 0;
     std::string name; // The object id; empty for room and actor behaviours.
     std::vector<IrHandler> handlers;
+    std::vector<IrVariable> variables; // Instance variables.
 };
 
 struct IrSource {
@@ -205,6 +221,7 @@ struct IrModule {
     std::vector<IrFunction> functions;
     std::vector<IrNative> natives;
     std::vector<IrBehaviour> behaviours;
+    std::vector<IrVariable> globals;
     std::vector<IrEnum> enums;
 };
 

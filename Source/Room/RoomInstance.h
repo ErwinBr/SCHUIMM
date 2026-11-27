@@ -48,6 +48,7 @@
 #include "Room/RoomResource.h"
 #include "Script/Runtime/Program.h"
 #include "Script/Runtime/ScriptHost.h"
+#include "Script/Runtime/ScriptState.h"
 #include "Script/Runtime/Value.h"
 
 #include <cstddef>
@@ -201,7 +202,14 @@ public:
     // Creates the runtime objects and actors of `room`. Checks the script's object declarations
     // (validateRoomScript) and the actors (validateRoomActors) again, so an instance never has a
     // mismatched script. All or nothing: if any actor cannot be created, no instance is returned.
-    [[nodiscard]] static Result<std::unique_ptr<RoomInstance>> create(LoadedRoom room, script::ScriptHost& host);
+    //
+    // Script state: `globals` are the global variables the room's script reads and writes (a
+    // game session's); without them the instance creates its own (they then live as long as the
+    // instance). Each room object with a declaration in the script gets its own behaviour
+    // instance, so its instance variables start at their initial values with every instance of
+    // the room. InvalidArgument if `globals` belong to another program than the room's script.
+    [[nodiscard]] static Result<std::unique_ptr<RoomInstance>> create(LoadedRoom room, script::ScriptHost& host,
+                                                                      std::shared_ptr<script::GlobalState> globals = {});
 
     ~RoomInstance();
     RoomInstance(const RoomInstance&) = delete;
@@ -262,6 +270,12 @@ public:
     [[nodiscard]] Result<script::CoroutineHandle> start(std::string_view function,
                                                         std::vector<script::Value> arguments = {});
 
+    // The global variables the room's script uses (null without a script).
+    [[nodiscard]] const std::shared_ptr<script::GlobalState>& globals() const noexcept { return globals_; }
+    // The script state of object `objectId` (its instance variables); null if the object has no
+    // declaration in the script (or there is no such object).
+    [[nodiscard]] std::shared_ptr<script::BehaviourInstance> objectScript(std::string_view objectId) const;
+
     // Coroutines of this instance (started by it, or spawned by those) that have not ended yet.
     [[nodiscard]] std::size_t activeCoroutineCount() const;
 
@@ -272,7 +286,8 @@ public:
     [[nodiscard]] RoomEventListener* eventListener() const noexcept { return events_.listener; }
 
 private:
-    RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<std::unique_ptr<ActorInstance>> actors);
+    RoomInstance(LoadedRoom room, script::ScriptHost& host, std::shared_ptr<script::GlobalState> globals,
+                 std::vector<std::unique_ptr<ActorInstance>> actors);
 
     LoadedRoom room_;
     script::ScriptHost& host_;
@@ -281,6 +296,9 @@ private:
     std::vector<RoomObject> objects_;
     std::vector<std::unique_ptr<ActorInstance>> actors_;
     animation::AnimationClock clock_;
+    std::shared_ptr<script::GlobalState> globals_;
+    // Per object (objectScripts_[i] for objects_[i]): its behaviour instance, or null.
+    std::vector<std::shared_ptr<script::BehaviourInstance>> objectScripts_;
 };
 
 } // namespace schuimm::room

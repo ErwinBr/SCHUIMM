@@ -559,14 +559,14 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
     m.functions[0].source = 7;
     CHECK(invalidModule(m, "function 0 refers to missing source 7"));
     m = good;
-    m.behaviours.push_back({BehaviourKind::Room, 0, noString, {}});
-    m.behaviours.push_back({BehaviourKind::Room, 0, noString, {}});
+    m.behaviours.push_back({BehaviourKind::Room, 0, noString, {}, {}});
+    m.behaviours.push_back({BehaviourKind::Room, 0, noString, {}, {}});
     CHECK(invalidModule(m, "has more than one room behaviour"));
     m = good;
-    m.behaviours.push_back({BehaviourKind::Actor, 0, noString, {}});
+    m.behaviours.push_back({BehaviourKind::Actor, 0, noString, {}, {}});
     CHECK(invalidModule(m, "behaviour 2 (actor) belongs to a room script"));
     m = good;
-    m.behaviours.push_back({BehaviourKind::Room, 0, stringIndex("helper"), {}});
+    m.behaviours.push_back({BehaviourKind::Room, 0, stringIndex("helper"), {}, {}});
     CHECK(invalidModule(m, "behaviour 2 (room) must not have a name"));
     m = good;
     m.sources.push_back(m.sources[0]);

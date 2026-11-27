@@ -72,6 +72,25 @@ std::string formatConstant(const Module& module, const Constant& constant)
     }
 }
 
+std::string formatInitialValue(const Module& module, const VariableEntry& variable)
+{
+    const InitialValue& initial = variable.initial;
+    switch (variable.type.kind) {
+    case ScriptType::Bool: return formatBool(initial.boolValue);
+    case ScriptType::Int: return formatInt(initial.intValue);
+    case ScriptType::Float: return formatFloat(initial.x);
+    case ScriptType::String: return initial.stringIndex < module.strings.size() ? quoteString(module.strings[initial.stringIndex]) : "?";
+    case ScriptType::Vec2: return concat("vec2(", formatFloat(initial.x), ", ", formatFloat(initial.y), ")");
+    case ScriptType::Enum:
+        if (variable.type.enumIndex < module.enums.size() && initial.ordinal < module.enums[variable.type.enumIndex].members.size()) {
+            const EnumEntry& entry = module.enums[variable.type.enumIndex];
+            return concat(module.strings[entry.nameIndex], ".", module.strings[entry.members[initial.ordinal]]);
+        }
+        return concat("#", initial.ordinal);
+    default: return "None";
+    }
+}
+
 std::string formatInstruction(const Module& module, const Instruction& instruction)
 {
     const OpcodeInfo& info = opcodeInfo(instruction.opcode);
@@ -93,6 +112,11 @@ std::string formatInstruction(const Module& module, const Instruction& instructi
         case OperandKind::ArgWindow: operand(concat("args r", value)); break;
         case OperandKind::Target: operand(concat("@", instruction.target())); break;
         case OperandKind::Enum: operand(concat("e", value, " (", module.strings[module.enums[value].nameIndex], ")")); break;
+        case OperandKind::Global:
+            operand(value < module.globals.size() ? concat("g", value, " (", module.strings[module.globals[value].nameIndex], ")")
+                                                  : concat("g", value));
+            break;
+        case OperandKind::Instance: operand(concat("i", value)); break;
         case OperandKind::Immediate:
             if (instruction.opcode == Opcode::LoadEnum && instruction.b < module.enums.size() &&
                 value < module.enums[instruction.b].members.size()) {
@@ -165,6 +189,19 @@ std::string disassemble(const Module& module)
                 prefix[handler.function] = name + ".";
             }
             out += "\n";
+            for (std::size_t v = 0; v < behaviour.variables.size(); ++v) {
+                const VariableEntry& variable = behaviour.variables[v];
+                out += concat("    i", v, " ", module.strings[variable.nameIndex], ": ", formatType(module, variable.type),
+                              " = ", formatInitialValue(module, variable), "\n");
+            }
+        }
+    }
+    if (!module.globals.empty()) {
+        out += "globals:\n";
+        for (std::size_t g = 0; g < module.globals.size(); ++g) {
+            const VariableEntry& variable = module.globals[g];
+            out += concat("  g", g, " ", module.strings[variable.nameIndex], ": ", formatType(module, variable.type), " = ",
+                          formatInitialValue(module, variable), "\n");
         }
     }
     for (std::size_t f = 0; f < module.functions.size(); ++f) {

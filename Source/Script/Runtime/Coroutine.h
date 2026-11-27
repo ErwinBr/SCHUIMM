@@ -3,6 +3,7 @@
 #include "Core/Common/Error.h"
 #include "Script/Runtime/Program.h"
 #include "Script/Runtime/RuntimeTypes.h"
+#include "Script/Runtime/ScriptState.h"
 #include "Script/Runtime/Value.h"
 
 #include <cstdint>
@@ -31,8 +32,12 @@ struct CoroutineLimits {
 };
 
 // Execution state of one script coroutine: the program it runs (shared ownership keeps the
-// bytecode, constants and natives alive), its register stack and call frames. Executed by
-// runCoroutine(); scheduled by ScriptScheduler. Destroying it releases all values.
+// bytecode, constants and natives alive), its register stack and call frames, and the state its
+// code reads and writes besides its registers: the global variables (GlobalState) and, for a
+// coroutine running a behaviour's code, that behaviour instance. Both are shared (other
+// coroutines of the session or the instance see the same variables) and kept alive by the
+// coroutine. Executed by runCoroutine(); scheduled by ScriptScheduler. Destroying it releases all
+// values.
 class Coroutine {
 public:
     // Prepares a call of `function` with `arguments` (checked against its parameter types).
@@ -50,8 +55,15 @@ public:
                                                                           ObjectRef self, std::vector<Value> arguments,
                                                                           CoroutineLimits limits = {});
 
-    // Prepares a call of function `index` of the program (a room-level function, never a
-    // handler): the target of the Spawn instruction.
+    // Prepares a call of handler function `function` (an index) for the entity `self`: the hidden
+    // parameter 0 of object and actor handlers; none (a None value) for room handlers.
+    [[nodiscard]] static Result<std::unique_ptr<Coroutine>> createHandler(std::shared_ptr<const Program> program,
+                                                                          std::uint32_t function, Value self,
+                                                                          std::vector<Value> arguments,
+                                                                          CoroutineLimits limits = {});
+
+    // Prepares a call of function `index` of the program (a global function, never a handler):
+    // the target of the Spawn instruction.
     [[nodiscard]] static Result<std::unique_ptr<Coroutine>> createCall(std::shared_ptr<const Program> program,
                                                                        std::uint32_t index, std::vector<Value> arguments,
                                                                        CoroutineLimits limits = {});
@@ -61,6 +73,14 @@ public:
     // The entry function's name; "object.event" for handlers.
     [[nodiscard]] const std::string& entryFunction() const noexcept { return entry_; }
     [[nodiscard]] const CoroutineLimits& limits() const noexcept { return limits_; }
+
+    // A new coroutine has its own, fresh GlobalState (one program run); a game session binds its
+    // shared state instead (ScriptScheduler::start, dispatch, spawn). `globals` must belong to the
+    // same program; `instance` is the behaviour instance a handler runs for (null for a global
+    // function), with the same globals.
+    void bindState(std::shared_ptr<GlobalState> globals, std::shared_ptr<BehaviourInstance> instance = {});
+    [[nodiscard]] const std::shared_ptr<GlobalState>& globals() const noexcept { return globals_; }
+    [[nodiscard]] const std::shared_ptr<BehaviourInstance>& instance() const noexcept { return instance_; }
 
     [[nodiscard]] bool hasFrames() const noexcept { return !frames_.empty(); }
     [[nodiscard]] std::size_t callDepth() const noexcept { return frames_.size(); }
@@ -83,6 +103,8 @@ private:
                                                                      std::size_t hidden, CoroutineLimits limits);
 
     std::shared_ptr<const Program> program_;
+    std::shared_ptr<GlobalState> globals_;
+    std::shared_ptr<BehaviourInstance> instance_;
     std::string entry_;
     CoroutineLimits limits_;
     std::vector<Value> registers_;

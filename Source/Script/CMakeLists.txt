@@ -43,6 +43,7 @@ add_library(schuimm_script_runtime STATIC
     Runtime/Interpreter.cpp
     Runtime/NativeRegistry.cpp
     Runtime/Program.cpp
+    Runtime/ScriptState.cpp
     Runtime/ScriptHost.cpp
     Runtime/ScriptScheduler.cpp
     Runtime/StandardNatives.cpp

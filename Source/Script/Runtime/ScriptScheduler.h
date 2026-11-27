@@ -92,7 +92,13 @@ public:
     ScriptScheduler& operator=(const ScriptScheduler&) = delete;
 
     // Creates a Ready coroutine running `function(arguments...)` of `program`, owned by `owner`.
+    // A run of its own: the coroutine (and what it spawns) gets a fresh GlobalState.
     [[nodiscard]] Result<CoroutineHandle> start(std::shared_ptr<const Program> program, std::string_view function,
+                                                std::vector<Value> arguments = {},
+                                                ExecutionOwner owner = noExecutionOwner);
+    // The same, for a game session: the coroutine reads and writes the global variables of
+    // `globals` (and runs its program).
+    [[nodiscard]] Result<CoroutineHandle> start(std::shared_ptr<GlobalState> globals, std::string_view function,
                                                 std::vector<Value> arguments = {},
                                                 ExecutionOwner owner = noExecutionOwner);
 
@@ -103,13 +109,24 @@ public:
     //   * no such object or handler: {handled = false}, no coroutine, no error;
     //   * arguments that do not match the handler's parameters: InvalidArgument;
     //   * otherwise {handled = true, handle}.
+    //
+    // This form finds the object behaviour by name and gives the call a fresh GlobalState and
+    // BehaviourInstance of its own: for scripts without variables and for tools. A game keeps one
+    // instance per entity and dispatches through it (below), so the variables persist.
     [[nodiscard]] Result<DispatchResult> dispatch(std::shared_ptr<const Program> program, std::string_view object,
                                                   std::string_view event, ObjectRef self,
                                                   std::vector<Value> arguments = {},
                                                   ExecutionOwner owner = noExecutionOwner);
+    // Invokes the handler `event` of the behaviour `instance` is an instance of, running for that
+    // instance: its self, its instance variables and its session's globals. As above, except: a
+    // null instance is InvalidArgument and an expired one InvalidState.
+    [[nodiscard]] Result<DispatchResult> dispatch(std::shared_ptr<BehaviourInstance> instance, std::string_view event,
+                                                  std::vector<Value> arguments = {},
+                                                  ExecutionOwner owner = noExecutionOwner);
 
     // The Spawn instruction: a Ready coroutine running function `index` of `program`, owned by
-    // the owner of `parent` (the spawning coroutine).
+    // the owner of `parent` (the spawning coroutine), with its global state and, for a function
+    // of the same behaviour, its behaviour instance.
     [[nodiscard]] Result<CoroutineHandle> spawn(CoroutineHandle parent, std::shared_ptr<const Program> program,
                                                 std::uint32_t index, std::vector<Value> arguments);
 

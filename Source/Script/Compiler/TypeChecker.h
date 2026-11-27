@@ -45,10 +45,19 @@ struct EnumInfo {
     [[nodiscard]] bool isEngine() const noexcept { return !qualifier.empty(); }
 };
 
+// Where a variable lives: in the function's frame, in the behaviour instance the function runs
+// for, or in the game session.
+enum class VariableStorage : std::uint8_t {
+    Local,    // Parameters and "var" inside functions: index into FunctionSemantics::variables.
+    Instance, // "var" in a behaviour: index into BehaviourSemantics::variables.
+    Global,   // "var" at the top level: index into SemanticModel::globals().
+};
+
 struct ExprInfo {
     Type type = Type::Error;
     bool widenToFloat = false;           // Implicit int -> float conversion of this value.
-    std::uint32_t variable = invalidIndex; // Name: the variable within its function.
+    std::uint32_t variable = invalidIndex; // Name: the variable, in `storage`.
+    VariableStorage storage = VariableStorage::Local;
     CallKind callKind = CallKind::Function;
     std::uint32_t callee = invalidIndex;   // Function index (user functions) or native index.
     Intrinsic intrinsic = Intrinsic::ToInt;
@@ -60,6 +69,15 @@ struct ExprInfo {
     // Binary "scalar * vector": the operands are swapped for the vector instruction.
     bool swapOperands = false;
     // Spawn: `callee` is the function to start (a script function or a spawn wrapper).
+};
+
+// A global or instance variable: one storage location per game session or per instance.
+struct PersistentVariable {
+    std::string name;
+    Type type = Type::Error;
+    SourceRange declaration;
+    std::uint32_t source = 0;
+    ConstantValue initial;
 };
 
 struct VariableInfo {
@@ -97,6 +115,7 @@ struct BehaviourSemantics {
     const ObjectDecl* declaration = nullptr; // Object behaviours.
     std::string name;                        // The object id; empty for room and actor behaviours.
     std::vector<HandlerSemantics> handlers;  // In declaration order.
+    std::vector<PersistentVariable> variables; // Its instance variables, in declaration order.
 };
 
 // A source file of the program: its name (path) and role.
@@ -107,7 +126,8 @@ struct SourceSemantics {
 };
 
 struct StatementInfo {
-    std::uint32_t variable = invalidIndex; // Assign target or for-loop variable.
+    std::uint32_t variable = invalidIndex; // Assign target or for-loop variable, in `storage`.
+    VariableStorage storage = VariableStorage::Local;
     bool declares = false;                 // Assign: introduces the variable (otherwise assigns).
     bool component = false;                // Assign: sets component `componentIndex` of a vec2.
     std::uint8_t componentIndex = 0;
@@ -125,6 +145,8 @@ public:
     // User functions: the global functions of every source in declaration order (extern
     // declarations excluded), followed by the handlers of every behaviour in declaration order.
     [[nodiscard]] const std::vector<FunctionSemantics>& functions() const noexcept { return functions_; }
+    // Global variables of every source, in source and declaration order.
+    [[nodiscard]] const std::vector<PersistentVariable>& globals() const noexcept { return globals_; }
     // Behaviour declarations, by source and declaration order.
     [[nodiscard]] const std::vector<BehaviourSemantics>& behaviours() const noexcept { return behaviours_; }
     // Interface functions (core first) followed by extern declarations.
@@ -146,6 +168,7 @@ private:
     std::vector<SourceSemantics> sources_;
     std::vector<FunctionSemantics> functions_;
     std::vector<BehaviourSemantics> behaviours_;
+    std::vector<PersistentVariable> globals_;
     std::vector<NativeSignature> natives_;
     std::vector<EnumInfo> enums_;
     std::vector<std::uint32_t> spawnWrappers_;

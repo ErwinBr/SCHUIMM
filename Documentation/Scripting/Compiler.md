@@ -43,7 +43,8 @@ a role ([Language.md §1](Language.md#1-source-files)):
    checking runs only if there are none.
 3. **Declarations, all sources:** the interfaces, then the enums of every source, then every
    function signature (so a call or a type may refer to a declaration in any file, before or after
-   it), then the behaviours (object declarations) of every source.
+   it), then the global variables, then the behaviours (object declarations and their instance
+   variables) of every source.
 4. **Bodies:** every function is checked against that one environment.
 5. **IR, optimisation, code generation and validation** as for one file. The module records the
    sources (path and role) and the source of every function.
@@ -112,13 +113,22 @@ Across all sources of the program (see [Project compilation](#project-compilatio
 3. Collect all function and `extern` signatures (functions may be called before their
    declaration), resolving type names to enums. Duplicate and reserved names, and names an
    interface declares, are reported here.
-4. Collect the behaviours ([Language.md §8](Language.md#8-objects-and-handlers)): object
+4. Collect the global variables ([Language.md §7](Language.md#7-variables-and-scope)): names
+   unique among globals, functions, natives and enums of all sources; the type from the
+   annotation or the initial value; the initial value a constant expression (checked
+   syntactically first, then typed and evaluated into a `ConstantValue`) or the type's default.
+5. Collect the behaviours ([Language.md §8](Language.md#8-objects-and-handlers)): object
    declarations, only in room scripts, with names unique per source (they are not game-wide
    names) and per object its handlers (unique within the object). Handlers are appended to the
    function list after the global functions of all sources, each with the index of its
    behaviour; handler names are kept in the behaviour's scope only, never in the game-wide scope
    used to resolve calls.
-5. Check every function body with a stack of block scopes:
+6. Check every function body with a stack of block scopes:
+   - names resolve to a local, then an instance variable of the function's behaviour, then a
+     global (`ExprInfo::storage`, `StatementInfo::storage`); declarations that hide an instance or
+     global variable are warnings;
+   - `None` has type Null, assignable to the handle types; where it meets one (an assignment, an
+     argument, a comparison with a reference) its expression takes that type;
    - `var` declarations and assignments, and whether values are assignable;
    - lookups; operator typing, including vectors, enums and references;
    - `Enum.MEMBER` and `vector.x`;
@@ -168,6 +178,12 @@ The location is `file:line:column`. Notes add hints where the compiler knows a l
 * **Functions** with typed parameters (virtual registers `r0…rn−1`) and a return type.
 * **Virtual registers**: one per variable (reassigned; the IR is not SSA) plus a fresh one per
   temporary. Each register has a static type.
+* **Variables of the program**: `LoadGlobal`/`StoreGlobal` and `LoadInstance`/`StoreInstance`
+  read and write a global or instance variable by index (`callee`); `LoadNull` loads the null
+  value of its destination's type. Unlike a local (a virtual register), a global or instance
+  variable is read with a fresh `Load` at every use: a call, a native or another coroutine may
+  change it between two uses, so a read is never reused. `IrModule::globals` and
+  `IrBehaviour::variables` list the variables with their initial values.
 * **Instructions**: `dest = op operands` with explicit, typed operations (`AddInt`,
   `AddFloat`, `Concat`, `LtString`, `IntToFloat`, `AddVec2`, `EqEnum`, `EqRef`, …), `Load*`
   immediates (`LoadEnum` carries the enum and ordinal), `Call` (script function), `CallNative`
@@ -223,7 +239,10 @@ nothing changes (at most 8 rounds). Each pass is a separate function with its ow
 * An operation that may trap is never removed, and is folded only when its operands are known not
   to trap. `9223372036854775807 + 1`, `1 // 0` or `int(1e300)` stay in the code and fail at run
   time with the right message and line.
-* Calls are never folded. Calls of script functions are never removed. Calls of natives are
+* Calls are never folded. Calls of script functions are never removed.
+* Reads of global and instance variables are never constant: `propagateConstants` treats their
+  results as varying, so `while not completed: wait(0.1)` reads `completed` in every iteration.
+  An unused read may be removed; a store never is. Calls of natives are
   removed only when their result is unused and the native is declared pure (the core vector
   functions are).
 * Enum, vector and reference operations are not folded; the pure ones may be removed when unused.

@@ -16,9 +16,17 @@ namespace {
 
 } // namespace
 
-Result<std::unique_ptr<RoomInstance>> RoomInstance::create(LoadedRoom room, script::ScriptHost& host)
+Result<std::unique_ptr<RoomInstance>> RoomInstance::create(LoadedRoom room, script::ScriptHost& host,
+                                                           std::shared_ptr<script::GlobalState> globals)
 {
     if (!room.resource) return makeError(ErrorCode::InvalidArgument, "RoomInstance::create: no room resource");
+    if (globals && (!room.script || globals->program() != room.script)) {
+        return makeError(ErrorCode::InvalidArgument,
+                         concat("room '", room.resource->id, "': the global state belongs to another script"));
+    }
+    if (room.script && !globals) {
+        globals = script::GlobalState::create(room.script);
+    }
     if (auto status = validateRoomScript(*room.resource, room.script.get()); !status) {
         return std::unexpected(status.error());
     }
@@ -53,14 +61,16 @@ Result<std::unique_ptr<RoomInstance>> RoomInstance::create(LoadedRoom room, scri
         }
         actors.push_back(std::move(*actor));
     }
-    return std::unique_ptr<RoomInstance>(new RoomInstance(std::move(room), host, std::move(actors)));
+    return std::unique_ptr<RoomInstance>(new RoomInstance(std::move(room), host, std::move(globals), std::move(actors)));
 }
 
-RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vector<std::unique_ptr<ActorInstance>> actors)
+RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::shared_ptr<script::GlobalState> globals,
+                           std::vector<std::unique_ptr<ActorInstance>> actors)
     : room_(std::move(room))
     , host_(host)
     , owner_(host.createOwner())
     , actors_(std::move(actors))
+    , globals_(std::move(globals))
 {
     const auto& definitions = room_.resource->objects;
     objects_.reserve(definitions.size());
@@ -68,6 +78,16 @@ RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::vecto
         objects_.push_back(RoomObject(definitions[i], detail::allocateObjectHandle(),
                                       i < room_.objectAnimations.size() ? room_.objectAnimations[i] : nullptr));
         objects_.back().events_ = &events_; // After the copy into the vector (copies report nothing).
+    }
+    objectScripts_.resize(objects_.size());
+    if (room_.script) {
+        for (std::size_t i = 0; i < objects_.size(); ++i) {
+            const auto behaviour = room_.script->findBehaviour(script::BehaviourKind::Object, {}, objects_[i].id());
+            if (!behaviour) continue;
+            auto instance = script::BehaviourInstance::create(globals_, *behaviour, script::Value::fromObject(objects_[i].handle()));
+            SCHUIMM_ASSERT(instance.has_value(), "an object behaviour instance of the room's own script");
+            if (instance) objectScripts_[i] = std::move(*instance);
+        }
     }
     for (const std::unique_ptr<ActorInstance>& actor : actors_) actor->events_ = &events_;
 }
@@ -84,6 +104,17 @@ RoomInstance::~RoomInstance()
     }
     // Everything the room started, and everything those coroutines spawned.
     host_.cancelOwner(owner_);
+    for (const std::shared_ptr<script::BehaviourInstance>& instance : objectScripts_) {
+        if (instance) instance->expire();
+    }
+}
+
+std::shared_ptr<script::BehaviourInstance> RoomInstance::objectScript(std::string_view objectId) const
+{
+    for (std::size_t i = 0; i < objects_.size(); ++i) {
+        if (objects_[i].id() == objectId) return objectScripts_[i];
+    }
+    return nullptr;
 }
 
 RoomObject::RoomObject(const RoomObjectDefinition& definition, script::ObjectRef handle,
@@ -378,8 +409,9 @@ Result<script::DispatchResult> RoomInstance::dispatch(std::string_view objectId,
     if (target == nullptr) {
         return makeError(ErrorCode::NotFound, concat("room '", resource().id, "' has no object '", objectId, "'"));
     }
-    if (!room_.script) return script::DispatchResult{};
-    return host_.dispatch(room_.script, objectId, event, target->handle(), std::move(arguments), owner_);
+    const std::shared_ptr<script::BehaviourInstance> instance = objectScript(objectId);
+    if (!instance) return script::DispatchResult{};
+    return host_.dispatch(instance, event, std::move(arguments), owner_);
 }
 
 Result<script::CoroutineHandle> RoomInstance::start(std::string_view function, std::vector<script::Value> arguments)
@@ -387,7 +419,7 @@ Result<script::CoroutineHandle> RoomInstance::start(std::string_view function, s
     if (!room_.script) {
         return makeError(ErrorCode::NotFound, concat("room '", resource().id, "' has no script (cannot start '", function, "')"));
     }
-    return host_.start(room_.script, function, std::move(arguments), owner_);
+    return host_.start(globals_, function, std::move(arguments), owner_);
 }
 
 std::size_t RoomInstance::activeCoroutineCount() const { return host_.activeCount(owner_); }

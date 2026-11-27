@@ -110,7 +110,8 @@ SCHUIMM_TEST(Language_VarDeclaresAndAssignmentAssigns)
     CHECK(undeclared.hasNote("var count = ..."));
     CHECK(compileSource(body("\tvar a = 1\n\tvar a = 2\n")).has("already declared"));
     CHECK(compileSource(body("\tvar a = 1\n\tif True:\n\t\tvar a = 2\n")).has("already declared"));
-    CHECK(compileSource(body("\tvar a: int\n")).has("must be initialised"));
+    CHECK(compileSource(body("\tvar a: int\n")).result.success); // The default value, 0.
+    CHECK(compileSource(body("\tvar a\n")).has("needs a type or a value"));
     CHECK(compileSource(body("\ta: int = 1\n")).has("declared with 'var'"));
     CHECK(compileSource(body("\tvar a = print(1)\n")).has("has no value"));
     // Block scoping: a variable of a branch is gone after it.

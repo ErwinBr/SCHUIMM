@@ -293,7 +293,8 @@ SCHUIMM_TEST(Scheduler_HandlesAreGenerationChecked)
     CHECK(!f.scheduler.release(fresh)); // still Ready
     CHECK(!f.scheduler.state(CoroutineHandle{}).has_value());
     CHECK(!f.scheduler.start(program, "missing").has_value());
-    CHECK(!f.scheduler.start(nullptr, "main").has_value());
+    CHECK(!f.scheduler.start(std::shared_ptr<const Program>(), "main").has_value());
+    CHECK(!f.scheduler.start(std::shared_ptr<GlobalState>(), "main").has_value());
     f.scheduler.clear();
     CHECK_EQ(f.scheduler.size(), std::size_t{0});
 }

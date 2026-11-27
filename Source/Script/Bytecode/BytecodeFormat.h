@@ -28,7 +28,8 @@ enum class SectionId : std::uint32_t {
     Behaviours = 7,
     Enums = 8,
     Sources = 9,
+    Globals = 10,
 };
-inline constexpr std::uint32_t sectionCount = 9;
+inline constexpr std::uint32_t sectionCount = 10;
 
 } // namespace schuimm::script::format

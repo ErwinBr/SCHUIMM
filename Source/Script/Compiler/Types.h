@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace schuimm::script {
@@ -29,6 +30,7 @@ enum class Type : std::uint32_t {
     Vec2,
     Coroutine,
     Operation,
+    Null,      // The value None: the null reference, assignable to the handle types (isNullable).
     Named,
     EnumBase = 0x100,
 };
@@ -59,11 +61,34 @@ inline constexpr std::uint32_t maxEnumTypes = 0x10000;
 // coroutine, operation (None and object are keywords; enums are resolved by the type checker).
 [[nodiscard]] std::optional<Type> typeFromName(std::string_view name) noexcept;
 
+// Types whose values include the null handle None: references, coroutines and operations.
+[[nodiscard]] constexpr bool isNullable(Type type) noexcept
+{
+    return isReference(type) || type == Type::Coroutine || type == Type::Operation;
+}
+
+// A compile-time constant: the initial value of a global or instance variable (also the default
+// value of a type). `type` says which field holds it; vec2 uses x (floatValue) and y; enums the
+// ordinal; the nullable types have only the null value.
+struct ConstantValue {
+    Type type = Type::Error;
+    std::int64_t intValue = 0;
+    double floatValue = 0.0;
+    double y = 0.0;
+    bool boolValue = false;
+    std::string text;
+    std::uint32_t ordinal = 0;
+};
+
+// The default value of a variable of `type` declared without a value: 0, 0.0, False, "",
+// vec2(0, 0), the first member of an enum, None for the nullable types.
+[[nodiscard]] ConstantValue defaultValue(Type type);
+
 [[nodiscard]] inline bool isNumeric(Type type) noexcept { return type == Type::Int || type == Type::Float; }
 
 // Whether a value of type `from` may be stored where `to` is expected: identical types, the
-// implicit int -> float and actor/object -> entity widenings, anything (but None) into Any, and
-// Error either way.
+// implicit int -> float and actor/object -> entity widenings, the value None into the nullable
+// types, anything (but None) into Any, and Error either way.
 [[nodiscard]] bool isAssignable(Type from, Type to) noexcept;
 
 } // namespace schuimm::script

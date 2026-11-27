@@ -105,6 +105,9 @@ public:
         for (std::size_t i = 0; i < ir_.functions.size(); ++i) {
             generate(ir_.functions[i], module_.functions[i]);
         }
+        for (const IrVariable& variable : ir_.globals) {
+            module_.globals.push_back(variableEntry(variable));
+        }
         for (const IrBehaviour& behaviour : ir_.behaviours) {
             BehaviourEntry out;
             out.kind = behaviour.kind;
@@ -113,15 +116,39 @@ public:
             for (const IrHandler& handler : behaviour.handlers) {
                 out.handlers.push_back({intern(handler.name), handler.function});
             }
+            for (const IrVariable& variable : behaviour.variables) {
+                out.variables.push_back(variableEntry(variable));
+            }
             module_.behaviours.push_back(std::move(out));
         }
-        if (module_.constants.size() > maxConstants) {
+        if (module_.globals.size() > 0x10000) {
+            fail(concat("The game declares ", module_.globals.size(), " global variables; the limit is 65536."));
+        }
+        for (const BehaviourEntry& behaviour : module_.behaviours) {
+            if (behaviour.variables.size() > 0x10000) fail("A behaviour declares more than 65536 instance variables.");
+        }
+                if (module_.constants.size() > maxConstants) {
             fail(concat("The script uses ", module_.constants.size(), " distinct constants; the limit is ", maxConstants, "."));
         }
         return std::move(module_);
     }
 
 private:
+    VariableEntry variableEntry(const IrVariable& variable)
+    {
+        VariableEntry entry;
+        entry.nameIndex = intern(variable.name);
+        entry.type = typeRef(variable.type);
+        const ConstantValue& value = variable.initial;
+        entry.initial.boolValue = value.boolValue;
+        entry.initial.intValue = value.intValue;
+        entry.initial.x = value.floatValue;
+        entry.initial.y = value.y;
+        entry.initial.ordinal = value.ordinal;
+        if (variable.type == Type::String) entry.initial.stringIndex = intern(value.text);
+        return entry;
+    }
+
     void fail(std::string message)
     {
         SourceRange range;
@@ -299,6 +326,17 @@ private:
                     emit(instruction.boolValue ? Opcode::LoadTrue : Opcode::LoadFalse, r(instruction.dest), 0, 0, position);
                     break;
                 case IrOp::LoadNone: emit(Opcode::LoadNone, r(instruction.dest), 0, 0, position); break;
+                case IrOp::LoadNull: emit(Opcode::LoadNull, r(instruction.dest), 0, 0, position); break;
+                case IrOp::LoadGlobal:
+                case IrOp::LoadInstance:
+                    emit(instruction.op == IrOp::LoadGlobal ? Opcode::LoadGlobal : Opcode::LoadInstance, r(instruction.dest),
+                         static_cast<std::uint16_t>(instruction.callee), 0, position);
+                    break;
+                case IrOp::StoreGlobal:
+                case IrOp::StoreInstance:
+                    emit(instruction.op == IrOp::StoreGlobal ? Opcode::StoreGlobal : Opcode::StoreInstance,
+                         static_cast<std::uint16_t>(instruction.callee), r(instruction.operands[0]), 0, position);
+                    break;
                 case IrOp::Call:
                 case IrOp::CallNative:
                 case IrOp::Spawn: {

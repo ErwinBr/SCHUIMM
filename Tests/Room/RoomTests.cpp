@@ -550,6 +550,51 @@ SCHUIMM_TEST(Room_CompletionCriteria)
     CHECK_EQ(fixture.host.statistics().failed, std::uint64_t{0});
 }
 
+SCHUIMM_TEST(Room_ScriptStateBelongsToTheInstanceAndTheSession)
+{
+    // Instance variables of an object live as long as the room instance; global variables as
+    // long as the GlobalState the instances share.
+    RoomFixture fixture;
+    fixture.writeFullRoom("var visits: int\n\nfunc enter():\n\tvisits += 1\n\tsay(\"visit \" + str(visits))\n\n"
+                          "object blender:\n\tvar uses = 0\n\tfunc use():\n\t\tuses += 1\n\t\tsay(\"blender \" + str(uses))\n\n"
+                          "object cupboard:\n\tvar uses = 10\n\tfunc use():\n\t\tuses += 1\n\t\tsay(\"cupboard \" + str(uses))\n");
+    const AssetLocator locator = fixture.locator();
+    RoomLibrary library(locator, fixture.host);
+    auto loaded = library.load(test::assetPath(roomName));
+    REQUIRE(loaded.has_value());
+    const auto globals = script::GlobalState::create(loaded->script);
+    for (int round = 0; round < 2; ++round) {
+        auto instance = RoomInstance::create(*loaded, fixture.host, globals);
+        REQUIRE(instance.has_value());
+        RoomInstance& room = **instance;
+        CHECK(room.globals() == globals);
+        REQUIRE(room.objectScript("blender") != nullptr);
+        CHECK(room.objectScript("table") == nullptr);
+        REQUIRE(room.start("enter").has_value());
+        REQUIRE(room.dispatch("blender", "use")->handled);
+        REQUIRE(room.dispatch("blender", "use")->handled);
+        REQUIRE(room.dispatch("cupboard", "use")->handled);
+        fixture.host.update(0.0);
+        const std::shared_ptr<script::BehaviourInstance> blender = room.objectScript("blender");
+        instance->reset();
+        CHECK(blender->isExpired()); // Destroying the room expires its objects' script state.
+    }
+    // Each instance of the room started its objects afresh; the global counted both visits.
+    CHECK(fixture.said == std::vector<std::string>({"visit 1", "blender 1", "blender 2", "cupboard 11", "visit 2",
+                                                     "blender 1", "blender 2", "cupboard 11"}));
+    CHECK_EQ(globals->find("visits")->asInt(), 2);
+    // A room without given globals has its own; globals of another program are refused.
+    auto own = RoomInstance::create(*loaded, fixture.host);
+    REQUIRE(own.has_value());
+    CHECK((*own)->globals() != nullptr);
+    CHECK((*own)->globals() != globals);
+    auto otherProgram = fixture.host.load(compileToBytecode("func other():\n\tpass\n"), "other.schb");
+    REQUIRE(otherProgram.has_value());
+    auto mismatched = RoomInstance::create(*loaded, fixture.host, script::GlobalState::create(*otherProgram));
+    REQUIRE(!mismatched.has_value());
+    CHECK(mismatched.error().message.find("the global state belongs to another script") != std::string::npos);
+}
+
 SCHUIMM_TEST(Room_ObjectsWithoutDeclarationsAreFine)
 {
     RoomFixture fixture;

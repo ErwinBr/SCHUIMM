@@ -24,7 +24,7 @@ changes. They are independent.
 | 1.0 | initial format: 6 sections |
 | 1.1 | section 7 (Objects), type `object`, opcodes `EqObject`/`NeObject` |
 | 2.0 | typed registers; section 8 (Enums); types `actor`, `entity`, `vec2`, enums, `coroutine`, `operation`; enum, vector and reference opcodes (`EqRef`/`NeRef` replace `EqObject`/`NeObject`); `Spawn` |
-| 3.0 | one module for the scripts of a whole game: section 9 (Sources), a source per function, section 7 Behaviours (room, actor and object declarations) replacing Objects; the Debug section no longer holds the source name |
+| 3.0 | one module for the scripts of a whole game: section 9 (Sources), a source per function, section 7 Behaviours (room, actor and object declarations, with instance variables) replacing Objects; section 10 (Globals); `LoadNull`, `LoadGlobal`, `StoreGlobal`, `LoadInstance`, `StoreInstance`; the Debug section no longer holds the source name |
 
 The compiler always writes the current version. Format 3.0 changed the encoding of functions
 and sections, so **1.x and 2.x files are rejected** ("recompile the script from its source");
@@ -47,12 +47,12 @@ All integers are little-endian. Offsets are from the start of the file.
 | 12 | 4 | compiler version |
 | 16 | 4 | flags (must be 0) |
 | 20 | 4 | file size in bytes (must equal the actual size; at most 64 MiB) |
-| 24 | 4 | section count (9) |
+| 24 | 4 | section count (10) |
 | 28 | 4 | CRC-32 (IEEE, as zlib) of bytes 32 … end |
 
-### Section table (9 × 12 bytes, at offset 32)
+### Section table (10 × 12 bytes, at offset 32)
 
-Each entry: `id u32, offset u32, size u32`. Each id 1–9 must occur exactly once; sections must lie after the table, inside the file, and must not overlap. Every section must be consumed
+Each entry: `id u32, offset u32, size u32`. Each id 1–10 must occur exactly once; sections must lie after the table, inside the file, and must not overlap. Every section must be consumed
 exactly (no trailing bytes).
 
 | Id | Section | Content |
@@ -63,9 +63,24 @@ exactly (no trailing bytes).
 | 4 | Functions | `count u32`, then per function `name u32, source u32, return type, parameter count u8, parameter types…, register count u16, register types…, code offset u32, code length u32, debug offset u32` |
 | 5 | Code | `count u32`, then `count` 8-byte instructions; each function owns `[code offset, code offset + code length)` |
 | 6 | Debug | `count u32`, then per instruction `line u32, column u32` |
-| 7 | Behaviours | `count u32`, then per behaviour `kind u8, source u32, name u32, handler count u32`, then per handler `name u32, function u32` |
+| 7 | Behaviours | `count u32`, then per behaviour `kind u8, source u32, name u32, handler count u32`, then per handler `name u32, function u32`, then `variable count u32` and per instance variable a *variable* |
 | 8 | Enums | `count u32`, then per enum `name u32, qualifier u32, member count u32, member names u32…` |
 | 9 | Sources | `count u32`, then per source file `path u32, role u8` |
+| 10 | Globals | `count u32`, then per global variable a *variable* |
+
+### Variables
+
+A *variable* (a global variable, or an instance variable of a behaviour) is `name u32, type`,
+then its initial value in the encoding of the type: bool `u8` (0 or 1), int `i64`, float `f64`,
+string `u32` (string index), vec2 two `f64`, enum `u32` (the member ordinal); the nullable types
+(`actor`, `object`, `entity`, `coroutine`, `operation`) start as null and have no value bytes.
+The type is not None or any. The name is debug information (`GlobalState::find`, the
+disassembly); code refers to variables by index.
+
+The module only *describes* variables. Their storage belongs to the runtime: one `GlobalState`
+per game session for the globals, one `BehaviourInstance` per entity for instance variables
+([Runtime.md](Runtime.md#script-state-global-and-instance-variables)), each created with the
+initial values.
 
 ### Sources
 
@@ -167,6 +182,11 @@ of consecutive registers starting at `c`.
 | `NegVec2` | a, b | `ra = -rb` |
 | `EqVec2`, `NeVec2` | a, b, c | componentwise float equality |
 | `Spawn` | a (opt), function, window | starts the function with the arguments in the window as a new coroutine; `a` (a `coroutine` register) receives its handle. The caller continues at once. A handler cannot be spawned |
+| `LoadNull` | a | `ra = None`, the null value of `ra`'s type (`actor`, `object`, `entity`, `coroutine` or `operation`) |
+| `LoadGlobal` | a, global | `ra = ` global variable `b` of the coroutine's game session |
+| `StoreGlobal` | global, b | global variable `a = rb` |
+| `LoadInstance` | a, instance | `ra = ` instance variable `b` of the behaviour instance the coroutine runs for |
+| `StoreInstance` | instance, b | instance variable `a = rb` |
 
 The numeric opcode is the position in `SCHUIMM_SCRIPT_OPCODES` (`Opcode.h`). Opcodes are only
 ever appended within a format major version.
@@ -201,13 +221,17 @@ checked too. Validation never trusts a size or index:
   handler names unique per behaviour, every handler an existing function of the same name and
   source, no function the handler of two events, and an object handler's parameter 0 of type
   `object` (an actor handler's of type `actor`);
+* globals and instance variables: names exist and are unique (per behaviour for instance
+  variables), types are valid value types, initial strings and enum members exist;
 * every instruction: known opcode, reserved byte 0, unused operands 0, register operands below
-  the function's register count, constant/function/import/enum indices exist, branch targets
+  the function's register count, constant/function/import/enum/global indices exist, instance
+  variable indices exist in the function's own behaviour (a global function uses none), branch targets
   inside the function, argument windows (`c + parameter count`) inside the register file, and no
   `Call` of a handler function (handlers are started only by dispatch);
 * register types of every instruction: operands and results have the types the opcode requires
   (`AddInt` on int registers, `JumpIfTrue` on a bool, `LoadEnum` into a register of that enum
-  with an existing ordinal, …); call arguments are assignable to the callee's parameters, and
+  with an existing ordinal, `LoadGlobal` into a register of the global's type, a stored value
+  assignable to the variable, `LoadNull` into a nullable register, …); call arguments are assignable to the callee's parameters, and
   results and return values to their destinations;
 * the last instruction of every function is a terminator (`Jump`, `Return`, `Unreachable`), so
   execution cannot run past the end.
@@ -254,7 +278,8 @@ function f0 main() -> None  ; 8 registers
 
 Enums are listed after the natives (`e0 adventure.Direction: NORTH NORTH_EAST …`), then the
 behaviours. Handler functions are shown as `object.handler` (their first parameter is `self`).
-A module of several sources lists them first (`sources:`, e.g. `s0 room "Rooms/Kitchen.sch"`)
+Global variables are listed as `globals:` (`g0 score: int = 0`), instance variables under their
+behaviour (`    i0 open: bool = True`). A module of several sources lists them first (`sources:`, e.g. `s0 room "Rooms/Kitchen.sch"`)
 instead of the single `source` of the header line, and names the source of each behaviour and
 function (`object door (s1): …`, `; 5 registers, s1`):
 

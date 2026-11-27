@@ -61,6 +61,47 @@ Result<CoroutineHandle> ScriptHost::start(std::shared_ptr<const Program> program
     return handle;
 }
 
+Result<CoroutineHandle> ScriptHost::start(std::shared_ptr<GlobalState> globals, std::string_view function,
+                                          std::vector<Value> arguments, ExecutionOwner owner)
+{
+    const std::string name = globals && globals->program() ? globals->program()->name() : std::string("<none>");
+    auto handle = scheduler_.start(std::move(globals), function, std::move(arguments), owner);
+    if (!handle) {
+        logger_.error(category, concat("Cannot start '", function, "' of script '", name, "': ", handle.error().message));
+        return handle;
+    }
+    ++statistics_.started;
+    logger_.debug(category, concat("Started coroutine ", handle->index, " running ", name, ":", function));
+    return handle;
+}
+
+Result<DispatchResult> ScriptHost::dispatch(std::shared_ptr<BehaviourInstance> instance, std::string_view event,
+                                            std::vector<Value> arguments, ExecutionOwner owner)
+{
+    std::string name = "<none>";
+    std::string target = "?";
+    if (instance) {
+        const Program& program = instance->program();
+        name = program.name();
+        const BehaviourEntry& behaviour = program.module().behaviours[instance->behaviour()];
+        target = behaviour.kind == BehaviourKind::Object ? program.module().string(behaviour.nameIndex)
+                                                         : std::string(toString(behaviour.kind));
+    }
+    auto result = scheduler_.dispatch(std::move(instance), event, std::move(arguments), owner);
+    if (!result) {
+        logger_.error(category, concat("Cannot dispatch '", target, ".", event, "' of script '", name, "': ",
+                                       result.error().message));
+        return result;
+    }
+    if (!result->handled) {
+        logger_.debug(category, concat("No handler ", name, ":", target, ".", event));
+        return result;
+    }
+    ++statistics_.started;
+    logger_.debug(category, concat("Started coroutine ", result->handle.index, " running ", name, ":", target, ".", event));
+    return result;
+}
+
 Result<DispatchResult> ScriptHost::dispatch(std::shared_ptr<const Program> program, std::string_view object,
                                             std::string_view event, ObjectRef self, std::vector<Value> arguments,
                                             ExecutionOwner owner)

@@ -126,8 +126,8 @@ See [Navigation.md](Navigation.md) and [Actors.md](Actors.md#movement).
 ## Scripting
 
 Language scope (version 3.0, see [Language.md](../Scripting/Language.md#12-limitations-version-30)):
-* no `break`/`continue`, augmented assignment, lists, dictionaries, structures (besides `vec2`),
-  modules/imports, global variables or exception handling;
+* no `break`/`continue`, `//=`, `%=`, lists, dictionaries, structures (besides `vec2`),
+  constants or exception handling (the files of a game form one program, without imports);
 * no joining of coroutines (`wait(coroutine)`), spawned blocks, closures or coroutine groups;
 * `str()` does not convert vectors, enums or references (only `print` shows them);
 * object handlers reach object state only through natives (no `self.property` syntax yet);

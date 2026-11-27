@@ -19,6 +19,7 @@ const char* toString(Type type) noexcept
     case Type::Vec2: return "vec2";
     case Type::Coroutine: return "coroutine";
     case Type::Operation: return "operation";
+    case Type::Null: return "None";
     case Type::Named: return "<unresolved>";
     case Type::EnumBase: return "enum";
     }
@@ -58,9 +59,17 @@ std::optional<Type> typeFromName(std::string_view name) noexcept
     return std::nullopt;
 }
 
+ConstantValue defaultValue(Type type)
+{
+    ConstantValue value;
+    value.type = type;
+    return value; // Zero, False, "", vec2(0, 0), ordinal 0 or None.
+}
+
 bool isAssignable(Type from, Type to) noexcept
 {
     if (from == Type::Error || to == Type::Error) return true;
+    if (from == Type::Null) return isNullable(to);
     if (from == to) return from != Type::None;
     if (from == Type::Int && to == Type::Float) return true;
     if (to == Type::Entity) return from == Type::Actor || from == Type::Object;

@@ -109,6 +109,26 @@ struct EnumEntry {
     [[nodiscard]] bool isEngine() const noexcept { return qualifierIndex != noString; }
 };
 
+// The initial value of a global or instance variable, in the field its type uses: bool, int,
+// float (x), string (a string index), vec2 (x, y), enum (the ordinal). The nullable types
+// (references, coroutine, operation) start as null and use no field.
+struct InitialValue {
+    bool boolValue = false;
+    std::int64_t intValue = 0;
+    double x = 0.0;
+    double y = 0.0;
+    std::uint32_t stringIndex = 0;
+    std::uint32_t ordinal = 0;
+};
+
+// A global variable (one per game session) or an instance variable (one per behaviour
+// instance): its name (debug information), type and initial value.
+struct VariableEntry {
+    std::uint32_t nameIndex = 0;
+    TypeRef type = ScriptType::Int;
+    InitialValue initial;
+};
+
 // A handler of a behaviour: the event name and the function implementing it. An object
 // handler's parameter 0 is the hidden "self" (ScriptType::Object, a room object).
 struct HandlerEntry {
@@ -129,6 +149,7 @@ struct BehaviourEntry {
     std::uint32_t source = 0;          // Index into Module::sources.
     std::uint32_t nameIndex = noString; // The object id; noString for room and actor behaviours.
     std::vector<HandlerEntry> handlers;
+    std::vector<VariableEntry> variables; // Instance variables.
 };
 
 // In-memory form of a compiled script. Produced by the compiler, serialised by
@@ -147,6 +168,7 @@ struct Module {
     std::vector<Function> functions;
     std::vector<BehaviourEntry> behaviours;
     std::vector<EnumEntry> enums;
+    std::vector<VariableEntry> globals;
 
     [[nodiscard]] const std::string& string(std::uint32_t index) const { return strings[index]; }
     [[nodiscard]] const std::string& sourcePath(std::uint32_t source) const { return strings[sources[source].pathIndex]; }

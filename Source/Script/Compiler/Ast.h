@@ -85,8 +85,10 @@ struct Stmt {
     // Assign / For: the variable.
     std::string name;
     SourceRange nameRange;
-    // Assign: "var name[: type] = value" declares the variable; "name = value" assigns it and
-    // "name.member = value" assigns a vec2 component (member: "x" or "y").
+    // Assign: "var name[: type] [= value]" declares the variable (without a value it holds the
+    // default of its type, and the type is required); "name = value" assigns it and
+    // "name.member = value" assigns a vec2 component (member: "x" or "y"). "name += value" (and
+    // -=, *=, /=) is parsed as "name = name + value".
     bool declaration = false;
     std::optional<TypeSyntax> annotation;
     std::string member;
@@ -127,6 +129,9 @@ struct ObjectDecl {
     std::string name;
     SourceRange nameRange;
     std::vector<std::unique_ptr<FunctionDecl>> handlers; // isHandler is set on each.
+    // "var" declarations: the instance variables of the object (Assign statements with
+    // declaration set).
+    std::vector<std::unique_ptr<Stmt>> variables;
 };
 
 // "enum Name:" followed by an indented list of member names, one per line.
@@ -144,7 +149,9 @@ struct EnumDecl {
 
 // The root: one source file.
 struct SourceUnit {
-    std::vector<std::unique_ptr<FunctionDecl>> functions; // Room-level functions and extern declarations.
+    // Top-level "var" declarations: global variables (Assign statements with declaration set).
+    std::vector<std::unique_ptr<Stmt>> variables;
+    std::vector<std::unique_ptr<FunctionDecl>> functions; // Global functions and extern declarations.
     std::vector<std::unique_ptr<ObjectDecl>> objects;     // In declaration order.
     std::vector<std::unique_ptr<EnumDecl>> enums;         // In declaration order.
 };

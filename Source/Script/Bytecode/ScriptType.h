@@ -60,6 +60,12 @@ struct TypeRef {
 // Whether a value statically typed `from` may be stored where `to` is declared, without any
 // conversion instruction: identical types, an actor or object reference into entity, and
 // anything but None into Any. (int -> float is an explicit IntToFloat in bytecode.)
+// Types whose values include null: entity references, coroutines and operations.
+[[nodiscard]] constexpr bool isNullableType(ScriptType type) noexcept
+{
+    return isEntityReference(type) || type == ScriptType::Coroutine || type == ScriptType::Operation;
+}
+
 [[nodiscard]] constexpr bool isAssignableType(TypeRef from, TypeRef to) noexcept
 {
     if (from == to) return true;

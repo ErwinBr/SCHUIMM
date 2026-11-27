@@ -191,6 +191,53 @@ Result<std::vector<TypeRef>> readTypes(ByteReader& reader, const char* what)
     return types;
 }
 
+// A variable entry: name, type and the initial value in the encoding of the type.
+bool readVariable(ByteReader& reader, VariableEntry& variable, std::string& problem)
+{
+    if (!reader.u32(variable.nameIndex)) {
+        problem = concat("truncated variable at offset ", reader.offset());
+        return false;
+    }
+    if (!readType(reader, variable.type, problem)) return false;
+    InitialValue& initial = variable.initial;
+    std::uint64_t bits = 0;
+    bool ok = true;
+    switch (variable.type.kind) {
+    case ScriptType::Bool: {
+        std::uint8_t value = 0;
+        ok = reader.u8(value);
+        if (ok && value > 1) {
+            problem = concat("invalid bool value ", static_cast<unsigned>(value), " at offset ", reader.offset() - 1);
+            return false;
+        }
+        initial.boolValue = value != 0;
+        break;
+    }
+    case ScriptType::Int:
+        ok = reader.u64(bits);
+        initial.intValue = static_cast<std::int64_t>(bits);
+        break;
+    case ScriptType::Float:
+        ok = reader.u64(bits);
+        std::memcpy(&initial.x, &bits, sizeof bits);
+        break;
+    case ScriptType::String: ok = reader.u32(initial.stringIndex); break;
+    case ScriptType::Vec2:
+        ok = reader.u64(bits);
+        std::memcpy(&initial.x, &bits, sizeof bits);
+        ok = ok && reader.u64(bits);
+        std::memcpy(&initial.y, &bits, sizeof bits);
+        break;
+    case ScriptType::Enum: ok = reader.u32(initial.ordinal); break;
+    default: break;
+    }
+    if (!ok) {
+        problem = concat("truncated variable value at offset ", reader.offset());
+        return false;
+    }
+    return true;
+}
+
 struct Section {
     std::uint32_t offset = 0;
     std::uint32_t size = 0;
@@ -216,8 +263,9 @@ Status checkEnd(const ByteReader& reader, const char* section)
 
 struct Validator {
     const Module& module;
-    // Per function: the object whose handler it is, or noOwner (room-level function).
+    // Per function: the behaviour whose handler it is, or noOwner (global function).
     std::vector<std::uint32_t> owner = {};
+    std::size_t checking = 0; // The function whose instructions are being checked.
 
     static constexpr std::uint32_t noOwner = 0xFFFFFFFFu;
 
@@ -271,6 +319,36 @@ struct Validator {
                 if (!members.insert(module.strings[member]).second) {
                     return invalid(concat("duplicate member '", module.strings[member], "' in enum '", name, "'"));
                 }
+            }
+        }
+        return {};
+    }
+
+    // Global or instance variables: existing, unique names; a value type (not None or any);
+    // an initial value that fits it (an existing string, an existing enum member).
+    Status checkVariables(const std::vector<VariableEntry>& variables, const std::string& kind) const
+    {
+        std::set<std::string_view> names;
+        for (std::size_t v = 0; v < variables.size(); ++v) {
+            const VariableEntry& variable = variables[v];
+            if (variable.nameIndex >= module.strings.size()) {
+                return invalid(concat(kind, " variable ", v, " refers to a missing name"));
+            }
+            const std::string& name = module.strings[variable.nameIndex];
+            if (!names.insert(name).second) return invalid(concat("duplicate ", kind, " variable '", name, "'"));
+            const TypeRef type = variable.type;
+            if (type.kind == ScriptType::None || type.kind == ScriptType::Any) {
+                return invalid(concat(kind, " variable '", name, "' has type ", toString(type.kind)));
+            }
+            if (auto status = checkType(type); !status) {
+                return invalid(concat(kind, " variable '", name, "': ", status.error().message));
+            }
+            if (type.kind == ScriptType::String && variable.initial.stringIndex >= module.strings.size()) {
+                return invalid(concat(kind, " variable '", name, "' starts with missing string ", variable.initial.stringIndex));
+            }
+            if (type.kind == ScriptType::Enum && variable.initial.ordinal >= module.enums[type.enumIndex].members.size()) {
+                return invalid(concat(kind, " variable '", name, "' starts with member ", variable.initial.ordinal,
+                                      ", which its enum does not have"));
             }
         }
         return {};
@@ -371,6 +449,7 @@ struct Validator {
                 }
                 owner[handler.function] = static_cast<std::uint32_t>(b);
             }
+            if (auto status = checkVariables(behaviour.variables, concat("instance (", name, ")")); !status) return status;
         }
         return {};
     }
@@ -420,6 +499,9 @@ struct Validator {
         if (module.functions.size() > 0x10000 || module.imports.size() > 0x10000) {
             return invalid("more than 65536 functions or imports");
         }
+        if (auto status = checkVariables(module.globals, "global"); !status) {
+            return status;
+        }
         if (auto status = checkBehaviours(); !status) {
             return status;
         }
@@ -466,6 +548,7 @@ struct Validator {
             if (function.positions.size() != function.code.size()) {
                 return invalid(concat("function '", functionName(i), "' debug information does not match its code"));
             }
+            checking = i;
             for (std::size_t ip = 0; ip < function.code.size(); ++ip) {
                 if (auto status = checkInstruction(function, ip); !status) {
                     return invalid(concat("function '", functionName(i), "' instruction ", ip, " (",
@@ -496,6 +579,12 @@ struct Validator {
         return checkType(returnType);
     }
 
+    // An instance variable of the behaviour of the function being checked (checked to exist).
+    [[nodiscard]] const VariableEntry& instanceVariable(std::uint16_t index) const
+    {
+        return module.behaviours[owner[checking]].variables[index];
+    }
+
     Status checkOperand(const Function& function, OperandKind kind, std::uint16_t value, const char* field) const
     {
         switch (kind) {
@@ -524,6 +613,19 @@ struct Validator {
         case OperandKind::Enum:
             if (value >= module.enums.size()) return bad(concat("enum ", value, " does not exist"));
             return {};
+        case OperandKind::Global:
+            if (value >= module.globals.size()) return bad(concat("global variable ", value, " does not exist"));
+            return {};
+        case OperandKind::Instance: {
+            const std::uint32_t behaviour = checking < owner.size() ? owner[checking] : noOwner;
+            if (behaviour == noOwner) {
+                return bad("an instance variable is used outside a behaviour (by a global function)");
+            }
+            if (value >= module.behaviours[behaviour].variables.size()) {
+                return bad(concat("instance variable ", value, " does not exist"));
+            }
+            return {};
+        }
         case OperandKind::ArgWindow:
         case OperandKind::Target:
         case OperandKind::Immediate:
@@ -661,6 +763,25 @@ struct Validator {
         case Opcode::NegVec2: return unary(Vec2, Vec2);
         case Opcode::EqVec2:
         case Opcode::NeVec2: return all(Bool, Vec2, Vec2);
+        case Opcode::LoadNull:
+            if (!isNullableType(types[in.a].kind)) {
+                return bad(concat("register ", in.a, " of type ", typeName(types[in.a]), " has no null value"));
+            }
+            return {};
+        case Opcode::LoadGlobal: return expect(in.a, module.globals[in.b].type, "a");
+        case Opcode::StoreGlobal:
+            if (!isAssignableType(types[in.b], module.globals[in.a].type)) {
+                return bad(concat("cannot store a ", typeName(types[in.b]), " in global variable ", in.a, " of type ",
+                                  typeName(module.globals[in.a].type)));
+            }
+            return {};
+        case Opcode::LoadInstance: return expect(in.a, instanceVariable(in.b).type, "a");
+        case Opcode::StoreInstance:
+            if (!isAssignableType(types[in.b], instanceVariable(in.a).type)) {
+                return bad(concat("cannot store a ", typeName(types[in.b]), " in instance variable ", in.a, " of type ",
+                                  typeName(instanceVariable(in.a).type)));
+            }
+            return {};
         case Opcode::Call:
         case Opcode::CallNative:
         case Opcode::Spawn:
@@ -914,7 +1035,7 @@ Result<Module> readBytecode(std::span<const std::byte> data)
     {   // Behaviours
         ByteReader r = reader(format::SectionId::Behaviours);
         std::uint32_t count = 0;
-        if (!r.u32(count) || !plausibleCount(r, count, 13)) return truncated(r, "behaviour table");
+        if (!r.u32(count) || !plausibleCount(r, count, 17)) return truncated(r, "behaviour table");
         module.behaviours.resize(count);
         for (BehaviourEntry& behaviour : module.behaviours) {
             std::uint8_t kind = 0;
@@ -928,6 +1049,13 @@ Result<Module> readBytecode(std::span<const std::byte> data)
             behaviour.handlers.resize(handlers);
             for (HandlerEntry& handler : behaviour.handlers) {
                 if (!r.u32(handler.nameIndex) || !r.u32(handler.function)) return truncated(r, "handler");
+            }
+            std::uint32_t variables = 0;
+            if (!r.u32(variables) || !plausibleCount(r, variables, 5)) return truncated(r, "instance variables");
+            behaviour.variables.resize(variables);
+            for (VariableEntry& variable : behaviour.variables) {
+                std::string problem;
+                if (!readVariable(r, variable, problem)) return invalid(problem);
             }
         }
         if (auto s = checkEnd(r, "behaviour"); !s) return std::unexpected(s.error());
@@ -944,6 +1072,17 @@ Result<Module> readBytecode(std::span<const std::byte> data)
             source.role = static_cast<ScriptRole>(role);
         }
         if (auto s = checkEnd(r, "source"); !s) return std::unexpected(s.error());
+    }
+    {   // Globals
+        ByteReader r = reader(format::SectionId::Globals);
+        std::uint32_t count = 0;
+        if (!r.u32(count) || !plausibleCount(r, count, 5)) return truncated(r, "global table");
+        module.globals.resize(count);
+        for (VariableEntry& variable : module.globals) {
+            std::string problem;
+            if (!readVariable(r, variable, problem)) return invalid(problem);
+        }
+        if (auto s = checkEnd(r, "global"); !s) return std::unexpected(s.error());
     }
     {   // Enums
         ByteReader r = reader(format::SectionId::Enums);

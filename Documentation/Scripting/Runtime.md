@@ -27,6 +27,36 @@ A `Program` holds the module, its constants as runtime values and the resolved n
 immutable and shared (`std::shared_ptr<const Program>`) by every coroutine running it, so the
 bytecode lives exactly as long as it is needed.
 
+## Script state: global and instance variables
+
+A `Program` is immutable; the variables its code writes live outside it, in two objects
+(`Runtime/ScriptState.h`):
+
+* `GlobalState::create(program)`: the global variables of one **game session**, at their
+  initial values. Every coroutine of the session reads and writes the same ones.
+* `BehaviourInstance::create(globals, behaviour, self)`: the instance variables of one entity's
+  behaviour (an object of a room instance), at their initial values, and its `self`. The engine
+  creates one per entity and dispatches its events through it, so the variables persist between
+  events and two entities never share them. `expire()` marks an instance whose entity is gone:
+  dispatching to it fails with `InvalidState`.
+
+A coroutine holds its session's `GlobalState` and, when it runs a handler, the
+`BehaviourInstance` (shared ownership): `LoadGlobal`/`StoreGlobal` and
+`LoadInstance`/`StoreInstance` reach them by index, without names, and the storage can never be
+freed while a frame uses it. This keeps *script storage* alive, never the engine's entity. The
+state is set when a coroutine is created:
+
+| Created by | Globals | Instance |
+|---|---|---|
+| `start(globals, function)` | the session's | none |
+| `start(program, function)` | a fresh `GlobalState` (a run of its own, e.g. `schuimm-run`) | none |
+| `dispatch(instance, event)` | the instance's session | the instance |
+| `dispatch(program, object, event, self)` | fresh ones for this call | a fresh one |
+| `Spawn` | the spawner's | the spawner's, for a function of the same behaviour |
+
+An ended coroutine releases both with its frames. Reading a variable without the matching state
+(only possible with hand-made coroutines) is an `InvalidBytecode` runtime error.
+
 ## Values and strings
 
 `Value` is a 24-byte tagged union:
@@ -282,6 +312,11 @@ cannot reach it through the old handle: its next native call with the old handle
 runtime error naming the handler and line. Equality of handles is equality of ids, which under
 this contract is exactly object identity. Bytecode has no `object` constants, so scripts can only
 hold handles the engine issued.
+
+With variables in scripts, a game dispatches through a `BehaviourInstance` per object
+(`ScriptHost::dispatch(instance, event, arguments, owner)`), so the object's instance
+variables persist between its events. The by-name `dispatch(program, object, ...)` gives each
+call fresh state and suits scripts without variables and tools.
 
 Room resources and room instances, which own the objects and allocate their handles as this
 contract requires, are described in [Rooms.md](../Architecture/Rooms.md): `RoomInstance::dispatch`

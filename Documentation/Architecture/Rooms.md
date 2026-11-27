@@ -290,12 +290,19 @@ This is exactly the contract of `ObjectRef` (`Script/Runtime/Value.h`, [Runtime.
 
 Two instances of the same room have different handles for "the same" object, and the handles belong to the instance that created them.
 
+**Script state.** `RoomInstance::create(room, host, globals)` takes the `GlobalState` whose
+global variables the room's script uses (a game session's); without one the instance creates its
+own, which then lives as long as the instance. Every object with a declaration in the script gets
+its own `BehaviourInstance` (`objectScript(id)`), created with the instance, so its instance
+variables start afresh in every instance of the room and are expired when the instance is
+destroyed ([Runtime.md](../Scripting/Runtime.md#script-state-global-and-instance-variables)).
+
 **Dispatch.** `dispatch(objectId, event, arguments)` is the integration point for the future interaction system:
-- it looks up the object, then calls `ScriptHost::dispatch` with the room's program, the object id, the event name and the object's handle as `self`;
+- it looks up the object, then calls `ScriptHost::dispatch` with the object's behaviour instance (its `self` is the object's handle) and the event name;
 - an unknown object id returns `NotFound`;
 - a room without a script, or a script without that handler, returns `{handled = false}`, which is not an error.
 
-`start(function, arguments)` runs a room-level function such as `enter`. Nothing is started automatically: when `enter` runs is up to the future room-transition code. Event names are never fixed anywhere.
+`start(function, arguments)` runs a global function such as `enter` with the room's global state. Nothing is started automatically: when `enter` runs is up to the future room-transition code. Event names are never fixed anywhere.
 
 ## Operation events
 

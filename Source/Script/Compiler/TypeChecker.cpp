@@ -1,6 +1,7 @@
 #include "Script/Compiler/TypeChecker.h"
 
 #include "Core/Common/StringBuilder.h"
+#include "Script/Bytecode/Semantics.h"
 
 #include <algorithm>
 #include <optional>
@@ -90,6 +91,7 @@ public:
         declareInterfaces();
         for (std::uint32_t u = 0; u < units_.size(); ++u) declareEnums(u);
         for (std::uint32_t u = 0; u < units_.size(); ++u) declareFunctions(u);
+        for (std::uint32_t u = 0; u < units_.size(); ++u) declareGlobals(u);
         for (std::uint32_t u = 0; u < units_.size(); ++u) declareBehaviours(u);
         for (std::size_t i = 0; i < model_.functions_.size(); ++i) {
             checkFunction(*model_.functions_[i].declaration, i);
@@ -101,6 +103,10 @@ private:
     void error(const SourceRange& range, std::string message, std::vector<std::string> notes = {})
     {
         diagnostics_.error(DiagnosticPhase::Semantic, range, std::move(message), std::move(notes));
+    }
+    void warning(const SourceRange& range, std::string message, std::vector<std::string> notes = {})
+    {
+        diagnostics_.report(Severity::Warning, DiagnosticPhase::Semantic, range, std::move(message), std::move(notes));
     }
 
     [[nodiscard]] bool isReservedName(const std::string& name) const
@@ -350,6 +356,178 @@ private:
         }
     }
 
+    // --- Persistent variables ------------------------------------------------------------------
+    // A constant expression, syntactically: a literal, a negated number, Enum.MEMBER or
+    // vec2(number, number). Only these may initialise global and instance variables.
+    [[nodiscard]] bool isConstantSyntax(const Expr& e) const
+    {
+        const auto number = [](const Expr& n) {
+            const Expr* x = &n;
+            if (x->kind == ExprKind::Unary && x->unaryOp == UnaryOp::Negate) x = x->left.get();
+            return x->kind == ExprKind::IntLiteral || x->kind == ExprKind::FloatLiteral;
+        };
+        switch (e.kind) {
+        case ExprKind::IntLiteral:
+        case ExprKind::FloatLiteral:
+        case ExprKind::StringLiteral:
+        case ExprKind::BoolLiteral:
+        case ExprKind::NoneLiteral: return true;
+        case ExprKind::Unary: return number(e);
+        case ExprKind::Member: return e.left->kind == ExprKind::Name && enumNames_.count(e.left->text) != 0;
+        case ExprKind::Call:
+            return e.text == "vec2" && e.arguments.size() == 2 && number(*e.arguments[0]) && number(*e.arguments[1]);
+        default: return false;
+        }
+    }
+
+    // The value of a type-checked constant expression, converted to `type`.
+    [[nodiscard]] ConstantValue evaluateConstant(const Expr& e, Type type) const
+    {
+        const auto numberOf = [](const Expr& n) {
+            const bool negate = n.kind == ExprKind::Unary;
+            const Expr& literal = negate ? *n.left : n;
+            const double value =
+                literal.kind == ExprKind::FloatLiteral ? literal.floatValue : static_cast<double>(literal.intValue);
+            return negate ? -value : value;
+        };
+        ConstantValue value = defaultValue(type);
+        switch (e.kind) {
+        case ExprKind::IntLiteral:
+            value.intValue = e.intValue;
+            value.floatValue = static_cast<double>(e.intValue);
+            break;
+        case ExprKind::FloatLiteral: value.floatValue = e.floatValue; break;
+        case ExprKind::StringLiteral: value.text = e.text; break;
+        case ExprKind::BoolLiteral: value.boolValue = e.boolValue; break;
+        case ExprKind::Unary:
+            if (e.left->kind == ExprKind::IntLiteral) {
+                value.intValue = negInt(e.left->intValue).value;
+                value.floatValue = -static_cast<double>(e.left->intValue);
+            } else {
+                value.floatValue = -e.left->floatValue;
+            }
+            break;
+        case ExprKind::Member: value.ordinal = model_.expression(e).enumMember; break;
+        case ExprKind::Call:
+            value.floatValue = numberOf(*e.arguments[0]);
+            value.y = numberOf(*e.arguments[1]);
+            break;
+        default: break; // None: the null value.
+        }
+        return value;
+    }
+
+    // "var name[: type] [= constant]" at the top level or in a behaviour: its type and initial
+    // value (type Error after an error).
+    PersistentVariable persistent(const Stmt& statement, std::uint32_t source, const char* what)
+    {
+        PersistentVariable variable;
+        variable.name = statement.name;
+        variable.declaration = statement.nameRange;
+        variable.source = source;
+        Type declared = statement.annotation ? resolve(*statement.annotation) : Type::Error;
+        if (!statement.value) {
+            variable.type = declared;
+            variable.initial = defaultValue(declared);
+            return variable;
+        }
+        const Expr& value = *statement.value;
+        if (!isConstantSyntax(value)) {
+            error(value.range, concat("The initial value of ", what, " '", statement.name, "' must be a constant."),
+                  {"Use a literal, a negative number, an enum member, vec2(x, y) with numbers or None. Compute other "
+                   "values in a handler, e.g. the room's init()."});
+            variable.type = declared;
+            variable.initial = defaultValue(declared);
+            return variable;
+        }
+        const Type type = checkExpression(value);
+        if (!statement.annotation) {
+            declared = type;
+            if (type == Type::Null) {
+                error(value.range, concat("The type of ", what, " '", statement.name, "' cannot be inferred from None."),
+                      {concat("Write the type: 'var ", statement.name, ": actor = None'.")});
+                declared = Type::Error;
+            }
+        } else if (type == Type::Error) {
+            declared = Type::Error;
+        } else if (!convertTo(value, type, declared)) {
+            error(value.range, concat("Cannot assign a value of type ", quoted(type), " to ", what, " '", statement.name,
+                                      "' of type ", quoted(declared), "."));
+            declared = Type::Error;
+        }
+        variable.type = declared;
+        variable.initial = declared == Type::Error ? defaultValue(declared) : evaluateConstant(value, declared);
+        return variable;
+    }
+
+    void declareGlobals(std::uint32_t u)
+    {
+        for (const auto& statement : units_[u].unit->variables) {
+            const std::string& name = statement->name;
+            const SourceRange& at = statement->nameRange;
+            bool valid = true;
+            if (isReservedName(name) || name == "self") {
+                error(at, concat("'", name, "' is a built-in name and cannot be used as a variable name."));
+                valid = false;
+            } else if (const auto existing = globalNames_.find(name); existing != globalNames_.end()) {
+                error(at, concat("Duplicate declaration of global variable '", name, "'."),
+                      {concat("'", name, "' was first declared ", where(model_.globals_[existing->second].declaration, at),
+                              "; a global variable exists once in the whole game.")});
+                valid = false;
+            } else if (const std::string other = describeExisting(name, at); !other.empty()) {
+                error(at, concat("Global variable '", name, "' has the same name as ",
+                                 symbols_.count(name) != 0 ? "a function." : "an enum."),
+                      {other});
+                valid = false;
+            }
+            PersistentVariable variable = persistent(*statement, u, "global variable");
+            if (valid) {
+                globalNames_.emplace(name, static_cast<std::uint32_t>(model_.globals_.size()));
+                model_.globals_.push_back(std::move(variable));
+            }
+        }
+    }
+
+    // The instance variables of a behaviour.
+    void declareInstanceVariables(const std::vector<std::unique_ptr<Stmt>>& statements, std::uint32_t source,
+                                  BehaviourSemantics& behaviour)
+    {
+        for (const auto& statement : statements) {
+            const std::string& name = statement->name;
+            const SourceRange& at = statement->nameRange;
+            bool valid = true;
+            if (isReservedName(name) || name == "self") {
+                error(at, concat("'", name, "' is a built-in name and cannot be used as a variable name."));
+                valid = false;
+            } else if (symbols_.count(name) != 0) {
+                error(at, concat("'", name, "' is the name of a function and cannot be used as a variable name."));
+                valid = false;
+            } else if (enumNames_.count(name) != 0) {
+                error(at, concat("'", name, "' is the name of an enum and cannot be used as a variable name."));
+                valid = false;
+            } else {
+                for (const PersistentVariable& other : behaviour.variables) {
+                    if (other.name == name) {
+                        error(at, concat("Duplicate declaration of variable '", name, "'."),
+                              {concat("'", name, "' was first declared on line ", other.declaration.begin.line, ".")});
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+            if (valid) {
+                if (const auto global = globalNames_.find(name); global != globalNames_.end()) {
+                    warning(at, concat("Instance variable '", name, "' shadows the global variable '", name, "'."),
+                            {concat("The global variable is declared ",
+                                    where(model_.globals_[global->second].declaration, at), ". Here '", name,
+                                    "' means the instance variable; rename one of them to use both.")});
+                }
+            }
+            PersistentVariable variable = persistent(*statement, source, "instance variable");
+            if (valid) behaviour.variables.push_back(std::move(variable));
+        }
+    }
+
     // Behaviour declarations and their handlers. Object names are unique per room script and do
     // not enter the game-wide namespace (two rooms may each have a "door"); handler names are
     // scoped to their behaviour.
@@ -379,6 +557,7 @@ private:
             semantics.source = u;
             semantics.declaration = &object;
             semantics.name = object.name;
+            declareInstanceVariables(object.variables, u, semantics);
             std::unordered_map<std::string, SourceRange> handlerNames;
             for (const auto& handler : object.handlers) {
                 checkParameterNames(*handler);
@@ -453,10 +632,63 @@ private:
         } else if (enumNames_.count(name) != 0) {
             error(range, concat("'", name, "' is the name of an enum and cannot be used as a variable name."));
         }
+        if (name != "self") {
+            const char* kind = isParameter ? "Parameter '" : "Variable '";
+            if (const auto instance = findInstanceVariable(name)) {
+                const PersistentVariable& shadowed = model_.behaviours_[current_->behaviour].variables[*instance];
+                warning(range, concat(kind, name, "' shadows the instance variable '", name, "'."),
+                        {concat("The instance variable is declared on line ", shadowed.declaration.begin.line,
+                                ". Here '", name, "' means the new variable; rename it to use both.")});
+            } else if (const auto global = globalNames_.find(name); global != globalNames_.end()) {
+                warning(range, concat(kind, name, "' shadows the global variable '", name, "'."),
+                        {concat("The global variable is declared ", where(model_.globals_[global->second].declaration, range),
+                                ". Here '", name, "' means the new variable; assign the global one without 'var', or "
+                                "rename this one to use both.")});
+            }
+        }
         const auto index = static_cast<std::uint32_t>(current_->variables.size());
         current_->variables.push_back({name, type, range, isParameter});
         scopes_.back()[name] = index;
         return index;
+    }
+
+    // An instance variable of the behaviour the current function belongs to.
+    [[nodiscard]] std::optional<std::uint32_t> findInstanceVariable(const std::string& name) const
+    {
+        if (current_ == nullptr || !current_->isHandler()) return std::nullopt;
+        const std::vector<PersistentVariable>& variables = model_.behaviours_[current_->behaviour].variables;
+        for (std::size_t i = 0; i < variables.size(); ++i) {
+            if (variables[i].name == name) return static_cast<std::uint32_t>(i);
+        }
+        return std::nullopt;
+    }
+
+    struct VariableRef {
+        VariableStorage storage = VariableStorage::Local;
+        std::uint32_t index = 0;
+        Type type = Type::Error;
+        SourceRange declaration;
+    };
+
+    // Name resolution of variables (Language.md §7): the function's own variables and
+    // parameters, then the instance variables of its behaviour, then the global variables.
+    [[nodiscard]] std::optional<VariableRef> lookupAny(const std::string& name) const
+    {
+        if (current_ != nullptr) {
+            if (const auto local = lookupVariable(name)) {
+                const VariableInfo& info = current_->variables[*local];
+                return VariableRef{VariableStorage::Local, *local, info.type, info.declaration};
+            }
+            if (const auto instance = findInstanceVariable(name)) {
+                const PersistentVariable& info = model_.behaviours_[current_->behaviour].variables[*instance];
+                return VariableRef{VariableStorage::Instance, *instance, info.type, info.declaration};
+            }
+        }
+        if (const auto global = globalNames_.find(name); global != globalNames_.end()) {
+            const PersistentVariable& info = model_.globals_[global->second];
+            return VariableRef{VariableStorage::Global, global->second, info.type, info.declaration};
+        }
+        return std::nullopt;
     }
 
     [[nodiscard]] std::optional<std::uint32_t> lookupVariable(const std::string& name) const
@@ -495,6 +727,9 @@ private:
         }
         if (from == Type::Int && to == Type::Float) {
             model_.expressions_[&value].widenToFloat = true;
+        }
+        if (from == Type::Null && to != Type::Error) {
+            model_.expressions_[&value].type = to; // None becomes the null value of the target type.
         }
         return true;
     }
@@ -562,7 +797,7 @@ private:
             }
             const Type type = checkExpression(*statement.value);
             if (returnType == Type::None) {
-                if (type != Type::None && type != Type::Error) {
+                if (type != Type::None && type != Type::Null && type != Type::Error) {
                     error(statement.value->range, concat("Function '", function.name, "' has no return type and cannot return a value."),
                           {concat("Declare the return type: 'func ", function.name, "(...) -> ", model_.typeName(type), ":'.")});
                 }
@@ -579,14 +814,13 @@ private:
 
     void checkAssignment(const Stmt& statement)
     {
-        const Type type = checkExpression(*statement.value);
+        const Type type = statement.value ? checkExpression(*statement.value) : Type::Error;
         StatementInfo info;
-        const auto existing = lookupVariable(statement.name);
         const auto noValue = [&]() {
             error(statement.value->range, "Cannot assign a value of type 'None': the expression has no value.");
         };
         if (statement.declaration) {
-            if (existing) {
+            if (const auto existing = lookupVariable(statement.name)) {
                 const VariableInfo& previous = current_->variables[*existing];
                 error(statement.nameRange,
                       concat(previous.isParameter ? "Parameter '" : "Variable '", statement.name, "' is already declared."),
@@ -595,9 +829,15 @@ private:
                 return;
             }
             Type declared = statement.annotation ? resolve(*statement.annotation) : type;
-            if (type == Type::None) {
+            if (!statement.value) {
+                // "var name: type": the type's default value.
+            } else if (type == Type::None) {
                 noValue();
                 if (!statement.annotation) declared = Type::Error;
+            } else if (!statement.annotation && type == Type::Null) {
+                error(statement.value->range, concat("The type of variable '", statement.name, "' cannot be inferred from None."),
+                      {concat("Write the type: 'var ", statement.name, ": actor = None'.")});
+                declared = Type::Error;
             } else if (!convertTo(*statement.value, type, declared)) {
                 error(statement.value->range, concat("Cannot assign a value of type ", quoted(type), " to variable '",
                                                      statement.name, "' of type ", quoted(declared), "."));
@@ -607,6 +847,7 @@ private:
             model_.statements_[&statement] = info;
             return;
         }
+        const auto existing = lookupAny(statement.name);
         if (!existing) {
             std::vector<std::string> notes;
             if (statement.member.empty()) {
@@ -614,16 +855,18 @@ private:
             }
             error(statement.nameRange, concat("Undefined variable '", statement.name, "'."), std::move(notes));
             // Declared anyway (as the value's type), so later uses do not report it again.
-            info.variable = declareVariable(statement.name, type == Type::None ? Type::Error : type, statement.nameRange, false);
+            const Type guess = type == Type::None || type == Type::Null ? Type::Error : type;
+            info.variable = declareVariable(statement.name, guess, statement.nameRange, false);
             info.declares = true;
             model_.statements_[&statement] = info;
             return;
         }
-        const VariableInfo& variable = current_->variables[*existing];
-        info.variable = *existing;
+        info.variable = existing->index;
+        info.storage = existing->storage;
+        const Type variableType = existing->type;
         if (!statement.member.empty()) {
-            if (variable.type != Type::Vec2 && variable.type != Type::Error) {
-                error(statement.memberRange, concat("Variable '", statement.name, "' of type ", quoted(variable.type),
+            if (variableType != Type::Vec2 && variableType != Type::Error) {
+                error(statement.memberRange, concat("Variable '", statement.name, "' of type ", quoted(variableType),
                                                     " has no component '", statement.member, "'."));
             } else if (statement.member != "x" && statement.member != "y") {
                 error(statement.memberRange, concat("A vec2 has components 'x' and 'y', not '", statement.member, "'."));
@@ -640,11 +883,11 @@ private:
         }
         if (type == Type::None) {
             noValue();
-        } else if (!convertTo(*statement.value, type, variable.type)) {
+        } else if (!convertTo(*statement.value, type, variableType)) {
             error(statement.value->range, concat("Cannot assign a value of type ", quoted(type), " to variable '",
-                                                 statement.name, "' of type ", quoted(variable.type), "."),
-                  {concat("'", statement.name, "' was declared as ", quoted(variable.type), " on line ",
-                          variable.declaration.begin.line, ".")});
+                                                 statement.name, "' of type ", quoted(variableType), "."),
+                  {concat("'", statement.name, "' was declared as ", quoted(variableType), " ",
+                          where(existing->declaration, statement.nameRange), ".")});
         }
         model_.statements_[&statement] = info;
     }
@@ -669,7 +912,7 @@ private:
         case ExprKind::FloatLiteral: info.type = Type::Float; break;
         case ExprKind::StringLiteral: info.type = Type::String; break;
         case ExprKind::BoolLiteral: info.type = Type::Bool; break;
-        case ExprKind::NoneLiteral: info.type = Type::None; break;
+        case ExprKind::NoneLiteral: info.type = Type::Null; break;
         case ExprKind::Name: return checkName(expression);
         case ExprKind::Self:
             if (current_ == nullptr || !current_->isHandler()) {
@@ -693,9 +936,10 @@ private:
     Type checkName(const Expr& expression)
     {
         ExprInfo info;
-        if (const auto variable = lookupVariable(expression.text)) {
-            info.variable = *variable;
-            info.type = current_->variables[*variable].type;
+        if (const auto variable = lookupAny(expression.text)) {
+            info.variable = variable->index;
+            info.storage = variable->storage;
+            info.type = variable->type;
             return record(expression, info);
         }
         std::vector<std::string> notes;
@@ -723,7 +967,7 @@ private:
     {
         ExprInfo info;
         const Expr& object = *expression.left;
-        if (object.kind == ExprKind::Name && !lookupVariable(object.text)) {
+        if (object.kind == ExprKind::Name && !lookupAny(object.text)) {
             if (const auto found = enumNames_.find(object.text); found != enumNames_.end()) {
                 const EnumInfo& declaration = model_.enums_[found->second];
                 info.type = enumType(found->second);
@@ -880,6 +1124,10 @@ private:
             info.type = Type::Bool;
             if (isNumeric(left) && isNumeric(right)) {
                 unifyNumeric(expression, left, right);
+            } else if ((left == Type::Null && isReference(right)) || (isReference(left) && right == Type::Null)) {
+                // "target == None": None becomes the null reference of the other operand's type.
+                const Expr& none = left == Type::Null ? *expression.left : *expression.right;
+                model_.expressions_[&none].type = left == Type::Null ? right : left;
             } else if (isReference(left) && isReference(right)) {
                 if ((left == Type::Actor && right == Type::Object) || (left == Type::Object && right == Type::Actor)) {
                     incompatible({"An actor is never the same entity as a room object."});
@@ -928,7 +1176,7 @@ private:
             symbol = symbols_.end();
         }
         if (symbol == symbols_.end()) {
-            if (lookupVariable(name)) {
+            if (lookupAny(name)) {
                 error(call.nameRange, concat("'", name, "' is a variable, not a function."));
             } else if (isSiblingHandler(name)) {
                 error(call.nameRange, concat("Undefined function '", name, "'."),
@@ -1098,6 +1346,7 @@ private:
     std::vector<const NativeInterface*> interfaces_;
     std::unordered_map<std::string, FunctionSymbol> symbols_;
     std::unordered_map<std::string, std::uint32_t> enumNames_;
+    std::unordered_map<std::string, std::uint32_t> globalNames_; // Index into model_.globals_.
     std::vector<std::unordered_map<std::string, std::uint32_t>> scopes_;
     FunctionSemantics* current_ = nullptr;
 };

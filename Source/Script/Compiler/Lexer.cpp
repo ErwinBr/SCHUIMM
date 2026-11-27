@@ -280,10 +280,24 @@ private:
         case ',': emit(TokenKind::Comma, start, position_); return;
         case '.': emit(TokenKind::Dot, start, position_); return;
         case ':': emit(TokenKind::Colon, start, position_); return;
-        case '+': emit(TokenKind::Plus, start, position_); return;
-        case '-': two('>', TokenKind::Arrow, TokenKind::Minus); return;
-        case '*': emit(TokenKind::Star, start, position_); return;
-        case '/': two('/', TokenKind::SlashSlash, TokenKind::Slash); return;
+        case '+': two('=', TokenKind::PlusAssign, TokenKind::Plus); return;
+        case '-':
+            if (peek() == '=') {
+                advance();
+                emit(TokenKind::MinusAssign, start, position_);
+                return;
+            }
+            two('>', TokenKind::Arrow, TokenKind::Minus);
+            return;
+        case '*': two('=', TokenKind::StarAssign, TokenKind::Star); return;
+        case '/':
+            if (peek() == '=') {
+                advance();
+                emit(TokenKind::SlashAssign, start, position_);
+                return;
+            }
+            two('/', TokenKind::SlashSlash, TokenKind::Slash);
+            return;
         case '%': emit(TokenKind::Percent, start, position_); return;
         case '=': two('=', TokenKind::EqualEqual, TokenKind::Assign); return;
         case '<': two('=', TokenKind::LessEqual, TokenKind::Less); return;

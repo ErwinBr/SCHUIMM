@@ -66,7 +66,8 @@ SCHUIMM_TEST(TypeChecker_InvalidAssignments)
     const Compiled none = check("\tvar x = print(1)\n");
     CHECK(none.has("has no value"));
     const Compiled noneLiteral = check("\tvar x = None\n");
-    CHECK(noneLiteral.has("Cannot assign a value of type 'None'"));
+    CHECK(noneLiteral.has("cannot be inferred from None"));
+    CHECK(check("\tvar x: int = None\n").has("Cannot assign a value of type 'None' to variable 'x' of type 'int'"));
 }
 
 SCHUIMM_TEST(TypeChecker_UndefinedVariablesAndHints)

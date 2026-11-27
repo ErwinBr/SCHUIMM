@@ -15,6 +15,8 @@ namespace schuimm::script {
 
 // A constant as it appears in listings: 30, 1.5, "text" (escaped).
 [[nodiscard]] std::string formatConstant(const Module& module, const Constant& constant);
+// The initial value of a variable entry, as source text ("0", "vec2(1.0, 2.0)", "Verb.LOOK", "None").
+[[nodiscard]] std::string formatInitialValue(const Module& module, const VariableEntry& variable);
 
 // Quotes and escapes text for listings and dumps.
 [[nodiscard]] std::string quoteString(const std::string& text);

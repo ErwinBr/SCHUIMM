@@ -166,7 +166,8 @@ SCHUIMM_TEST(Parser_MoreSyntaxErrors)
     CHECK(parseSource("func f():\n\telse:\n\t\tpass\n").hasError("without a matching 'if'"));
     CHECK(parseSource("func f():\n\tfor i in items:\n\t\tpass\n").hasError("iterates over range"));
     CHECK(parseSource("func f():\n\tfor i in range():\n\t\tpass\n").hasError("1 to 3 arguments"));
-    CHECK(parseSource("func f():\n\tvar x: int\n").hasError("must be initialised"));
+    CHECK(parseSource("func f():\n\tvar x\n").hasError("needs a type or a value"));
+    CHECK(parseSource("func f():\n\tvar x: int 5\n").hasError("Expected '=' or the end of the line"));
     CHECK(parseSource("func f():\n\tx: int = 1\n").hasError("Variables are declared with 'var'"));
     CHECK(compileSource("func f():\n\tvar x: vector = 1\n").has("Unknown type 'vector'"));
     CHECK(parseSource("func f(a: None):\n\tpass\n").hasError("cannot have type None"));

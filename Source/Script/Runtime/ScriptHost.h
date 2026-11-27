@@ -50,6 +50,15 @@ public:
     [[nodiscard]] Result<CoroutineHandle> start(std::shared_ptr<const Program> program, std::string_view function = "main",
                                                 std::vector<Value> arguments = {},
                                                 ExecutionOwner owner = noExecutionOwner);
+    // Starts a global function of a game session's program with its global state.
+    [[nodiscard]] Result<CoroutineHandle> start(std::shared_ptr<GlobalState> globals, std::string_view function,
+                                                std::vector<Value> arguments = {},
+                                                ExecutionOwner owner = noExecutionOwner);
+    // Invokes a handler of a behaviour instance (ScriptScheduler::dispatch): the way a game
+    // dispatches, with variables that persist between events.
+    [[nodiscard]] Result<DispatchResult> dispatch(std::shared_ptr<BehaviourInstance> instance, std::string_view event,
+                                                  std::vector<Value> arguments = {},
+                                                  ExecutionOwner owner = noExecutionOwner);
     // Invokes an object handler (see ScriptScheduler::dispatch). This is the integration point
     // for the adventure runtime: `object` is the object's identifier in the room resource,
     // `event` an arbitrary event name, `self` the engine's handle of that object. A missing

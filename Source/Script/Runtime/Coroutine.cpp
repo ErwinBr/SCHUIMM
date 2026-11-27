@@ -35,6 +35,20 @@ Result<std::unique_ptr<Coroutine>> Coroutine::createHandler(std::shared_ptr<cons
     return createAt(std::move(program), *index, std::move(arguments), 1, limits);
 }
 
+Result<std::unique_ptr<Coroutine>> Coroutine::createHandler(std::shared_ptr<const Program> program, std::uint32_t function,
+                                                            Value self, std::vector<Value> arguments, CoroutineLimits limits)
+{
+    if (!program || function >= program->module().functions.size() || !program->isHandler(function)) {
+        return ::schuimm::makeError(ErrorCode::InvalidArgument, "No such handler");
+    }
+    std::size_t hidden = 0;
+    if (!self.is(ScriptType::None)) {
+        arguments.insert(arguments.begin(), std::move(self));
+        hidden = 1;
+    }
+    return createAt(std::move(program), function, std::move(arguments), hidden, limits);
+}
+
 Result<std::unique_ptr<Coroutine>> Coroutine::createCall(std::shared_ptr<const Program> program, std::uint32_t index,
                                                          std::vector<Value> arguments, CoroutineLimits limits)
 {
@@ -66,6 +80,7 @@ Result<std::unique_ptr<Coroutine>> Coroutine::createAt(std::shared_ptr<const Pro
         return ::schuimm::makeError(ErrorCode::InvalidArgument, concat("Function '", name, "' needs more registers than allowed"));
     }
     std::unique_ptr<Coroutine> coroutine(new Coroutine());
+    coroutine->globals_ = GlobalState::create(program);
     coroutine->program_ = std::move(program);
     coroutine->entry_ = name;
     coroutine->limits_ = limits;
@@ -77,11 +92,20 @@ Result<std::unique_ptr<Coroutine>> Coroutine::createAt(std::shared_ptr<const Pro
     return coroutine;
 }
 
+void Coroutine::bindState(std::shared_ptr<GlobalState> globals, std::shared_ptr<BehaviourInstance> instance)
+{
+    globals_ = std::move(globals);
+    instance_ = std::move(instance);
+}
+
 void Coroutine::releaseFrames() noexcept
 {
     frames_.clear();
     registers_.clear();
     registers_.shrink_to_fit();
+    // An ended coroutine no longer needs the state its code used.
+    instance_.reset();
+    globals_.reset();
 }
 
 ScriptError Coroutine::makeError(ScriptErrorKind kind, std::string message, std::uint32_t innermostIp) const

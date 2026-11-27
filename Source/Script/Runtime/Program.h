@@ -59,6 +59,22 @@ public:
     [[nodiscard]] bool hasObject(std::string_view object) const;
     // Whether function `index` is a handler (its parameter 0 is the hidden "self").
     [[nodiscard]] bool isHandler(std::size_t index) const noexcept { return owner_[index] != noOwner; }
+    // The behaviour function `index` belongs to; nullopt for global functions.
+    [[nodiscard]] std::optional<std::uint32_t> behaviourOf(std::size_t index) const noexcept
+    {
+        return owner_[index] != noOwner ? std::optional<std::uint32_t>(owner_[index]) : std::nullopt;
+    }
+    // The initial values of the global variables, and of the instance variables of behaviour
+    // `behaviour` (GlobalState, BehaviourInstance).
+    [[nodiscard]] const std::vector<Value>& globalInitialValues() const noexcept { return globalInitial_; }
+    [[nodiscard]] const std::vector<Value>& instanceInitialValues(std::size_t behaviour) const noexcept
+    {
+        return instanceInitial_[behaviour];
+    }
+    // The null value of a nullable type (LoadNull): an actor or object reference with id 0 (an
+    // entity's null is the null actor reference), the invalid coroutine, the null operation.
+    [[nodiscard]] static Value nullValue(TypeRef type) noexcept;
+
     // "blender.look_at" (or "room.ready", "actor.talk_to") for handlers, the plain name for
     // global functions (errors, logs).
     [[nodiscard]] std::string functionDisplayName(std::size_t index) const;
@@ -75,6 +91,8 @@ private:
     std::vector<std::uint32_t> owner_; // Per function: index into module_.behaviours, or noOwner.
     std::string name_;
     std::vector<Value> constants_;
+    std::vector<Value> globalInitial_;
+    std::vector<std::vector<Value>> instanceInitial_; // Per behaviour.
     std::vector<std::shared_ptr<const NativeFunction>> natives_;
 };
 
