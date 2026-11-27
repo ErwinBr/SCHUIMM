@@ -1,6 +1,9 @@
-# The walker's own script. Actor scripts are associated with actor resources but not executed
-# yet: event handlers for actors arrive with the adventure scripting milestone. This file is
-# compiled with the demo so the reference in walker.actor.json points at real bytecode.
+# The walker's actor script: the behaviour of every actor whose resource is walker.actor.json, in
+# every room. Each walker runs these handlers as itself (self) with its own variables.
 
-func look_at():
-	print("Looking good, as always.")
+actor:
+	var looks: int = 0
+
+	func look_at():
+		looks += 1
+		print("Looking good, as always. (" + str(looks) + ")")

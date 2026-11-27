@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "id": "actor_demo",
+  "program": "Scripts/ActorDemo.schb",
+  "rooms": [
+    "Rooms/Courtyard.room.json",
+    "Rooms/Hall.room.json",
+    "Rooms/Garden.room.json"
+  ]
+}

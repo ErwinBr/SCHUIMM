@@ -287,12 +287,25 @@ schuimmc [options] --global a.sch --room b.sch --actor c.sch ...
 All inputs are compiled into one program ([Project compilation](#project-compilation)). An
 input without a role option is a room script.
 
+```bash
+schuimmc --game ActorDemo.game.json --assets Applications/ActorDemo/Assets -o ActorDemo.schb
+```
+
+`--game` compiles a whole game: the game build (`Adventure/GameBuild.h`) reads the game
+resource below `--assets`, finds its global scripts, its rooms' scripts and their actors'
+scripts through the resources (each once, named by its asset path), and compiles them with the
+adventure interface. This is the entry point a future DevKit uses as a library
+(`adventure::compileGame(locator, game)`): it returns the program and the diagnostics, each with
+its file. The compiler library itself does not depend on resources; the game build is a separate
+library on top of it and the resource loaders.
+
 | Option | |
 |---|---|
 | `-o FILE` | write the bytecode (without `-o` the file is only checked) |
 | `-O0` / `-O1` | disable / enable (default) the optimizer |
 | `--global FILE`, `--room FILE`, `--actor FILE` | an input with that role (repeatable) |
 | `--source-root DIR` | name each input by its path relative to `DIR` (`Rooms/Kitchen.sch`), the name resources use |
+| `--game ASSET`, `--assets DIR` | compile the game of game resource `ASSET` (an asset path below `DIR`, default `.`) |
 | `--name NAME` | the source name of the only input, stored in diagnostics and debug information |
 | `--interface NAME` | let the script use the native interface `NAME` besides the core interface (repeatable) |
 | `--list-interfaces` | print the interfaces the compiler knows, with their enums and signatures |

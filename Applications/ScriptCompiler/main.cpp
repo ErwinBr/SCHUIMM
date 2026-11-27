@@ -2,11 +2,14 @@
 //
 //   schuimmc [options] <input.sch>                      one room script on its own
 //   schuimmc [options] --global a.sch --room b.sch ...  several scripts into one program
+//   schuimmc [options] --game G.game.json --assets DIR   a whole game, sources found through its
+//                                                       resources (the game build, GameBuild.h)
 //
 // Exit codes: 0 success, 1 compile errors or I/O failure, 2 invalid command line.
 
 #include "Core/Common/StringBuilder.h"
 #include "Adventure/AdventureInterface.h"
+#include "Adventure/GameBuild.h"
 #include "Platform/FileSystem/FileSystem.h"
 #include "Script/Bytecode/BytecodeReader.h"
 #include "Script/Bytecode/BytecodeWriter.h"
@@ -16,6 +19,7 @@
 #include "Script/Compiler/Ir.h"
 
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,6 +32,7 @@ namespace {
 constexpr const char* usage =
     "Usage: schuimmc [options] <input.sch>...\n"
     "       schuimmc [options] [--global FILE] [--room FILE] [--actor FILE] ...\n"
+    "       schuimmc [options] --game GAME.game.json [--assets DIR]\n"
     "\n"
     "Compiles SCHUIMM scripts into platform-independent bytecode. All inputs form one\n"
     "program: their global variables, functions and enums share one namespace.\n"
@@ -39,6 +44,10 @@ constexpr const char* usage =
     "  --global FILE  A global script: game-wide declarations only (repeatable)\n"
     "  --room FILE    A room script (repeatable; also: an input without option)\n"
     "  --actor FILE   An actor script (repeatable)\n"
+    "  --game ASSET   Compile a game: the global scripts of the game resource ASSET and\n"
+    "                 the scripts of its rooms and their actors, with the adventure\n"
+    "                 interface; ASSET is an asset path below --assets\n"
+    "  --assets DIR   The asset root of --game (default: the current directory)\n"
     "  --source-root DIR\n"
     "                 Name each source by its path relative to DIR, as resources refer\n"
     "                 to it (default: the path as given)\n"
@@ -101,6 +110,8 @@ struct Options {
     std::vector<const NativeInterface*> interfaces;
     std::vector<Input> inputs;
     std::string sourceRoot;
+    std::string game;
+    std::string assets = ".";
     std::string output;
     std::string name;
     bool optimize = true;
@@ -128,12 +139,18 @@ int main(int argc, char** argv)
         if (argument == "-h" || argument == "--help") {
             std::fputs(usage, stdout);
             return 0;
-        } else if (argument == "-o" || argument == "--name" || argument == "--source-root") {
+        } else if (argument == "-o" || argument == "--name" || argument == "--source-root" || argument == "--game" ||
+                   argument == "--assets") {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "%s requires a value\n\n%s", argv[i], usage);
                 return 2;
             }
-            (argument == "-o" ? options.output : argument == "--name" ? options.name : options.sourceRoot) = argv[++i];
+            std::string& value = argument == "-o"              ? options.output
+                                 : argument == "--name"        ? options.name
+                                 : argument == "--source-root" ? options.sourceRoot
+                                 : argument == "--game"        ? options.game
+                                                               : options.assets;
+            value = argv[++i];
         } else if (argument == "--global" || argument == "--room" || argument == "--actor") {
             if (i + 1 >= argc) {
                 std::fprintf(stderr, "%s requires a value\n\n%s", argv[i], usage);
@@ -193,7 +210,11 @@ int main(int argc, char** argv)
             options.inputs.push_back({std::string(argument), ScriptRole::Room});
         }
     }
-    if (options.inputs.empty()) {
+    if (!options.game.empty() && !options.inputs.empty()) {
+        std::fprintf(stderr, "--game takes no other inputs: the game resource lists them\n\n%s", usage);
+        return 2;
+    }
+    if (options.inputs.empty() && options.game.empty()) {
         std::fputs(usage, stderr);
         return 2;
     }
@@ -202,6 +223,21 @@ int main(int argc, char** argv)
         return 2;
     }
 
+    std::unique_ptr<adventure::GameBuild> gameBuild;
+    if (!options.game.empty()) {
+        auto locator = AssetLocator::create(options.assets);
+        auto game = AssetPath::parse(options.game);
+        if (!locator || !game) {
+            std::fprintf(stderr, "schuimmc: %s\n", describe(!locator ? locator.error() : game.error()).c_str());
+            return 1;
+        }
+        auto built = adventure::compileGame(*locator, *game, options.optimize);
+        if (!built) {
+            std::fprintf(stderr, "schuimmc: %s\n", describe(built.error()).c_str());
+            return 1;
+        }
+        gameBuild = std::move(*built);
+    }
     std::vector<SourceFile> sources;
     sources.reserve(options.inputs.size());
     for (std::size_t i = 0; i < options.inputs.size(); ++i) {
@@ -222,7 +258,12 @@ int main(int argc, char** argv)
     CompileOptions compileOptions;
     compileOptions.optimize = options.optimize;
     compileOptions.interfaces = options.interfaces;
-    const CompileResult result = compileProject(project, compileOptions);
+    const CompileResult localResult = gameBuild ? CompileResult{} : compileProject(project, compileOptions);
+    const CompileResult& result = gameBuild ? gameBuild->result : localResult;
+    if (gameBuild) {
+        options.inputs.clear();
+        for (const ProjectSource& source : gameBuild->sources.sources) options.inputs.push_back({source.file->name(), source.role});
+    }
 
     const auto unitTitle = [&](const char* title, const CompiledUnit& unit) {
         return result.units.size() == 1 ? std::string(title) : concat(title, ": ", unit.source->name());

@@ -134,12 +134,14 @@ Language scope (version 3.0, see [Language.md](../Scripting/Language.md#12-limit
   nothing dispatches player interactions to handlers yet (the interaction milestone);
 * ActorDemo's camera follows the hero every frame, so a script's `set_camera_position` there lasts
   only until the next frame (zoom is kept);
-* the adventure API acts on one active room; room transitions, global script modules and actor
-  scripts are Part II. The `AdventureContext` must outlive the coroutines that call its natives
-  (the ownership model is Part II);
-* one source file is one program; natives are linked by exact signature, and engine enums by
-  qualified name and members.
-* Format 2.0 does not read 1.x bytecode: scripts are recompiled from source.
+* the adventure API acts on one active room; the room lifecycle (`init`, `ready`, `exit`) is not
+  dispatched automatically and there are no room transitions yet: the game calls
+  `AdventureRuntime::enterRoom` and `dispatchRoom` itself;
+* a script cannot call another entity's handlers, and actors do not persist across rooms (their
+  instance variables reset with the room);
+* a game is compiled in one run (no incremental build cache); natives are linked by exact
+  signature, and engine enums by qualified name and members.
+* Format 3.0 does not read 1.x or 2.x bytecode: games are recompiled from source.
 
 Runtime:
 * Coroutine state cannot be saved or restored (no save games of running scripts yet).

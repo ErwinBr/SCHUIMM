@@ -109,14 +109,9 @@ const AnimationResolver fakeAnimations = [](const AssetPath& path) -> Result<std
     return makeError(ErrorCode::NotFound, concat("asset '", path.view(), "' does not exist"));
 };
 
-const AssetCheck fakeScripts = [](const AssetPath& path) -> Status {
-    if (path.view() == "Actors/Hero/hero.schb") return {};
-    return makeError(ErrorCode::NotFound, concat("asset '", path.view(), "' does not exist"));
-};
-
 Result<ActorResource> decodeActor(std::string_view text)
 {
-    return decodeActorResource(bytesOf(text), "hero.actor.json", fakeAnimations, fakeScripts);
+    return decodeActorResource(bytesOf(text), "hero.actor.json", fakeAnimations);
 }
 
 std::shared_ptr<const ActorResource> heroResource()
@@ -187,13 +182,14 @@ SCHUIMM_TEST(Actor_DecodesAResource)
 
 SCHUIMM_TEST(Actor_ScriptReferenceIsOptionalAndChecked)
 {
-    const auto withScript = decodeActor(actorWith(R"("script": "Actors/Hero/hero.schb")"));
+    // A script source: the identity of the actor's behaviour in the game program, not a file the
+    // runtime reads (so it is not checked to exist here).
+    const auto withScript = decodeActor(actorWith(R"("script": "Actors/Hero/hero.sch")"));
     REQUIRE(withScript.has_value());
-    CHECK(withScript->script == AssetPath::parse("Actors/Hero/hero.schb").value());
-    CHECK_ACTOR_ERROR(actorWith(R"("script": "Actors/Hero/missing.schb")"), ErrorCode::NotFound,
-                      "hero.actor.json: script: asset 'Actors/Hero/missing.schb' does not exist");
-    CHECK_ACTOR_ERROR(actorWith(R"("script": "Actors/Hero/hero.sch")"), ErrorCode::InvalidData,
-                      "script: must name a compiled script (.schb)");
+    CHECK(withScript->script == AssetPath::parse("Actors/Hero/hero.sch").value());
+    CHECK(decodeActor(actorWith(R"("script": "Actors/Hero/missing.sch")")).has_value());
+    CHECK_ACTOR_ERROR(actorWith(R"("script": "Actors/Hero/hero.schb")"), ErrorCode::InvalidData,
+                      "script: must name a script source (.sch)");
     // null is the same as omitted.
     CHECK(decodeActor(actorWith(R"("script": null)")).has_value());
 }
@@ -614,7 +610,7 @@ SCHUIMM_TEST(Actor_RenderingDoesNotAdvancePlayback)
 namespace {
 
 const char* const heroWithScript = R"({
-  "version": 1, "id": "hero", "script": "Actors/Hero/hero.schb",
+  "version": 1, "id": "hero", "script": "Actors/Hero/hero.sch",
   "animation_resources": { "main": "Actors/Hero/hero.anim.json" },
   "animations": {
     "idle": { "south": { "resource": "main", "clip": "idle_south" },
@@ -643,13 +639,15 @@ struct ActorRoomFixture {
     std::string root = test::makeScratchDirectory("actors");
     Logger logger{LogLevel::Error};
     script::ScriptHost host{logger};
+    // The game program with the hero's actor script (setProgram replaces it).
+    std::shared_ptr<const script::Program> program;
 
     ActorRoomFixture()
     {
+        setProgram({});
         writeBytes("Actors/Hero/hero.png", test::pngHeader(256, 128));
         writeBytes("Actors/Hero/glow.png", test::pngHeader(16, 16));
         writeText("Actors/Hero/hero.anim.json", heroAnimation);
-        writeText("Actors/Hero/hero.schb", "placeholder: actor scripts are referenced, not loaded");
         writeText("Actors/Hero/hero.actor.json", heroWithScript);
         writeText("Rooms/Hall.room.json", hallRoom);
         writeText("Rooms/Garden.room.json", gardenRoom);
@@ -665,6 +663,19 @@ struct ActorRoomFixture {
     }
 
     [[nodiscard]] AssetLocator locator() const { return AssetLocator::create(root).value(); }
+
+    // Compiles the hero's actor script and `more` into the game program, linked with the host.
+    void setProgram(std::vector<script::test::FileSpec> more)
+    {
+        more.push_back({"Actors/Hero/hero.sch", "actor:\n\tvar waves = 0\n\tfunc wave():\n\t\twaves += 1\n",
+                        script::ScriptRole::Actor});
+        const script::test::Project project = script::test::compileFiles(more);
+        if (!project.result.success) std::fprintf(stderr, "%s", project.diagnostics().c_str());
+        REQUIRE(project.result.success);
+        auto linked = script::Program::link(project.result.module, host.natives(), "game.schb");
+        REQUIRE(linked.has_value());
+        program = *linked;
+    }
 };
 
 AssetPath asset(std::string_view text)
@@ -690,16 +701,6 @@ Result<LoadedRoom> loadRoomText(ActorRoomFixture& fixture, RoomLibrary& library,
     return library.load(asset("Rooms/Test.room.json"));
 }
 
-std::vector<std::byte> compileRoomScript(const std::string& source)
-{
-    script::test::Compiled compiled = script::test::compileSource(source, true, "Hall.sch");
-    if (!compiled.result.success) std::fprintf(stderr, "%s", compiled.diagnostics().c_str());
-    REQUIRE(compiled.result.success);
-    auto bytes = script::writeBytecode(compiled.result.module);
-    REQUIRE(bytes.has_value());
-    return std::move(*bytes);
-}
-
 } // namespace
 
 SCHUIMM_TEST(RoomActors_RoomsWithoutActorsAreUnchanged)
@@ -716,7 +717,7 @@ SCHUIMM_TEST(RoomActors_RoomsWithoutActorsAreUnchanged)
 
     ActorRoomFixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     fixture.writeText("Rooms/Empty.room.json", R"({ "version": 1, "id": "empty", "size": { "width": 10, "height": 10 } })");
     const auto instance = instantiate(library, fixture.host, "Rooms/Empty.room.json");
     CHECK(instance->actors().empty());
@@ -728,7 +729,7 @@ SCHUIMM_TEST(RoomActors_PlacementsAndDefaults)
 {
     ActorRoomFixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     const auto loaded = library.load(asset("Rooms/Hall.room.json"));
     REQUIRE(loaded.has_value());
     const auto& placements = loaded->resource->actors;
@@ -740,7 +741,7 @@ SCHUIMM_TEST(RoomActors_PlacementsAndDefaults)
     REQUIRE(loaded->actors.size() == 4);
     // One shared actor resource for all four placements.
     CHECK(loaded->actors[0] == loaded->actors[3]);
-    CHECK(loaded->actors[0]->script == asset("Actors/Hero/hero.schb"));
+    CHECK(loaded->actors[0]->script == asset("Actors/Hero/hero.sch"));
     CHECK_EQ(library.actors().actorCount(), std::size_t{1});
     CHECK_EQ(library.actors().animationCount(), std::size_t{1});
     CHECK_EQ(library.actors().imageCount(), std::size_t{2});
@@ -765,7 +766,7 @@ SCHUIMM_TEST(RoomActors_InvalidPlacements)
 {
     ActorRoomFixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     const auto errorOf = [&](std::string_view actors) {
         const std::string text =
             concat(R"({ "version": 1, "id": "test", "size": { "width": 100, "height": 100 }, "actors": [ )", actors, " ] }");
@@ -808,19 +809,19 @@ SCHUIMM_TEST(RoomActors_BrokenActorResourcesFailTheRoom)
     ActorRoomFixture fixture;
     fixture.writeText("Actors/Hero/hero.actor.json", R"({ "version": 1, "id": "hero" })");
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     const auto result = library.load(asset("Rooms/Garden.room.json"));
     REQUIRE(!result.has_value());
     CHECK(contains(result.error().message,
                    "Rooms/Garden.room.json: actors[0] ('hero'): Actors/Hero/hero.actor.json: animation_resources: missing required property"));
-    // Its script missing, or an image missing.
+    // Its script not in the program, or an image missing.
     fixture.writeText("Actors/Hero/hero.actor.json", heroWithScript);
-    REQUIRE(fs::remove(path::join(fixture.root, "Actors/Hero/hero.schb")).has_value());
-    const auto noScript = library.load(asset("Rooms/Garden.room.json"));
+    RoomLibrary unscripted(locator);
+    const auto noScript = unscripted.load(asset("Rooms/Garden.room.json"));
     REQUIRE(!noScript.has_value());
-    CHECK(noScript.error().code == ErrorCode::NotFound);
-    CHECK(contains(noScript.error().message, "Actors/Hero/hero.actor.json: script: "));
-    fixture.writeText("Actors/Hero/hero.schb", "x");
+    CHECK(noScript.error().code == ErrorCode::InvalidState);
+    CHECK(contains(noScript.error().message,
+                   "actors[0] ('hero'): Actors/Hero/hero.actor.json: script 'Actors/Hero/hero.sch' needs the game's program"));
     REQUIRE(fs::remove(path::join(fixture.root, "Actors/Hero/glow.png")).has_value());
     const auto noImage = library.load(asset("Rooms/Garden.room.json"));
     REQUIRE(!noImage.has_value());
@@ -832,7 +833,7 @@ SCHUIMM_TEST(RoomActors_LookupAndHandles)
 {
     ActorRoomFixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     const auto room = instantiate(library, fixture.host, "Rooms/Hall.room.json");
 
     ActorInstance* guard = room->actor("guard_01");
@@ -863,7 +864,7 @@ SCHUIMM_TEST(RoomActors_ActorsCannotBeMovedOutAndObjectsOnlyCopied)
     static_assert(!std::is_move_constructible_v<ActorInstance>);
     ActorRoomFixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     const auto room = instantiate(library, fixture.host, "Rooms/Hall.room.json");
 
     // Actors stay where they are: stable addresses, reachable through the view.
@@ -885,7 +886,7 @@ SCHUIMM_TEST(RoomActors_RecreatingARoomStartsFromItsPlacements)
 {
     ActorRoomFixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
 
     auto hall = instantiate(library, fixture.host, "Rooms/Hall.room.json");
     ActorInstance* hero = hall->actor("hero");
@@ -940,7 +941,7 @@ SCHUIMM_TEST(RoomActors_DestroyingARoomReleasesItsActors)
     const AssetLocator locator = fixture.locator();
     std::weak_ptr<const ActorResource> actorResource;
     {
-        RoomLibrary library(locator, fixture.host);
+        RoomLibrary library(locator, fixture.program);
         auto hall = instantiate(library, fixture.host, "Rooms/Hall.room.json");
         actorResource = hall->actors()[0].sharedResource();
         library.unloadAll();
@@ -954,7 +955,7 @@ SCHUIMM_TEST(RoomActors_FailedActorCreationPublishesNoRoom)
 {
     ActorRoomFixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(asset("Rooms/Hall.room.json")).value();
 
     LoadedRoom missingActors = loaded;
@@ -980,20 +981,12 @@ SCHUIMM_TEST(RoomActors_ActorsDoNotSatisfyObjectLinking)
 {
     ActorRoomFixture fixture;
     // The script declares "hero", which the room has only as an actor.
-    fixture.writeBytes("Rooms/Hall.schb", compileRoomScript("extern func say(text: string)\n"
-                                                             "object hero:\n"
-                                                             "\tfunc look_at():\n"
-                                                             "\t\tsay(\"me\")\n"));
+    fixture.setProgram({{"Rooms/Hall.sch", "object hero:\n\tfunc look_at():\n\t\tprint(\"me\")\n", script::ScriptRole::Room}});
     fixture.writeText("Rooms/Garden.room.json", R"({
-      "version": 1, "id": "garden", "size": { "width": 800, "height": 600 }, "script": "Rooms/Hall.schb",
+      "version": 1, "id": "garden", "size": { "width": 800, "height": 600 }, "script": "Rooms/Hall.sch",
       "actors": [ { "id": "hero", "actor": "Actors/Hero/hero.actor.json", "position": [120, 550] } ] })");
-    REQUIRE(fixture.host.natives()
-                .add({"say", {script::ScriptType::String}, script::ScriptType::None,
-                      [](script::NativeContext&, std::span<const script::Value>) { return script::NativeResult::returnValue(); },
-                      {}})
-                .has_value());
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     const auto result = library.load(asset("Rooms/Garden.room.json"));
     REQUIRE(!result.has_value());
     CHECK(contains(result.error().message, "declares object 'hero', which room 'garden' does not define"));
@@ -1003,7 +996,7 @@ SCHUIMM_TEST(RoomActors_UpdateAdvancesEveryActorByTheSameTicks)
 {
     ActorRoomFixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     const auto room = instantiate(library, fixture.host, "Rooms/Hall.room.json");
     for (int i = 0; i < 7; ++i) room->update(1.0 / 60.0);
     // guard_02 is invisible but animates all the same.
@@ -1021,7 +1014,7 @@ SCHUIMM_TEST(RoomActors_DrawListIsSortedAndSkipsInvisibleActors)
 {
     ActorRoomFixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     const auto room = instantiate(library, fixture.host, "Rooms/Hall.room.json");
     // y: hero 500, guard_01 450, guard_02 450 (invisible), door 300. The door object has no sprite.
     RoomDrawList list = room->drawList();
@@ -1084,12 +1077,20 @@ SCHUIMM_TEST(RoomActors_DemoRoomsAreValid)
     // A copy of the demo's assets, with a stand-in for the walker script that the build compiles.
     const std::string root = test::makeScratchDirectory("actordemo");
     copyTree(SCHUIMM_ACTOR_DEMO_ASSET_DIR, root);
-    REQUIRE(fs::writeFile(path::join(root, "Actors/Walker/walker.schb"), bytesOf("stand-in")).has_value());
-
     Logger logger{LogLevel::Error};
     script::ScriptHost host{logger};
+    auto walkerSource = fs::readFile(path::join(root, "Actors/Walker/walker.sch"));
+    REQUIRE(walkerSource.has_value());
+    const script::test::Project project = script::test::compileFiles(
+        {{"Actors/Walker/walker.sch", std::string(reinterpret_cast<const char*>(walkerSource->data()), walkerSource->size()),
+          script::ScriptRole::Actor}},
+        script::CompileOptions{});
+    if (!project.result.success) std::fprintf(stderr, "%s", project.diagnostics().c_str());
+    REQUIRE(project.result.success);
+    auto program = script::Program::load(script::writeBytecode(project.result.module).value(), host.natives(), "game.schb");
+    REQUIRE(program.has_value());
     const AssetLocator locator = AssetLocator::create(root).value();
-    RoomLibrary library(locator, host);
+    RoomLibrary library(locator, *program);
     auto hall = instantiate(library, host, "Rooms/Hall.room.json");
     CHECK_EQ(hall->actors().size(), std::size_t{5});
     const script::ObjectRef hallHero = hall->actor("hero")->handle();

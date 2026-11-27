@@ -56,6 +56,11 @@ if(TARGET schuimmc AND TARGET schuimm-run)
     add_test(NAME ScriptRunnerProjectCli COMMAND schuimm-run "${project_bytecode}")
     set_tests_properties(ScriptRunnerProjectCli PROPERTIES LABELS unit FIXTURES_REQUIRED script_project_bytecode
         PASS_REGULAR_EXPRESSION "Hello, kitchen")
+    # The game build: the ActorDemo game, its sources found through its game resource.
+    add_test(NAME ScriptCompilerGameCli
+        COMMAND schuimmc --game ActorDemo.game.json --assets "${PROJECT_SOURCE_DIR}/Applications/ActorDemo/Assets" --disasm)
+    set_tests_properties(ScriptCompilerGameCli PROPERTIES LABELS unit
+        PASS_REGULAR_EXPRESSION "s[0-9] actor \"Actors/Walker/walker.sch\".*s[0-9] room \"Rooms/Courtyard/Courtyard.sch\"")
     add_test(NAME ScriptCompilerCliRejectsErrors
         COMMAND schuimmc "${PROJECT_SOURCE_DIR}/Tests/Script/Data/type_error.sch")
     set_tests_properties(ScriptCompilerCliRejectsErrors PROPERTIES LABELS unit WILL_FAIL TRUE)

@@ -26,7 +26,7 @@ Room resources keep the authored data those systems will use.
 | | What it is | Mutable | Shared |
 |---|---|---|---|
 | `RoomResource` (`Room/RoomResource.h`) | the authored room as read from `*.room.json`: plain data | no | by every instance of the room |
-| `script::Program` | the room's compiled script (`*.schb`), loaded by the existing `ScriptHost` | no | by every instance (and every room using the same script) |
+| `script::Program` | the game's compiled program (all its scripts, `*.schb`), loaded once by the game session | no | by every room and instance |
 | `RoomInstance` (`Room/RoomInstance.h`) | a live room: runtime objects with their handles and state, and the execution owner of its coroutines | yes | no: each instance is independent |
 
 A `RoomResource` never changes after loading. Gameplay changes the `RoomInstance`. The future
@@ -43,7 +43,7 @@ script [`Kitchen.sch`](../Rooms/Examples/Kitchen.sch). Both are loaded by the te
     "version": 1,
     "id": "kitchen",
     "size": { "width": 2560, "height": 1440 },
-    "script": "Rooms/Kitchen/Kitchen.schb",
+    "script": "Rooms/Kitchen/Kitchen.sch",
     "background": { "image": "Rooms/Kitchen/Assets/background.png" },
     "props": [
         { "id": "table", "sprite": "Rooms/Kitchen/Assets/table.png", "position": [800, 500], "pivot": [0, 0] }
@@ -79,7 +79,7 @@ property may be left out or set to `null` (the two mean the same).
 | `version` | integer, **required** | must be `1`; checked before anything else |
 | `id` | identifier, **required** | the room's name in the game |
 | `size` | `{ "width", "height" }`, **required** | integers from 1 to 65536: the room's size in pixels |
-| `script` | asset path | the compiled room script; must end in `.schb` |
+| `script` | asset path | the room's script source (`.sch`): its identity in the game program. The build compiles it; the runtime does not read it |
 | `background` | `{ "image": asset path }` | the background image, drawn at the room origin |
 | `props` | array of props | non-interactive images (see below) |
 | `objects` | array of objects | interactive objects (see below) |
@@ -203,7 +203,8 @@ InvalidData: Rooms/Kitchen/Kitchen.room.json: version: unsupported room resource
 InvalidData: Rooms/Kitchen/Kitchen.room.json: navigation.walkable_areas[0].points[3]: repeats the first point (...)
 InvalidData: Rooms/Kitchen/Kitchen.room.json: invalid JSON at line 3, column 11: syntax error while parsing value - ...
 NotFound: Rooms/Kitchen/Kitchen.room.json: objects[0].sprite: asset 'Rooms/Kitchen/Assets/blender.png' not found (...)
-InvalidData: Rooms/Kitchen/Kitchen.room.json: script 'Rooms/Kitchen/Kitchen.schb' declares object 'blendr', which room 'kitchen' does not define
+InvalidData: Rooms/Kitchen/Kitchen.room.json: script 'Rooms/Kitchen/Kitchen.sch' declares object 'blendr', which room 'kitchen' does not define
+NotFound: Rooms/Kitchen/Kitchen.room.json: script 'Rooms/Kitchen/Kitchen.sch' is not part of the program 'Scripts/Game.schb'; recompile the game
 ```
 
 Nothing is substituted and nothing is ignored: a missing asset or malformed data fails the load.
@@ -213,40 +214,36 @@ Nothing is substituted and nothing is ignored: a missing asset or malformed data
 The steps are separate functions, so each can be used and tested on its own:
 
 1. **`decodeRoomResource(bytes, sourceName)`** (`Room/RoomResourceLoader.h`) parses and validates the JSON into a `RoomResource`. It does not access the disk.
-2. **`verifyRoomAssets(room, locator, sourceName)`** checks that the script, the background, every sprite and every actor resource exist as files below the asset root (`AssetLocator::info`).
+2. **`verifyRoomAssets(room, locator, sourceName)`** checks that the background, every sprite and every actor resource exist as files below the asset root (`AssetLocator::info`). The script is a source path: the game ships its compiled program instead.
    - Images are not decoded and nothing is uploaded to the GPU.
    - Textures are loaded later by the renderer through the existing `TextureCache`, from the same asset paths.
 3. **`loadRoomResource(locator, path)`** does steps 1 and 2 after reading the file through the `AssetLocator` (at most 16 MiB). It is the loader of `ResourceCache<RoomResource>`.
-4. **`loadRoomScript(host, locator, room, sourceName)`** (`Room/RoomScript.h`) reads the `.schb` through the locator and loads it with `ScriptHost::load`, using the existing bytecode validation and native linking. It then runs `validateRoomScript`.
-   - Room scripts are compiled at build time with `schuimmc`. The runtime never compiles source and never links the compiler.
-   - The room JSON references the compiled file and never contains script source or bytecode.
-5. **`RoomLibrary::load(path)`** (`Room/RoomLibrary.h`) runs all of the above and caches the results:
+4. **`validateRoomScript(room, program)`** and **`validateActorScript(actor, program)`** (`Room/RoomScript.h`) check that the room's script and each actor resource's script are sources of the game program in the right role, and that the room script's object declarations name objects of the room.
+   - A game's scripts are compiled at build time into one program (`schuimmc --game`, [Compiler.md](../Scripting/Compiler.md#project-compilation)); the game session loads it (`AdventureRuntime`). The runtime never compiles source and never links the compiler.
+   - The room JSON references the script's source path and never contains script source or bytecode.
+5. **`RoomLibrary::load(path)`** (`Room/RoomLibrary.h`, constructed with the asset locator and the game program) runs all of the above and caches the results:
    - the resource in a `ResourceCache<RoomResource>`;
-   - the program keyed by its script's asset path, so rooms that share a script share one `Program`.
 
    - the actor resources of the placements in its `ActorLibrary`, together with their animation resources and image headers (`RoomLibrary::actors()`).
 
-   It returns a `LoadedRoom { resource, script, actors }`, which is validated and cheap to copy.
-6. **`RoomInstance::create(loadedRoom, host)`** creates a live instance.
+   It returns a `LoadedRoom { resource, script, actors }`, which is validated and cheap to copy (`script` is the game program when the room or one of its actors has a script).
+6. **`RoomInstance::create(loadedRoom, host, globals)`** creates a live instance that uses the session's global variables.
+
+A game does all of this through its game session ([Adventure.md](Adventure.md#game-sessions-adventureruntime)):
 
 ```cpp
-AssetLocator& assets = ...;
-script::ScriptHost& scripts = ...;            // register the game's natives first
-room::RoomLibrary rooms(assets, scripts);
-
-auto kitchen = rooms.load(AssetPath::parse("Rooms/Kitchen/Kitchen.room.json").value());
-if (!kitchen) { log(describe(kitchen.error())); return; }
-auto instance = room::RoomInstance::create(*kitchen, scripts);
-...
-(*instance)->dispatch("blender", "look_at"); // the interaction system will call this
+auto game = adventure::AdventureRuntime::create(scripts, natives, assets, AssetPath::parse("Kitchen.game.json").value());
+(*game)->enterRoom(AssetPath::parse("Rooms/Kitchen/Kitchen.room.json").value());
+(*game)->dispatchObject("blender", "look_at"); // the interaction system will call this
 ```
 
-Because programs are linked when they are loaded, register the game's natives on the
-`ScriptHost` before loading rooms. A script that calls a missing native fails to load.
+A library without a program (`RoomLibrary(assets)`) loads rooms and actors without scripts only;
+one with a script fails with `InvalidState`.
 
 ## Script association
 
-A room has at most one compiled script, named by `script`. Its `object` declarations are matched
+A room has at most one script, named by `script`: a room script of the game program. Its `room:`
+declaration is the room's behaviour (`dispatchRoom`), and its `object` declarations are matched
 against the room's objects by identifier:
 
 | Case | Result |
@@ -304,7 +301,9 @@ destroyed ([Runtime.md](../Scripting/Runtime.md#script-state-global-and-instance
 
 `dispatchRoom(event, arguments)` invokes a handler of the script's `room:` declaration, running for the room's own behaviour instance (`roomScript()`; its room variables start afresh with every instance). Nothing dispatches it automatically: when `init`, `ready` or `exit` run is up to the game (later, the room-transition code).
 
-`start(function, arguments)` runs a global function such as `enter` with the room's global state. Nothing is started automatically: when `enter` runs is up to the future room-transition code. Event names are never fixed anywhere.
+`start(function, arguments)` runs a global function with the room's global state, owned by the room. Nothing is started or dispatched automatically: when `init` or `ready` run is up to the game (later, the room-transition code). Event names are never fixed anywhere.
+
+`dispatchActor(actorId, event, arguments)` runs a handler of an actor's `actor:` declaration (its actor resource's script) for that actor, owned by the actor ([Actors.md](Actors.md#scripts)). Destroying the room cancels the coroutines of the room and of every one of its actors.
 
 ## Operation events
 

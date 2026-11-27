@@ -78,9 +78,9 @@ behaviour ([Actors.md](Actors.md), [Navigation.md](Navigation.md), [Adventure.md
 - a separate balcony;
 - a scale map;
 - an animated fan (a room object with animations);
-- a room script, `Assets/Rooms/Courtyard/Courtyard.sch`, which the build compiles with the
-  adventure interface. On entering, `enter()` sends the gardener on its rounds in a script
-  coroutine (`patrol`).
+- a room script, `Assets/Rooms/Courtyard/Courtyard.sch`, which the game build compiles with the
+  game's other scripts (`Assets/ActorDemo.game.json`). On entering, the room's `ready()` sends
+  the gardener on its rounds in a script coroutine (`patrol`).
 
 | Input | Action | What to check |
 |---|---|---|

@@ -162,7 +162,7 @@ struct MovementFixture {
         write("Rooms/Yard.room.json", bytesOf(uRoom));
         write("Rooms/Void.room.json", bytesOf(noNavigationRoom));
         locator = std::make_unique<AssetLocator>(AssetLocator::create(root).value());
-        library = std::make_unique<RoomLibrary>(*locator, host);
+        library = std::make_unique<RoomLibrary>(*locator);
     }
 
     void write(std::string_view asset, std::span<const std::byte> bytes) const

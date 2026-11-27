@@ -115,7 +115,7 @@ std::string loadError(Fixture& fixture, std::string_view from, std::string_view 
     text.replace(at, from.size(), to);
     fixture.writeText("Rooms/Variant.room.json", text);
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator);
     auto loaded = library.load(asset("Rooms/Variant.room.json"));
     return loaded ? std::string() : loaded.error().message;
 }
@@ -134,7 +134,7 @@ SCHUIMM_TEST(ObjectAnimation_ResourcesLoadAndValidate)
 {
     Fixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator);
     auto loaded = library.load(asset("Rooms/Workshop.room.json"));
     REQUIRE(loaded.has_value());
     const RoomResource& resource = *loaded->resource;
@@ -199,7 +199,7 @@ SCHUIMM_TEST(ObjectAnimation_ObjectsStartWithTheirAuthoredState)
 {
     Fixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator);
     auto room = workshop(fixture, library);
     RoomObject& fan = *room->object("fan");
     CHECK(fan.isAnimated());
@@ -219,7 +219,7 @@ SCHUIMM_TEST(ObjectAnimation_SharedResourcesHaveIndependentPlayback)
 {
     Fixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator);
     auto room = workshop(fixture, library);
     auto other = workshop(fixture, library); // A second instance of the same room.
     RoomObject& fan = *room->object("fan");
@@ -240,7 +240,7 @@ SCHUIMM_TEST(ObjectAnimation_PlaybackControls)
 {
     Fixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator);
     auto room = workshop(fixture, library);
     RoomObject& fan = *room->object("fan");
     REQUIRE(fan.playAnimation("spinning").has_value());
@@ -286,7 +286,7 @@ SCHUIMM_TEST(ObjectAnimation_PlaybackIdentity)
 {
     Fixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator);
     auto room = workshop(fixture, library);
     RoomObject& fan = *room->object("fan");
     REQUIRE(fan.playAnimation("burst").has_value());
@@ -318,7 +318,7 @@ SCHUIMM_TEST(ObjectAnimation_UpdateAdvancesOnceWithTheRoomClock)
 {
     Fixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator);
     auto room = workshop(fixture, library);
     RoomObject& fan = *room->object("fan");
     REQUIRE(fan.playAnimation("spinning").has_value());
@@ -340,7 +340,7 @@ SCHUIMM_TEST(ObjectAnimation_DrawListUsesTheCurrentFrame)
 {
     Fixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator);
     auto room = workshop(fixture, library);
     RoomObject& fan = *room->object("fan");
     RoomDrawList list = room->drawList();
@@ -380,7 +380,7 @@ SCHUIMM_TEST(ObjectAnimation_PositionsAreValidated)
 {
     Fixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator);
     auto room = workshop(fixture, library);
     for (RoomObject& object : room->objects()) {
         for (const Vec2 bad : {Vec2{std::numeric_limits<float>::quiet_NaN(), 0}, Vec2{0, std::numeric_limits<float>::infinity()},
@@ -399,7 +399,7 @@ SCHUIMM_TEST(ObjectAnimation_RoomsRecreateAuthoredStateAndReleasePlayback)
     const AssetLocator locator = fixture.locator();
     std::weak_ptr<const animation::AnimationResource> resource;
     {
-        RoomLibrary library(locator, fixture.host);
+        RoomLibrary library(locator);
         {
             auto room = workshop(fixture, library);
             RoomObject& fan = *room->object("fan");
@@ -438,7 +438,7 @@ SCHUIMM_TEST(ObjectAnimation_PlaybackEndsAreReportedWhenTheyHappen)
 {
     Fixture fixture;
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator);
     auto room = workshop(fixture, library);
     PlaybackListener listener;
     room->setEventListener(&listener);

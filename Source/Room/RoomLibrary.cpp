@@ -7,9 +7,8 @@
 
 namespace schuimm::room {
 
-RoomLibrary::RoomLibrary(const AssetLocator& locator, script::ScriptHost& host)
-    : locator_(locator)
-    , host_(host)
+RoomLibrary::RoomLibrary(const AssetLocator& locator, std::shared_ptr<const script::Program> program)
+    : program_(std::move(program))
     , resources_(locator, loadRoomResource)
     , actors_(locator)
 {
@@ -49,21 +48,19 @@ Result<LoadedRoom> RoomLibrary::load(const AssetPath& room)
     } else {
         loaded.navigation = std::move(*navigation);
     }
-    if (!loaded.resource->script) return loaded;
-
-    const AssetPath& scriptPath = *loaded.resource->script;
-    if (const auto cached = scripts_.find(scriptPath); cached != scripts_.end()) {
-        // Shared by several rooms: each room's objects are checked against it.
-        if (auto status = validateRoomScript(*loaded.resource, cached->second.get()); !status) {
-            return makeError(status.error().code, concat(room.view(), ": ", status.error().message));
-        }
-        loaded.script = cached->second;
-        return loaded;
+    bool scripted = loaded.resource->script.has_value();
+    if (auto status = validateRoomScript(*loaded.resource, program_.get()); !status) {
+        return makeError(status.error().code, concat(room.view(), ": ", status.error().message));
     }
-    auto program = loadRoomScript(host_, locator_, *loaded.resource, room.view());
-    if (!program) return std::unexpected(program.error());
-    loaded.script = *program;
-    scripts_.emplace(scriptPath, std::move(*program));
+    const auto& placements = loaded.resource->actors;
+    for (std::size_t i = 0; i < loaded.actors.size(); ++i) {
+        if (auto status = validateActorScript(*loaded.actors[i], program_.get()); !status) {
+            return makeError(status.error().code, concat(room.view(), ": actors[", i, "] ('", placements[i].id, "'): ",
+                                                         placements[i].actor.view(), ": ", status.error().message));
+        }
+        scripted = scripted || loaded.actors[i]->script.has_value();
+    }
+    if (scripted) loaded.script = program_;
     return loaded;
 }
 
@@ -142,7 +139,6 @@ Result<std::shared_ptr<const navigation::NavigationMap>> RoomLibrary::navigation
 void RoomLibrary::unloadAll()
 {
     resources_.unloadAll();
-    scripts_.clear();
     navigation_.clear();
     actors_.unloadAll();
 }

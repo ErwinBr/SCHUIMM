@@ -18,10 +18,9 @@ constexpr std::uint64_t maxActorFileBytes = 16u << 20;
 
 class Decoder : public json::Decoder {
 public:
-    Decoder(std::string_view source, const AnimationResolver& animations, const AssetCheck& assetExists)
+    Decoder(std::string_view source, const AnimationResolver& animations)
         : json::Decoder(source)
         , animations_(animations)
-        , assetExists_(assetExists)
     {
     }
 
@@ -39,11 +38,8 @@ public:
 
         if (const Json* script = optional(root, "script")) {
             SCHUIMM_JSON_TRY(readAssetPath(*script, "script", actor.script));
-            if (actor.script->extension() != ".schb") {
-                return fail("script", concat("must name a compiled script (.schb), found '", actor.script->view(), "'"));
-            }
-            if (auto status = assetExists_(*actor.script); !status) {
-                return makeError(status.error().code, concat(source(), ": script: ", status.error().message));
+            if (actor.script->extension() != ".sch") {
+                return fail("script", concat("must name a script source (.sch), found '", actor.script->view(), "'"));
             }
         }
 
@@ -227,15 +223,14 @@ private:
     }
 
     const AnimationResolver& animations_;
-    const AssetCheck& assetExists_;
 };
 
 } // namespace
 
 Result<ActorResource> decodeActorResource(std::span<const std::byte> data, std::string_view sourceName,
-                                          const AnimationResolver& animations, const AssetCheck& assetExists)
+                                          const AnimationResolver& animations)
 {
-    const Decoder decoder(sourceName, animations, assetExists);
+    const Decoder decoder(sourceName, animations);
     return json::decodeDocument<ActorResource>(decoder, data,
                                                [&decoder](const Json& root) { return decoder.decodeRoot(root); });
 }
@@ -257,10 +252,7 @@ Result<ActorResource> loadActorResource(const AssetLocator& locator, const Asset
 {
     auto bytes = locator.readBytes(asset, maxActorFileBytes);
     if (!bytes) return std::unexpected(bytes.error());
-    const AssetCheck exists = [&locator](const AssetPath& referenced) {
-        return checkAssetExists(locator, referenced, {}, {});
-    };
-    return decodeActorResource(*bytes, asset.view(), animations, exists);
+    return decodeActorResource(*bytes, asset.view(), animations);
 }
 
 } // namespace schuimm::room

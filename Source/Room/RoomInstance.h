@@ -28,8 +28,10 @@
 // them once, visible or not. drawList() only reads: drawing never advances anything.
 //
 // Coroutines: the instance is the execution owner of the coroutines it starts (dispatch(),
-// start()) and of those they spawn, and cancels them all when it is destroyed, so no coroutine
-// of a destroyed room keeps running. An instance must not be destroyed while the ScriptHost
+// dispatchRoom(), start()) and of those they spawn; each actor is the owner of its own
+// (dispatchActor()). The instance cancels all of them when it is destroyed, so no coroutine of a
+// destroyed room or of its actors keeps running, also when a room handler called a global
+// function. Their script state (room, object and actor behaviour instances) is expired. An instance must not be destroyed while the ScriptHost
 // updates (from a native or a script event callback): the running coroutine only stops when its
 // native call returns, and that native may still use the room. This is checked in every build
 // (violating it stops the program). Destroy rooms between frames.
@@ -272,6 +274,13 @@ public:
     // when, e.g. "init", "ready", "exit"); nothing calls them automatically.
     [[nodiscard]] Result<script::DispatchResult> dispatchRoom(std::string_view event,
                                                               std::vector<script::Value> arguments = {});
+    // Invokes the handler `event` of actor `actorId`'s behaviour (the "actor:" declaration of its
+    // actor resource's script), running for that actor: self is the actor, its instance variables
+    // are its own. The coroutine (and what it spawns) belongs to the actor's execution owner.
+    // NotFound: no such actor; {handled = false}: its script has no actor declaration or no such
+    // handler.
+    [[nodiscard]] Result<script::DispatchResult> dispatchActor(std::string_view actorId, std::string_view event,
+                                                               std::vector<script::Value> arguments = {});
     // Starts a global function of the script (e.g. "enter"). NotFound without a script.
     [[nodiscard]] Result<script::CoroutineHandle> start(std::string_view function,
                                                         std::vector<script::Value> arguments = {});
@@ -281,6 +290,11 @@ public:
     // The script state of object `objectId` (its instance variables); null if the object has no
     // declaration in the script (or there is no such object).
     [[nodiscard]] std::shared_ptr<script::BehaviourInstance> objectScript(std::string_view objectId) const;
+    // The script state of actor `actorId` (its instance variables); null without an actor
+    // declaration (or there is no such actor).
+    [[nodiscard]] std::shared_ptr<script::BehaviourInstance> actorScript(std::string_view actorId) const;
+    // The execution owner of actor `actorId`'s coroutines (noExecutionOwner if there is none).
+    [[nodiscard]] script::ExecutionOwner actorOwner(std::string_view actorId) const;
     // The script state of the room's "room:" declaration (its room variables); null without one.
     [[nodiscard]] const std::shared_ptr<script::BehaviourInstance>& roomScript() const noexcept { return roomScript_; }
 
@@ -308,6 +322,10 @@ private:
     // Per object (objectScripts_[i] for objects_[i]): its behaviour instance, or null.
     std::vector<std::shared_ptr<script::BehaviourInstance>> objectScripts_;
     std::shared_ptr<script::BehaviourInstance> roomScript_;
+    // Per actor (actorScripts_[i], actorOwners_[i] for actors_[i]): its behaviour instance (or
+    // null) and the owner of its coroutines.
+    std::vector<std::shared_ptr<script::BehaviourInstance>> actorScripts_;
+    std::vector<script::ExecutionOwner> actorOwners_;
 };
 
 } // namespace schuimm::room

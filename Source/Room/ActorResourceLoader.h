@@ -4,7 +4,7 @@
 //
 //   { "version": 1,
 //     "id": "hero",
-//     "script": "Actors/Hero/hero.schb",                          (optional)
+//     "script": "Actors/Hero/Hero.sch",                           (optional)
 //     "animation_resources": { "main": "Actors/Hero/hero.anim.json" },
 //     "animations": {
 //       "idle": { "south": { "resource": "main", "clip": "idle_south" },
@@ -22,7 +22,8 @@
 //     names plus an optional "fallback" naming one of its mapped facings.
 //   * A mapping: { "resource", "clip", "flip_x" (optional, default false) }; the clip must
 //     exist in that resource.
-//   * script: a compiled script (.schb) that must exist; it is not loaded.
+//   * script: the actor's script source (.sch): the identity of its behaviour in the game's
+//     compiled program (the build compiles it; the runtime needs no source file).
 //   * default_animation must resolve with default_facing.
 //   * default_scale: positive, finite, at most maxActorScale, positive as a float.
 //
@@ -46,15 +47,10 @@ namespace schuimm::room {
 
 using AnimationResolver =
     std::function<Result<std::shared_ptr<const animation::AnimationResource>>(const AssetPath& resource)>;
-// Checks that a referenced asset (the script) exists.
-using AssetCheck = std::function<Status(const AssetPath& asset)>;
-
 [[nodiscard]] Result<ActorResource> decodeActorResource(std::span<const std::byte> data, std::string_view sourceName,
-                                                        const AnimationResolver& animations,
-                                                        const AssetCheck& assetExists);
+                                                        const AnimationResolver& animations);
 
-// Reads `asset` (at most 16 MiB), resolving animation resources with `animations` and checking
-// the script with `locator`.
+// Reads `asset` (at most 16 MiB), resolving animation resources with `animations`.
 [[nodiscard]] Result<ActorResource> loadActorResource(const AssetLocator& locator, const AssetPath& asset,
                                                       const AnimationResolver& animations);
 

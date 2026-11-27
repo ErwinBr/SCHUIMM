@@ -135,7 +135,7 @@ struct ActorPlacement {
 struct RoomResource {
     std::string id;
     Extent2D size;
-    std::optional<AssetPath> script;     // Compiled room script (.schb), if any.
+    std::optional<AssetPath> script;     // The room's script source (.sch), if any (a source of the game program).
     std::optional<AssetPath> background; // Background image, if any.
     std::vector<RoomProp> props;
     std::vector<RoomObjectDefinition> objects;

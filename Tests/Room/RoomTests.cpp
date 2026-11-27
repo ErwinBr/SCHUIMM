@@ -47,7 +47,7 @@ const char* const fullRoom = R"({
     "version": 1,
     "id": "kitchen",
     "size": { "width": 2560, "height": 1440 },
-    "script": "Rooms/Kitchen/Kitchen.schb",
+    "script": "Rooms/Kitchen/Kitchen.sch",
     "background": { "image": "Rooms/Kitchen/Assets/background.png" },
     "props": [
         { "id": "table", "sprite": "Rooms/Kitchen/Assets/table.png", "position": [800, 500], "pivot": [0, 0] }
@@ -125,7 +125,7 @@ const char* const testPrelude =
 std::vector<std::byte> compileToBytecode(std::string source)
 {
     if (source.find("extern func say(") == std::string::npos) source = testPrelude + source;
-    script::test::Compiled compiled = script::test::compileSource(source, true, "Kitchen.sch");
+    script::test::Compiled compiled = script::test::compileSource(source, true, "Rooms/Kitchen/Kitchen.sch");
     if (!compiled.result.success) std::fprintf(stderr, "%s", compiled.diagnostics().c_str());
     REQUIRE(compiled.result.success);
     auto bytes = script::writeBytecode(compiled.result.module);
@@ -141,6 +141,7 @@ struct RoomFixture {
     script::ScriptHost host{logger};
     std::vector<std::string> said;
     std::vector<script::ObjectRef> recorded;
+    std::shared_ptr<const script::Program> program; // The game program (writeScript).
 
     RoomFixture()
     {
@@ -180,13 +181,17 @@ struct RoomFixture {
         }
     }
 
-    void writeScript(const std::string& source, std::string_view asset = "Rooms/Kitchen/Kitchen.schb") const
+    // The game program: `source` compiled as the room script Rooms/Kitchen/Kitchen.sch and
+    // linked against the host's natives.
+    void writeScript(const std::string& source)
     {
-        writeBytes(asset, compileToBytecode(source));
+        auto loaded = host.load(compileToBytecode(source), "game.schb");
+        REQUIRE(loaded.has_value());
+        program = *loaded;
     }
 
     // The full room with its images and `source` as its compiled script.
-    void writeFullRoom(const std::string& source = kitchenScript) const
+    void writeFullRoom(const std::string& source = kitchenScript)
     {
         writeImages();
         writeScript(source);
@@ -224,7 +229,7 @@ SCHUIMM_TEST(Room_FullRoom)
     CHECK_EQ(room->id, std::string("kitchen"));
     CHECK(room->size == (Extent2D{2560, 1440}));
     REQUIRE(room->script.has_value());
-    CHECK_EQ(room->script->string(), std::string("Rooms/Kitchen/Kitchen.schb"));
+    CHECK_EQ(room->script->string(), std::string("Rooms/Kitchen/Kitchen.sch"));
     REQUIRE(room->background.has_value());
     CHECK_EQ(room->background->string(), std::string("Rooms/Kitchen/Assets/background.png"));
     REQUIRE(room->props.size() == 1);
@@ -411,8 +416,8 @@ SCHUIMM_TEST(Room_AssetPaths)
     CHECK_ERROR(mutated([](Json& j) { j["props"][0]["sprite"] = "Rooms\\Kitchen\\table.png"; }), "props[0].sprite: invalid asset path");
     CHECK_ERROR(mutated([](Json& j) { j["background"]["image"] = "/Rooms/bg.png"; }),
                 "background.image: invalid asset path '/Rooms/bg.png': must be relative to the asset root");
-    CHECK_ERROR(mutated([](Json& j) { j["script"] = "Rooms/Kitchen/Kitchen.sch"; }),
-                "script: must name a compiled script (.schb), found 'Rooms/Kitchen/Kitchen.sch'");
+    CHECK_ERROR(mutated([](Json& j) { j["script"] = "Rooms/Kitchen/Kitchen.schb"; }),
+                "script: must name a script source (.sch), found 'Rooms/Kitchen/Kitchen.schb'");
     CHECK_ERROR(mutated([](Json& j) { j["script"] = 5; }), "script: expected a string, found the number 5");
     // Asset paths are normalised like every other asset path.
     auto room = decode(mutated([](Json& j) { j["objects"][0]["sprite"] = "Rooms/./Kitchen//Assets/blender.png"; }));
@@ -486,7 +491,7 @@ SCHUIMM_TEST(Room_RoomWithoutScript)
     fixture.writeImages();
     fixture.writeText(roomName, mutated([](Json& j) { j.erase("script"); }));
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     REQUIRE(loaded.has_value());
     CHECK(loaded->script == nullptr);
@@ -511,19 +516,19 @@ SCHUIMM_TEST(Room_CompletionCriteria)
         "version": 1,
         "id": "kitchen",
         "size": { "width": 2560, "height": 1440 },
-        "script": "Rooms/Kitchen/Kitchen.schb",
+        "script": "Rooms/Kitchen/Kitchen.sch",
         "objects": [
             { "id": "blender", "sprite": "Rooms/Kitchen/Assets/blender.png", "position": [420, 310] },
             { "id": "cupboard", "sprite": "Rooms/Kitchen/Assets/cupboard.png", "position": [720, 280] }
         ]
     })");
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     if (!loaded) std::fprintf(stderr, "  %s\n", loaded.error().message.c_str());
     REQUIRE(loaded.has_value());
     REQUIRE(loaded->script != nullptr);
-    CHECK_EQ(loaded->script->name(), std::string("Rooms/Kitchen/Kitchen.schb"));
+    CHECK_EQ(loaded->script->name(), std::string("game.schb"));
     CHECK(loaded->script->hasObject("blender"));
 
     auto instance = RoomInstance::create(*loaded, fixture.host);
@@ -559,7 +564,7 @@ SCHUIMM_TEST(Room_ScriptStateBelongsToTheInstanceAndTheSession)
                           "object blender:\n\tvar uses = 0\n\tfunc use():\n\t\tuses += 1\n\t\tsay(\"blender \" + str(uses))\n\n"
                           "object cupboard:\n\tvar uses = 10\n\tfunc use():\n\t\tuses += 1\n\t\tsay(\"cupboard \" + str(uses))\n");
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     REQUIRE(loaded.has_value());
     const auto globals = script::GlobalState::create(loaded->script);
@@ -601,7 +606,7 @@ SCHUIMM_TEST(Room_RoomHandlersRunForTheRoomInstance)
     fixture.writeFullRoom("room:\n\tvar entries = 0\n\tfunc ready():\n\t\tentries += 1\n\t\treport()\n"
                           "\tfunc report():\n\t\tsay(\"entries \" + str(entries))\n");
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     REQUIRE(loaded.has_value());
     for (int round = 0; round < 2; ++round) {
@@ -620,7 +625,7 @@ SCHUIMM_TEST(Room_RoomHandlersRunForTheRoomInstance)
     CHECK(fixture.said == std::vector<std::string>({"entries 1", "entries 2", "entries 1", "entries 2"}));
     // A room without a room declaration has nothing to dispatch.
     fixture.writeFullRoom("func enter():\n\tpass\n");
-    RoomLibrary other(locator, fixture.host);
+    RoomLibrary other(locator, fixture.program);
     auto plain = other.load(test::assetPath(roomName));
     REQUIRE(plain.has_value());
     auto instance = RoomInstance::create(*plain, fixture.host);
@@ -634,7 +639,7 @@ SCHUIMM_TEST(Room_ObjectsWithoutDeclarationsAreFine)
     RoomFixture fixture;
     fixture.writeFullRoom("object blender:\n\tfunc look_at():\n\t\tsay(\"An old blender.\")\n");
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     REQUIRE(loaded.has_value());
     auto instance = RoomInstance::create(*loaded, fixture.host);
@@ -659,11 +664,11 @@ SCHUIMM_TEST(Room_ScriptObjectWithoutRoomObjectIsAnError)
     RoomFixture fixture;
     fixture.writeFullRoom("object blendr:\n\tfunc look_at():\n\t\tsay(\"typo\")\n");
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     REQUIRE(!loaded.has_value());
     CHECK(loaded.error().code == ErrorCode::InvalidData);
-    CHECK(contains(loaded.error().message, "Rooms/Kitchen/Kitchen.room.json: script 'Rooms/Kitchen/Kitchen.schb' declares "
+    CHECK(contains(loaded.error().message, "Rooms/Kitchen/Kitchen.room.json: script 'Rooms/Kitchen/Kitchen.sch' declares "
                                            "object 'blendr', which room 'kitchen' does not define"));
     // RoomInstance::create checks again, so a mismatched pair cannot be assembled by hand.
     auto resource = decode(fullRoom);
@@ -676,36 +681,46 @@ SCHUIMM_TEST(Room_ScriptObjectWithoutRoomObjectIsAnError)
     CHECK(contains(instance.error().message, "declares object 'fridge', which room 'kitchen' does not define"));
 }
 
-SCHUIMM_TEST(Room_InvalidOrMissingScript)
+SCHUIMM_TEST(Room_ScriptMustBeInTheGameProgram)
 {
     RoomFixture fixture;
     fixture.writeImages();
     fixture.writeText(roomName, fullRoom);
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
-    // Missing .schb: found by the asset verification.
-    auto loaded = library.load(test::assetPath(roomName));
+    // No program at all: the room's script cannot run.
+    RoomLibrary none(locator);
+    auto loaded = none.load(test::assetPath(roomName));
+    REQUIRE(!loaded.has_value());
+    CHECK(loaded.error().code == ErrorCode::InvalidState);
+    CHECK(contains(loaded.error().message, "Kitchen.room.json: script 'Rooms/Kitchen/Kitchen.sch' needs the game's program"));
+    // A program without that source: the game was compiled without this room.
+    std::vector<std::unique_ptr<script::SourceFile>> files;
+    const auto programOf = [&](const char* name, script::ScriptRole role) {
+        files.push_back(std::make_unique<script::SourceFile>(name, "func enter():\n\tpass\n"));
+        const script::ProjectSource source{files.back().get(), role};
+        auto result = script::compileProject(std::span<const script::ProjectSource>(&source, 1));
+        REQUIRE(result.success);
+        auto program = script::Program::link(result.module, fixture.host.natives(), "game.schb");
+        REQUIRE(program.has_value());
+        return *program;
+    };
+    RoomLibrary other(locator, programOf("Rooms/Hall/Hall.sch", script::ScriptRole::Room));
+    loaded = other.load(test::assetPath(roomName));
     REQUIRE(!loaded.has_value());
     CHECK(loaded.error().code == ErrorCode::NotFound);
-    CHECK(contains(loaded.error().message, "Kitchen.room.json: script: asset 'Rooms/Kitchen/Kitchen.schb' not found"));
-    // Not bytecode at all.
-    fixture.writeText("Rooms/Kitchen/Kitchen.schb", "func enter():\n\tpass\n");
-    loaded = library.load(test::assetPath(roomName));
+    CHECK(contains(loaded.error().message, "script 'Rooms/Kitchen/Kitchen.sch' is not part of the program 'game.schb'; "
+                                           "recompile the game"));
+    // The source compiled in another role.
+    RoomLibrary wrongRole(locator, programOf("Rooms/Kitchen/Kitchen.sch", script::ScriptRole::Actor));
+    loaded = wrongRole.load(test::assetPath(roomName));
     REQUIRE(!loaded.has_value());
-    CHECK(contains(loaded.error().message, "Kitchen.room.json: script 'Rooms/Kitchen/Kitchen.schb' cannot be loaded"));
-    // Corrupted bytecode (checksum).
-    std::vector<std::byte> bytes = compileToBytecode(kitchenScript);
-    bytes[bytes.size() / 2] ^= std::byte{0x40};
-    fixture.writeBytes("Rooms/Kitchen/Kitchen.schb", bytes);
-    loaded = library.load(test::assetPath(roomName));
-    REQUIRE(!loaded.has_value());
-    CHECK(contains(loaded.error().message, "cannot be loaded"));
-    // A script calling a native the engine does not provide fails to link.
-    fixture.writeScript("extern func open_fridge()\nobject blender:\n\tfunc use():\n\t\topen_fridge()\n");
-    loaded = library.load(test::assetPath(roomName));
-    REQUIRE(!loaded.has_value());
-    CHECK(contains(loaded.error().message, "open_fridge"));
-    CHECK_EQ(library.scriptCount(), std::size_t{0}); // Failures are not cached.
+    CHECK(contains(loaded.error().message, "is compiled into 'game.schb' as an actor script, not as a room script"));
+    // A room without a script needs no program.
+    fixture.writeText("Rooms/Kitchen/Plain.room.json", mutated([](Json& j) { j.erase("script"); }));
+    RoomLibrary plain(locator);
+    loaded = plain.load(test::assetPath("Rooms/Kitchen/Plain.room.json"));
+    REQUIRE(loaded.has_value());
+    CHECK(loaded->script == nullptr);
 }
 
 SCHUIMM_TEST(Room_InstancesShareTheResourceAndProgram)
@@ -713,7 +728,7 @@ SCHUIMM_TEST(Room_InstancesShareTheResourceAndProgram)
     RoomFixture fixture;
     fixture.writeFullRoom();
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto first = library.load(test::assetPath(roomName));
     auto second = library.load(test::assetPath(roomName));
     REQUIRE(first.has_value());
@@ -721,7 +736,7 @@ SCHUIMM_TEST(Room_InstancesShareTheResourceAndProgram)
     CHECK(first->resource == second->resource);
     CHECK(first->script == second->script);
     CHECK_EQ(library.resourceCount(), std::size_t{1});
-    CHECK_EQ(library.scriptCount(), std::size_t{1});
+    CHECK(library.program() == fixture.program);
 
     auto a = RoomInstance::create(*first, fixture.host);
     auto b = RoomInstance::create(*second, fixture.host);
@@ -745,7 +760,7 @@ SCHUIMM_TEST(Room_InstancesHaveIndependentHandlesAndState)
     RoomFixture fixture;
     fixture.writeFullRoom();
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     REQUIRE(loaded.has_value());
     auto a = RoomInstance::create(*loaded, fixture.host).value();
@@ -795,7 +810,7 @@ SCHUIMM_TEST(Room_DispatchPassesTheObjectHandleAsSelf)
     fixture.writeFullRoom("object blender:\n\tfunc look_at():\n\t\trecord_self(self)\n"
                           "object cupboard:\n\tfunc look_at():\n\t\trecord_self(self)\n");
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     REQUIRE(loaded.has_value());
     auto a = RoomInstance::create(*loaded, fixture.host).value();
@@ -819,7 +834,7 @@ SCHUIMM_TEST(Room_DestroyingAnInstanceCancelsSpawnedCoroutines)
                           "object blender:\n\tfunc use():\n\t\tspawn hum(self)\n"
                           "object cupboard:\n\tfunc look_at():\n\t\tsay(\"A wooden cupboard.\")\n");
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     REQUIRE(loaded.has_value());
     auto a = RoomInstance::create(*loaded, fixture.host).value();
@@ -868,7 +883,7 @@ SCHUIMM_TEST(Room_DestroyingAnInstanceCancelsItsCoroutines)
     fixture.writeFullRoom("object blender:\n\tfunc use():\n\t\twait(2.0)\n\t\trecord_self(self)\n"
                           "object cupboard:\n\tfunc look_at():\n\t\tsay(\"A wooden cupboard.\")\n");
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     REQUIRE(loaded.has_value());
     auto a = RoomInstance::create(*loaded, fixture.host).value();
@@ -910,7 +925,7 @@ SCHUIMM_TEST(Room_DocumentedExampleIsValid)
     fixture.writeBytes(roomName, *json);
     fixture.writeScript(std::string(reinterpret_cast<const char*>(source->data()), source->size()));
     const AssetLocator locator = fixture.locator();
-    RoomLibrary library(locator, fixture.host);
+    RoomLibrary library(locator, fixture.program);
     auto loaded = library.load(test::assetPath(roomName));
     if (!loaded) std::fprintf(stderr, "  %s\n", loaded.error().message.c_str());
     REQUIRE(loaded.has_value());

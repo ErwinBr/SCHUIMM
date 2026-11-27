@@ -80,8 +80,6 @@ std::string describeActor(const ActorInstance& actor)
 ActorDemoListener::ActorDemoListener(Options options, const AssetLocator& assets)
     : options_(std::move(options))
     , assets_(assets)
-    , rooms_{AssetPath::parse("Rooms/Courtyard.room.json").value(), AssetPath::parse("Rooms/Hall.room.json").value(),
-             AssetPath::parse("Rooms/Garden.room.json").value()}
 {
 }
 
@@ -90,10 +88,15 @@ ActorDemoListener::~ActorDemoListener() = default;
 Status ActorDemoListener::onInitialize(Application& app)
 {
     if (app.scripts() == nullptr) return makeError(ErrorCode::InvalidArgument, "ActorDemo needs a ScriptHost");
-    // The adventure natives first: room scripts are linked against them when rooms load.
-    if (auto status = adventure_.bind(app.scripts()->natives()); !status) return status;
-    adventure_.setCamera(&camera_);
-    library_ = std::make_unique<room::RoomLibrary>(assets_, *app.scripts());
+    // The adventure natives first: the game program is linked against them when it loads.
+    auto natives = adventure::AdventureNatives::bind(app.scripts()->natives());
+    if (!natives) return std::unexpected(natives.error());
+    natives_ = std::move(*natives);
+    auto runtime = adventure::AdventureRuntime::create(*app.scripts(), *natives_, assets_,
+                                                       AssetPath::parse("ActorDemo.game.json").value(), &camera_);
+    if (!runtime) return std::unexpected(runtime.error());
+    runtime_ = std::move(*runtime);
+    rooms_ = runtime_->game().rooms;
     images_ = std::make_unique<ResourceCache<Image>>(assets_, loadImage);
     textures_ = std::make_unique<TextureCache>(app.graphics().renderer(), *images_);
     camera_.setViewport(app.graphics().presentation().virtualResolution);
@@ -112,15 +115,15 @@ void ActorDemoListener::enterRoom(Application& app, std::size_t index)
     // exists. Room destruction happens here, in onUpdate, never while scripts run.
     if (room_) app.logger().info(category, concat("Leaving room '", room_->resource().id, "'"));
     // The adventure API lets go of the room first (its pending walks and animations are
-    // cancelled), then the room cancels its coroutines.
-    adventure_.setActiveRoom(nullptr);
+    // cancelled), then the room cancels its own and its actors' coroutines.
+    runtime_->leaveRoom();
+    room_ = nullptr;
     demonstration_ = {};
-    room_.reset();
     roomTextures_ = {};
 
     roomIndex_ = index % rooms_.size();
     const AssetPath& path = rooms_[roomIndex_];
-    auto loaded = library_->load(path);
+    auto loaded = runtime_->library().load(path);
     if (!loaded) {
         app.logger().error(category, describe(loaded.error()));
         exitCode_ = 1;
@@ -133,21 +136,17 @@ void ActorDemoListener::enterRoom(Application& app, std::size_t index)
         return;
     }
     images_->unloadAll(); // The textures exist; the decoded images are not needed any more.
-    auto instance = room::RoomInstance::create(*loaded, *app.scripts());
-    if (!instance) {
-        app.logger().error(category, describe(instance.error()));
+    if (auto status = runtime_->enterRoom(path); !status) {
+        app.logger().error(category, describe(status.error()));
         exitCode_ = 1;
         return;
     }
     roomTextures_ = std::move(*textures);
-    room_ = std::move(*instance);
-    adventure_.setActiveRoom(room_.get());
+    room_ = runtime_->activeRoom();
     selected_ = 0;
-    // A room script with an "enter" function sets the room up (the courtyard starts the
-    // gardener's rounds); it runs in the next script update.
-    if (room_->script() && room_->script()->findFunction("enter")) {
-        if (auto started = room_->start("enter"); !started) app.logger().error(category, describe(started.error()));
-    }
+    // A room with a "room:" declaration sets itself up in its ready() handler (the courtyard
+    // starts the gardener's rounds); it runs in the next script update. Rooms without one ignore it.
+    if (auto started = runtime_->dispatchRoom("ready"); !started) app.logger().error(category, describe(started.error()));
     const Extent2D size = room_->resource().size;
     camera_.setBounds(RectF{0, 0, static_cast<float>(size.width), static_cast<float>(size.height)});
     const ActorInstance* hero = room_->actor("hero");
@@ -155,7 +154,7 @@ void ActorDemoListener::enterRoom(Application& app, std::size_t index)
                                         : Vec2{static_cast<float>(size.width) / 2, static_cast<float>(size.height) / 2});
     app.logger().info(category, concat("Entered room '", room_->resource().id, "' with ", room_->actors().size(),
                                        " fresh actors (", roomTextures_.size(), " textures, ",
-                                       library_->actors().actorCount(), " actor resources cached)"));
+                                       runtime_->library().actors().actorCount(), " actor resources cached)"));
     for (const ActorInstance& actor : room_->actors()) app.logger().info(category, concat("  ", describeActor(actor)));
     updateTitle(app);
 }
@@ -354,18 +353,18 @@ void ActorDemoListener::handleMouse(Application& app)
 
 void ActorDemoListener::demonstrate(Application& app)
 {
-    if (!room_ || !room_->script() || !room_->script()->findFunction("demonstrate")) {
-        app.logger().info(category, "P: this room's script has no demonstration (Tab to the courtyard)");
-        return;
-    }
     // One demonstration at a time: a running one is cancelled (and stops where it is).
     if (demonstration_.isValid()) app.scripts()->cancel(demonstration_);
-    auto started = room_->start("demonstrate");
+    auto started = runtime_->dispatchRoom("demonstrate");
     if (!started) {
         app.logger().error(category, describe(started.error()));
         return;
     }
-    demonstration_ = *started;
+    if (!started->handled) {
+        app.logger().info(category, "P: this room has no demonstration (Tab to the courtyard)");
+        return;
+    }
+    demonstration_ = started->handle;
     app.logger().info(category, "Started the scripted demonstration (clicking walks the hero and interrupts it)");
 }
 
@@ -386,9 +385,8 @@ void ActorDemoListener::onUpdate(Application& app, double deltaSeconds)
     // Movement and animation advance here; then the adventure API publishes finished and
     // cancelled walks and animations, which the ScriptHost update (after onUpdate) resumes.
     // Drawing only reads.
+    if (runtime_) runtime_->update(deltaSeconds);
     if (room_) {
-        room_->update(deltaSeconds);
-        adventure_.publish();
         if (const ActorInstance* hero = room_->actor("hero")) camera_.follow(hero->position(), deltaSeconds, 4.0f);
     }
     if (captureRequested_) {
@@ -500,12 +498,11 @@ void ActorDemoListener::onShutdown(Application& app)
     // Scripts stop before the adventure context their natives use goes away; textures before the
     // graphics device; the room before the ScriptHost.
     if (app.scripts() != nullptr) app.scripts()->stopAll();
-    adventure_.setActiveRoom(nullptr);
-    room_.reset();
+    room_ = nullptr;
+    runtime_.reset(); // Ends the game session: the room, the globals, the natives' session.
     roomTextures_ = {};
     textures_.reset();
     images_.reset();
-    library_.reset();
 }
 
 } // namespace schuimm::actordemo

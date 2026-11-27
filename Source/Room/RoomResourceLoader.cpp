@@ -49,8 +49,8 @@ public:
 
         if (const Json* script = optional(root, "script")) {
             SCHUIMM_JSON_TRY(readAssetPath(*script, "script", room.script));
-            if (room.script->extension() != ".schb") {
-                return fail("script", concat("must name a compiled script (.schb), found '", room.script->view(), "'"));
+            if (room.script->extension() != ".sch") {
+                return fail("script", concat("must name a script source (.sch), found '", room.script->view(), "'"));
             }
         }
         if (const Json* background = optional(root, "background")) {
@@ -452,7 +452,6 @@ Status verifyRoomAssets(const RoomResource& room, const AssetLocator& locator, s
         }
         return {};
     };
-    if (room.script) SCHUIMM_JSON_TRY(check(*room.script, "script"));
     if (room.background) SCHUIMM_JSON_TRY(check(*room.background, "background.image"));
     for (std::size_t i = 0; i < room.props.size(); ++i) {
         SCHUIMM_JSON_TRY(check(room.props[i].sprite, member(element("props", i), "sprite")));

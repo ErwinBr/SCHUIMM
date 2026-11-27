@@ -30,42 +30,31 @@ else()
     set(actor_demo_asset_destination "$<TARGET_FILE_DIR:ActorDemo>/Assets")
 endif()
 
-# Scripts, compiled with schuimmc at build time:
-#   * the walker's actor script: referenced by walker.actor.json (and checked to exist) but not
-#     executed (actor scripting comes later);
-#   * the courtyard's room script, which uses the adventure API: compiled with
-#     --interface adventure, as every adventure script is.
+# The game's scripts, compiled with schuimmc at build time into one program: the game resource
+# Assets/ActorDemo.game.json lists the rooms, and through them the build finds the room scripts
+# and the actors' scripts (schuimmc --game, GameBuild.h).
 set(actor_demo_scripts_dir "${CMAKE_CURRENT_BINARY_DIR}/Scripts/$<CONFIG>")
-set(actor_demo_walker_source "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Actors/Walker/walker.sch")
-set(actor_demo_walker_bytecode "${actor_demo_scripts_dir}/walker.schb")
-set(actor_demo_courtyard_source "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Rooms/Courtyard/Courtyard.sch")
-set(actor_demo_courtyard_bytecode "${actor_demo_scripts_dir}/Courtyard.schb")
+set(actor_demo_program "${actor_demo_scripts_dir}/ActorDemo.schb")
+file(GLOB_RECURSE actor_demo_script_inputs CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.sch" "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*.json")
 add_custom_command(
-    OUTPUT "${actor_demo_walker_bytecode}"
-    COMMAND "$<TARGET_FILE:schuimmc>" "${actor_demo_walker_source}" --name Actors/Walker/walker.sch
-            -o "${actor_demo_walker_bytecode}" --verify
-    DEPENDS "${actor_demo_walker_source}" schuimmc
-    COMMENT "Compiling the ActorDemo walker script"
+    OUTPUT "${actor_demo_program}"
+    COMMAND "$<TARGET_FILE:schuimmc>" --game ActorDemo.game.json --assets "${CMAKE_CURRENT_SOURCE_DIR}/Assets"
+            -o "${actor_demo_program}" --verify
+    DEPENDS ${actor_demo_script_inputs} schuimmc
+    COMMENT "Compiling the ActorDemo game scripts"
     VERBATIM)
-add_custom_command(
-    OUTPUT "${actor_demo_courtyard_bytecode}"
-    COMMAND "$<TARGET_FILE:schuimmc>" "${actor_demo_courtyard_source}" --interface adventure
-            --name Rooms/Courtyard/Courtyard.sch -o "${actor_demo_courtyard_bytecode}" --verify
-    DEPENDS "${actor_demo_courtyard_source}" schuimmc
-    COMMENT "Compiling the ActorDemo courtyard script"
-    VERBATIM)
-add_custom_target(ActorDemoScripts DEPENDS "${actor_demo_walker_bytecode}" "${actor_demo_courtyard_bytecode}")
+add_custom_target(ActorDemoScripts DEPENDS "${actor_demo_program}")
 add_dependencies(ActorDemo ActorDemoScripts)
-set_property(TARGET ActorDemo APPEND PROPERTY LINK_DEPENDS "${actor_demo_walker_bytecode}" "${actor_demo_courtyard_bytecode}")
+set_property(TARGET ActorDemo APPEND PROPERTY LINK_DEPENDS "${actor_demo_program}")
 
 # Deploy the assets where the executable looks for them, replaced on every build.
 add_custom_command(TARGET ActorDemo POST_BUILD
     COMMAND "${CMAKE_COMMAND}" -E rm -rf "${actor_demo_asset_destination}"
     COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/Assets" "${actor_demo_asset_destination}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${actor_demo_walker_bytecode}"
-            "${actor_demo_asset_destination}/Actors/Walker/walker.schb"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${actor_demo_courtyard_bytecode}"
-            "${actor_demo_asset_destination}/Rooms/Courtyard/Courtyard.schb"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${actor_demo_asset_destination}/Scripts"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${actor_demo_program}"
+            "${actor_demo_asset_destination}/Scripts/ActorDemo.schb"
     COMMAND "${CMAKE_COMMAND}" -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/LocalAssets
             -DDESTINATION=${actor_demo_asset_destination}
             -P "${CMAKE_CURRENT_SOURCE_DIR}/Tools/deploy_local_assets.cmake"

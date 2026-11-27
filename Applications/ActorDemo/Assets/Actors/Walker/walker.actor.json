@@ -1,7 +1,7 @@
 {
   "version": 1,
   "id": "walker",
-  "script": "Actors/Walker/walker.schb",
+  "script": "Actors/Walker/walker.sch",
   "animation_resources": {
     "main": "Actors/Walker/walker.anim.json"
   },

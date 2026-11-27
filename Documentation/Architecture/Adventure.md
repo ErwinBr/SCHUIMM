@@ -8,7 +8,9 @@ mechanics. The VM, the compiler and the scheduler stay generic. They see natives
 | Library | Depends on | Contents |
 |---|---|---|
 | `schuimm_adventure_api` | script bytecode | `adventureInterface()`: the declarations of every adventure function and of `enum Direction` |
-| `schuimm_adventure` | room, graphics (`Camera2D`, no graphics API), script runtime, adventure_api | `AdventureContext`: the implementations, entity resolution, operation tokens |
+| `schuimm_game_resource` | resource | `GameResource`: the game resource (`*.game.json`) |
+| `schuimm_game_build` | compiler, room, game_resource, adventure_api | the game build: source discovery and project compilation (tools only) |
+| `schuimm_adventure` | room, graphics (`Camera2D`, no graphics API), script runtime, adventure_api, game_resource | `AdventureContext`: the implementations, entity resolution, operation tokens; `AdventureNatives` and `AdventureRuntime`: the game session |
 
 ## The interface and the build
 
@@ -17,8 +19,8 @@ The adventure API is a [native interface](../Scripting/Runtime.md#native-interfa
 - **Compiler:** it reads the declarations (`schuimmc --interface adventure`, or
   `CompileOptions::interfaces`), so room scripts call `walk_to` or use `Direction.SOUTH` without
   declaring them.
-- **Runtime:** `AdventureContext::bind(registry)` binds the implementations to the same
-  declarations.
+- **Runtime:** `AdventureNatives::bind(registry)` binds the implementations to the same
+  declarations (`AdventureContext::bind` for tests that drive a context directly).
 - **Linking:** checks the signatures and the identity of `adventure.Direction`.
 
 The compiler links only `schuimm_adventure_api`, which holds declarations and no engine code.
@@ -44,9 +46,10 @@ adventure.setCamera(&camera);
 - **Lifetime.**
   - Destroying the context detaches it from the room, so the room never reports to a dead
     listener.
-  - The bound natives capture the context, so it must outlive every coroutine that can call
-    them: stop or destroy the `ScriptHost` first. The full ownership model (rooms, modules,
-    actors, contexts) is part of Milestone 4.4 Part II.
+  - A game binds through `AdventureNatives`, which gives the natives shared ownership of the
+    context ([Game sessions](#game-sessions-adventureruntime)). Bound directly with
+    `AdventureContext::bind`, the natives capture the context, which must then outlive every
+    coroutine that can call them.
 - **Headless.** No graphics device is involved; the tests run it without a window.
 
 ### Record, deliver, execute
@@ -67,9 +70,9 @@ its waiter, and the same holds for a finished playback followed by another playb
 
 Once per frame, in the game's `onUpdate`, followed by the application's script update:
 
-1. input and pending requests;
+1. input and pending requests (and room changes: `enterRoom`, `leaveRoom`);
 2. `room.update(dt)`: movement, then animation playback (outcomes are recorded here);
-3. `adventure.publish()`: delivers the recorded outcomes;
+3. `adventure.publish()`: delivers the recorded outcomes (`AdventureRuntime::update` does 2 and 3);
 4. `ScriptHost::update(dt)`, run by `Application` after `onUpdate`: resumed coroutines continue;
 5. rendering, which only reads.
 
@@ -82,6 +85,95 @@ Consequences:
   recorded at once:
   - a later `wait(op)` in the same coroutine sees the outcome immediately;
   - coroutines that are already waiting are notified at the next `publish()`.
+
+## Game sessions: AdventureRuntime
+
+A running game is one **game session**: the scripts of the whole game compiled into one program
+([Compiler.md](../Scripting/Compiler.md#project-compilation)), its global variables, and the room
+the player is in. `AdventureRuntime` (`Adventure/AdventureRuntime.h`) owns it and fixes the order
+in which its parts are created and destroyed.
+
+```cpp
+// Once, when the ScriptHost is created: the adventure API in its native registry.
+auto natives = adventure::AdventureNatives::bind(host.natives()).value();
+
+// A game session from the game resource (GameResource.h).
+auto game = adventure::AdventureRuntime::create(host, natives, locator,
+                                                AssetPath::parse("Kitchen.game.json").value(), &camera).value();
+game->enterRoom(AssetPath::parse("Rooms/Kitchen/Kitchen.room.json").value());
+game->dispatchRoom("init");          // the room's "room:" handlers
+game->dispatchRoom("ready");
+game->dispatchObject("oven", "use"); // an object's handler
+game->dispatchActor("cook", "talk_to");
+game->start("intro");                // a global function, owned by the session
+
+// Every frame, in onUpdate (then the Application updates the ScriptHost):
+game->update(deltaSeconds);          // room update, then publish
+```
+
+| Part | Owned by | Lives |
+|---|---|---|
+| `AdventureNatives` (natives and the `AdventureContext` they act on) | the game, created once per `ScriptHost` | as long as the natives are registered; the context is shared by the natives, so no native can reach a destroyed context |
+| program (`script::Program`) | the runtime (and every coroutine running it) | one session |
+| global variables (`GlobalState`) | the runtime | one session: initialised once, they survive every room change |
+| `RoomLibrary` | the runtime | one session (cached resources) |
+| the active `RoomInstance`, its objects and actors, their behaviour instances | the runtime | from `enterRoom` until the next `enterRoom` or `leaveRoom` |
+| session coroutines (`start`) | the session's execution owner | until they end, or the session ends |
+
+- **Natives without a session** fail with "no adventure game session is running". Only one
+  session uses a binding at a time; a second `create` fails with `InvalidState`. A new runtime
+  is a new game: every global starts again at its initial value.
+- **enterRoom(room)** accepts only rooms of the game resource. It creates the new instance with
+  every object and actor first (all or nothing: on failure the current room stays). Then it
+  destroys the previous room and makes the new one active. Nothing is dispatched
+  automatically.
+- **Destroying a room** cancels its pending operations ("destroyed"), the coroutines it started
+  (room and object handlers) and those of each of its actors, also when they are running a
+  global function they called or spawned, and it expires the behaviour instances. The globals
+  and the session's coroutines are untouched.
+- **Destroying the runtime** cancels the session's coroutines, destroys the room and detaches
+  from the natives. Suspended coroutines and pending walks are cleaned up safely.
+- **References** to entities of a destroyed room stay invalid: a global holding an old actor
+  reference does not refer to the new actor with the same placement id (handles are never
+  reused).
+- Rooms are entered and left, and the runtime is destroyed, **between frames only**, never while
+  the `ScriptHost` updates (checked in every build).
+
+### Coroutine ownership
+
+Who started a coroutine decides who owns it, not the file of the function it runs:
+
+| Started by | Owner | Cancelled when |
+|---|---|---|
+| `dispatchRoom`, `dispatchObject`, `RoomInstance::start` | the room instance | the room is destroyed |
+| `dispatchActor` | that actor | its room is destroyed |
+| `AdventureRuntime::start` | the session | the session ends |
+
+A spawned coroutine has its spawner's owner. A room handler that spawns the global function
+`delayed_reward()` gives the room a coroutine that ends with the room. The same function started
+with `start()` survives room changes.
+
+### Room lifecycle handlers
+
+`init`, `ready` and `exit` are the room handler names of the intended room lifecycle (a later
+milestone): instantiate the room, initialise script state, `init` prepares the scene before it is
+shown (it should not suspend), reveal the scene, `ready` begins visible behaviour, `exit` runs on
+departure; then remaining room and actor coroutines are cancelled and the room is destroyed.
+Today nothing dispatches them automatically: the game calls `dispatchRoom("init")` and so on
+itself. When `init` runs, every object and actor of the room exists. Transitions, input gating
+and checking that `init` does not suspend are future work.
+
+### The game build
+
+The build compiles a game's scripts with `schuimmc --game Game.game.json --assets DIR -o
+Game.schb` (`Adventure/GameBuild.h`):
+- the global scripts of the game resource;
+- the script of each listed room;
+- the script of each actor resource its placements use, each source once.
+
+ActorDemo does it at build time (`Applications/ActorDemo/CMakeLists.txt`). A future DevKit calls
+`compileGame(locator, game)` the same way and gets the program and the diagnostics with their
+files.
 
 ## Entity references
 
@@ -212,19 +304,23 @@ func patrol(gardener: actor):
 		wait(1.5)
 		walk_to(gardener, vec2(120, 260))
 
-func demonstrate():
-	var hero: actor = get_actor("hero")
-	var gardener: actor = get_actor("gardener")
-	var fan: object = get_object("fan")
-	var patrol_task: coroutine = spawn patrol(gardener)   # runs alongside
-	walk_to(hero, vec2(800, 150))          # the balcony: walks to the nearest reachable point
-	walk_to(hero, get_position(fan) + vec2(-36, 24))
-	set_direction(hero, Direction.EAST)
-	wait(play_animation(hero, "press_button"))   # a non-looping animation
-	play_animation(fan, "spinning")              # loops on its own; never waited for
-	spawn walk_to(hero, vec2(320, 480))          # a native, spawned directly
-	cancel(patrol_task)                          # the gardener stops where it is
-	set_position(gardener, get_position(hero) + vec2(70, 0))
+room:
+	func ready():
+		spawn patrol(get_actor("gardener"))   # owned by the room: ends when it is left
+
+	func demonstrate():
+		var hero: actor = get_actor("hero")
+		var gardener: actor = get_actor("gardener")
+		var fan: object = get_object("fan")
+		var patrol_task: coroutine = spawn patrol(gardener)   # runs alongside
+		walk_to(hero, vec2(800, 150))          # the balcony: walks to the nearest reachable point
+		walk_to(hero, get_position(fan) + vec2(-36, 24))
+		set_direction(hero, Direction.EAST)
+		wait(play_animation(hero, "press_button"))   # a non-looping animation
+		play_animation(fan, "spinning")              # loops on its own; never waited for
+		spawn walk_to(hero, vec2(320, 480))          # a native, spawned directly
+		cancel(patrol_task)                          # the gardener stops where it is
+		set_position(gardener, get_position(hero) + vec2(70, 0))
 
 object fan:
 	func use():
@@ -234,20 +330,22 @@ object fan:
 			play_animation(self, "spinning")
 ```
 
-ActorDemo calls the room's functions and handlers from C++:
-- `room.start("enter")` when the room is entered;
-- `room.start("demonstrate")` on P;
-- `room.dispatch("fan", "use")` on F.
+ActorDemo runs it through its game session (`AdventureRuntime`) and dispatches from C++:
+- `dispatchRoom("ready")` when a room is entered (rooms without that handler ignore it);
+- `dispatchRoom("demonstrate")` on P;
+- `dispatchObject("fan", "use")` on F.
+
+The walker actors of the hall and garden run their actor script, `walker.sch`.
 
 There is no mouse-driven interaction dispatch yet. A headless test runs this script to the end
 on the demo's own assets (`Adventure_TheDemoCourtyardScriptRunsToTheEnd`).
 
-## Not in this milestone (Part II and later)
+## Not in this milestone
 
-Script modules and global variables, cross-script calls, actor scripts and actor-local or
-object-local state, room transitions, joining coroutines, dialogue, inventory, verbs and mouse
-interaction, forced (direct) movement and smooth camera movement are planned. None of them exist
-yet; scripts are one file per room, and all state lives in the engine.
+The automatic room lifecycle and room transitions, joining coroutines, dialogue, inventory and
+inventory scripts, verbs and mouse interaction, calling another entity's handlers from a script,
+saving games, forced (direct) movement and smooth camera movement are planned. None of them
+exist yet.
 
 ## Tests
 
@@ -282,4 +380,18 @@ interface) covers:
   waiters at publish);
 - destroying the active room, or the context, without detaching first;
 - 20 000 spawned coroutines reclaimed, with bounded scheduler storage;
-- the ActorDemo courtyard script running to its end on the demo's assets.
+- the ActorDemo game, compiled by the game build and run by an `AdventureRuntime`: the courtyard
+  script to its end, then the hall's walkers running their actor script.
+
+`Tests/Adventure/RuntimeTests.cpp` (headless, a game of global, room and actor scripts compiled
+by the game build) covers the game session:
+- source discovery (each source once, conflicts) and the game resource's validation;
+- globals that persist while rooms are destroyed and recreated, global functions of an inactive
+  room;
+- room, object and actor variables: per instance, reset with the room;
+- `init` seeing every entity;
+- coroutine ownership: room- and actor-owned global functions cancelled with the room, session
+  coroutines surviving;
+- old references staying invalid after a room is recreated;
+- a new session starting afresh after one ended with suspended coroutines and a pending walk;
+- natives without a session, a second session, unknown rooms, a missing or broken program.

@@ -236,6 +236,11 @@ void AdventureContext::publish()
 
 Status AdventureContext::bind(script::NativeRegistry& registry)
 {
+    return registry.bind(adventureInterface(), implementations());
+}
+
+std::unordered_map<std::string, script::NativeImplementation> AdventureContext::implementations()
+{
     using Arguments = std::span<const Value>;
     std::unordered_map<std::string, script::NativeImplementation> natives;
     const auto entityOrFail = [this](const Value& value) { return resolve(value); };
@@ -388,7 +393,7 @@ Status AdventureContext::bind(script::NativeRegistry& registry)
         camera_->setZoom(*zoom);
         return NativeResult::returnValue();
     };
-    return registry.bind(adventureInterface(), std::move(natives));
+    return natives;
 }
 
 } // namespace schuimm::adventure

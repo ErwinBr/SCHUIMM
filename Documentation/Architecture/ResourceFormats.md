@@ -1,12 +1,43 @@
 # Resource formats and compatibility
 
 SCHUIMM's authored resource formats are JSON:
+- games ([below](#the-game-resource));
 - rooms ([Rooms.md](Rooms.md));
 - actors ([Actors.md](Actors.md));
 - animations ([Animation.md](Animation.md)).
 
-All three are read with the shared decoder in `Resource/Json` ([Resources.md](Resources.md#json-resource-formats-resourcejson)).
-Compiled scripts are a generated binary format ([Bytecode.md](../Scripting/Bytecode.md)).
+All of them are read with the shared decoder in `Resource/Json` ([Resources.md](Resources.md#json-resource-formats-resourcejson)).
+Script sources (`.sch`) are text; the compiled game program is a generated binary format
+([Bytecode.md](../Scripting/Bytecode.md)).
+
+## The game resource
+
+`*.game.json` (`Adventure/GameResource.h`) configures a game's scripting environment, nothing
+else (no display, input, save or packaging settings):
+
+```json
+{
+  "version": 1,
+  "id": "kitchen_demo",
+  "program": "Scripts/Game.schb",
+  "global_scripts": ["Scripts/Global.sch", "Scripts/Interface.sch"],
+  "rooms": ["Rooms/Kitchen/Kitchen.room.json", "Rooms/Garden/Garden.room.json"]
+}
+```
+
+| Property | Type | Rules |
+|---|---|---|
+| `version` | integer, **required** | must be `1` |
+| `id` | identifier, **required** | the game's name |
+| `program` | asset path, **required** | the compiled program (`.schb`): the build writes it, the runtime loads it |
+| `global_scripts` | array of asset paths | script sources (`.sch`) with game-wide declarations only; no duplicates |
+| `rooms` | array of asset paths, **required** | the game's room resources (`.json`), at least one, no duplicates; the runtime enters only these |
+
+Room scripts and actor scripts are not listed: the build finds them through the rooms (their
+`script`) and their actor placements (the actor resources' `script`), each source once
+([Adventure.md](Adventure.md#the-game-build)). One file serves both sides: the build reads the
+sources and writes `program`; the shipped runtime reads `program` and `rooms` only and never
+compiles anything.
 
 ## Pre-release resource format and compatibility policy
 

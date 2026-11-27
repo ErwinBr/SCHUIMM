@@ -62,8 +62,7 @@ struct Scene {
         const AnimationResolver resolver = [shared](const AssetPath&) -> Result<std::shared_ptr<const animation::AnimationResource>> {
             return shared;
         };
-        const AssetCheck noScripts = [](const AssetPath&) -> Status { return {}; };
-        auto actor = decodeActorResource(bytesOf(actorText), "blob.actor.json", resolver, noScripts);
+        auto actor = decodeActorResource(bytesOf(actorText), "blob.actor.json", resolver);
         REQUIRE(actor.has_value());
         const auto actorResource = std::make_shared<const ActorResource>(std::move(*actor));
 

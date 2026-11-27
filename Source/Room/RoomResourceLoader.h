@@ -22,8 +22,9 @@ namespace schuimm::room {
 // Parses and validates a room resource (UTF-8 JSON). `sourceName` names it in error messages.
 [[nodiscard]] Result<RoomResource> decodeRoomResource(std::span<const std::byte> data, std::string_view sourceName);
 
-// Checks that the background, every sprite and the script exist as regular files below the
-// asset root. Fails with the first missing one.
+// Checks that the background and every sprite exist as regular files below the asset root. Fails
+// with the first missing one. The script is a source path, not a shipped file: the game program
+// holds its compiled form.
 [[nodiscard]] Status verifyRoomAssets(const RoomResource& room, const AssetLocator& locator, std::string_view sourceName);
 
 // Reads, decodes and verifies `asset`: the loader for ResourceCache<RoomResource>.

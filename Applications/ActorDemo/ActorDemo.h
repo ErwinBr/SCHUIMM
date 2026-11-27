@@ -6,14 +6,17 @@
 // (Assets/Rooms/Courtyard/Courtyard.sch) that drives the gardener's rounds and a demonstration
 // of the adventure API (P); the hall and garden show actors and animation.
 //
-// Frame order (Adventure.md): input -> room update -> adventure publish -> (Application) scripts
-// -> render.
+// The game is Assets/ActorDemo.game.json: its scripts are compiled into one program at build time
+// (schuimmc --game) and run by an AdventureRuntime, the game session.
 //
-// Rooms are entered the way a game will: the current room instance is destroyed first, then the
-// next one is created from its (cached, immutable) resources, so its actors start from their
-// authored placements every time. See Documentation/Architecture/ManualTesting.md for the keys.
+// Frame order (Adventure.md): input -> AdventureRuntime::update (room update, publish) ->
+// (Application) scripts -> render.
+//
+// Rooms are entered the way a game will: the current room instance is destroyed, and the next one
+// is created from its (cached, immutable) resources, so its actors start from their authored
+// placements every time; the global variables of the game session stay. See Documentation/Architecture/ManualTesting.md for the keys.
 
-#include "Adventure/AdventureContext.h"
+#include "Adventure/AdventureRuntime.h"
 #include "Core/Application/ApplicationListener.h"
 #include "Core/Image/Image.h"
 #include "Graphics/Common/Camera2D.h"
@@ -85,16 +88,16 @@ private:
     std::size_t roomIndex_ = 0;
     std::size_t selected_ = 0;
 
-    std::unique_ptr<room::RoomLibrary> library_;
     std::unique_ptr<ResourceCache<Image>> images_;
     std::unique_ptr<TextureCache> textures_;
     room::RoomTextures roomTextures_;
-    std::unique_ptr<room::RoomInstance> room_;
 
     Camera2D camera_;
-    // The adventure API's view of the game: the active room and the camera (bound to the
-    // ScriptHost's natives in onInitialize, before any room script is loaded).
-    adventure::AdventureContext adventure_;
+    // The adventure API, bound to the ScriptHost's natives once (onInitialize), and the game
+    // session that uses it: the program, the global variables and the active room.
+    std::optional<adventure::AdventureNatives> natives_;
+    std::unique_ptr<adventure::AdventureRuntime> runtime_;
+    room::RoomInstance* room_ = nullptr; // The runtime's active room.
     script::CoroutineHandle demonstration_;
     bool debug_ = false;
 

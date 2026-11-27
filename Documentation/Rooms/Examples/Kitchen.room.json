@@ -2,7 +2,7 @@
     "version": 1,
     "id": "kitchen",
     "size": { "width": 2560, "height": 1440 },
-    "script": "Rooms/Kitchen/Kitchen.schb",
+    "script": "Rooms/Kitchen/Kitchen.sch",
     "background": { "image": "Rooms/Kitchen/Assets/background.png" },
     "props": [
         {

@@ -82,8 +82,8 @@ struct ResolvedActorClip {
 
 struct ActorResource {
     std::string id;
-    // Compiled actor script, checked to exist. Not loaded or executed yet (actor scripting is a
-    // later milestone); kept so scripting can be connected without changing the format.
+    // The actor's script source (.sch): its "actor:" declaration is the behaviour of every actor
+    // using this resource, found in the game program by this path.
     std::optional<AssetPath> script;
     std::map<std::string, ActorAnimationResource, std::less<>> animationResources;
     std::map<std::string, ActorAnimation, std::less<>> animations;

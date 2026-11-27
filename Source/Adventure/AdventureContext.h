@@ -47,6 +47,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace schuimm::adventure {
@@ -64,8 +65,11 @@ public:
     AdventureContext& operator=(const AdventureContext&) = delete;
 
     // Binds every function of adventureInterface() to this context. Fails if the registry already
-    // has one of the names (e.g. bound twice).
+    // has one of the names (e.g. bound twice). A game binds through AdventureNatives instead, which
+    // keeps the context alive and ties it to the game session.
     [[nodiscard]] Status bind(script::NativeRegistry& registry);
+    // The implementations bind() registers (they refer to this context).
+    [[nodiscard]] std::unordered_map<std::string, script::NativeImplementation> implementations();
 
     // The room the natives act on (nullptr: none; lookups give null references and other
     // natives fail). Changing it cancels every pending operation of the previous room

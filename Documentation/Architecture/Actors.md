@@ -44,7 +44,7 @@ its clips and images are in the same folder.
 {
     "version": 1,
     "id": "walker",
-    "script": "Actors/Walker/walker.schb",
+    "script": "Actors/Walker/walker.sch",
     "animation_resources": { "main": "Actors/Walker/walker.anim.json" },
     "animations": {
         "idle": {
@@ -66,7 +66,7 @@ its clips and images are in the same folder.
 |---|---|---|
 | `version` | integer, **required** | must be `1` (formats are provisional before release: [ResourceFormats.md](ResourceFormats.md)) |
 | `id` | identifier, **required** | names the actor *definition*, not an instance |
-| `script` | asset path | a compiled script (`.schb`); it must exist. See [Scripts](#scripts). |
+| `script` | asset path | the actor script source (`.sch`): its `actor:` declaration is the behaviour of every actor using this resource. See [Scripts](#scripts). |
 | `animation_resources` | object, **required** | at least one; a local name (identifier) maps to an `*.anim.json` asset |
 | `animations` | object, **required** | at least one; logical animation name (identifier) to its facing mappings |
 | `default_animation` | identifier, **required** | must be one of `animations` |
@@ -496,27 +496,36 @@ graphics:
 
 ## Scripts
 
-Room scripts define the room and its objects. Actor scripts will define actor behaviour
-independently of the room an actor is in, and a room script never handles an actor's events.
+Room scripts define the room and its objects. **Actor scripts** define actor behaviour independently
+of the room an actor is in ([Language.md §8](../Scripting/Language.md#8-behaviours-rooms-actors-and-objects)):
 
-**What exists now:**
-- An actor resource's `script` reference is checked to exist and is kept on the resource
-  (`ActorResource::script`). It is not loaded or executed.
+```python
+# Actors/Cook/Cook.sch, referred to by cook.actor.json
+var cook_has_been_greeted: bool = False   # global: shared by the whole game
+
+actor:
+	var conversations: int = 0            # this actor's own
+	func talk_to():
+		conversations += 1
+		set_direction(self, Direction.SOUTH)
+```
+
+- **One behaviour per resource:** the actor resource's `script` names a source of the game
+  program; its `actor:` declaration applies to every placement of the resource, in any room.
+  Two guards placed as `guard_west` and `guard_east` share the script but have their own `self`
+  and their own instance variables.
+- **Dispatch:** `RoomInstance::dispatchActor(id, event, arguments)` (or
+  `AdventureRuntime::dispatchActor`) runs the handler with the actor as `self`. A missing handler
+  does nothing; arguments that do not match are an error. Event names are the designer's.
+- **Coroutine ownership:** each actor of a room instance has its own execution owner. Its
+  handlers' coroutines, and what they call or spawn, belong to it and end with its room, like
+  the room's own. Holding an actor reference does not imply ownership.
+- **State:** an actor's instance variables, its position, facing and animation exist as long as
+  its room instance. A new instance of the room starts from the authored placements and from the
+  variables' initial values; what must last goes in global variables.
 - Room-script linking is unchanged: an `object` declaration must match a room *object*. An actor
-  placement with the same id does not satisfy it.
-
-**Planned:**
-- **Dispatch:** actor events will be dispatched to the actor's own script, with designer-defined
-  event names. A missing handler means no action. An existing handler with the wrong signature
-  is an error.
-- **Coroutine ownership:**
-  - coroutines started by a room or for its objects end with the room (already the case);
-  - actor handler coroutines will end with their actor, which here means with its room;
-  - global coroutines with the game session.
-  - Holding a handle does not imply ownership.
-- **Language:** the syntax for actor handlers, the implicit actor context and global state belongs
-  to the adventure-scripting milestone. Until then there are no actor-specific script types or
-  functions, and the language and bytecode are unchanged.
+  placement with the same id does not satisfy it, and room scripts cannot declare actor
+  handlers.
 
 ## Not included
 
@@ -525,7 +534,7 @@ independently of the room an actor is in, and a room script never handles an act
 - **Story and game flow:** inventory, dialogue, lip sync, room transitions.
 - **Persistence:** persistent or off-screen actors, actor managers or registries, cross-room
   validation, save and load.
-- **Scripting:** actor script execution and any script-facing actor functions.
+- **Scripting:** persistent actors across rooms, calling another actor's handlers from a script.
 - **Animation:** events, blending, state machines, composite or skeletal actors.
 
 ## Demo and tests

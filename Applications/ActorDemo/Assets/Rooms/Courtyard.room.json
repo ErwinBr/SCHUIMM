@@ -2,7 +2,7 @@
   "version": 1,
   "id": "courtyard",
   "size": { "width": 960, "height": 540 },
-  "script": "Rooms/Courtyard/Courtyard.schb",
+  "script": "Rooms/Courtyard/Courtyard.sch",
   "background": { "image": "Rooms/Courtyard/background.png" },
   "props": [
     { "id": "column_left", "sprite": "Rooms/Courtyard/column.png", "position": [640, 262], "pivot": [14, 128] },

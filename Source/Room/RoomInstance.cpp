@@ -80,19 +80,35 @@ RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::share
         objects_.back().events_ = &events_; // After the copy into the vector (copies report nothing).
     }
     objectScripts_.resize(objects_.size());
-    if (room_.script) {
-        if (const auto behaviour = room_.script->findBehaviour(script::BehaviourKind::Room, {})) {
+    actorScripts_.resize(actors_.size());
+    for (std::size_t i = 0; i < actors_.size(); ++i) {
+        actorOwners_.push_back(host_.createOwner());
+    }
+    if (room_.script && room_.resource->script) {
+        const std::string_view source = room_.resource->script->view();
+        if (const auto behaviour = room_.script->findBehaviour(script::BehaviourKind::Room, source)) {
             auto instance = script::BehaviourInstance::create(globals_, *behaviour);
             SCHUIMM_ASSERT(instance.has_value(), "the room behaviour instance of the room's own script");
             if (instance) roomScript_ = std::move(*instance);
         }
         for (std::size_t i = 0; i < objects_.size(); ++i) {
-            const auto behaviour = room_.script->findBehaviour(script::BehaviourKind::Object, {}, objects_[i].id());
+            const auto behaviour = room_.script->findBehaviour(script::BehaviourKind::Object, source, objects_[i].id());
             if (!behaviour) continue;
             auto instance = script::BehaviourInstance::create(globals_, *behaviour, script::Value::fromObject(objects_[i].handle()));
             SCHUIMM_ASSERT(instance.has_value(), "an object behaviour instance of the room's own script");
             if (instance) objectScripts_[i] = std::move(*instance);
         }
+    }
+    // Each actor runs its actor resource's "actor:" behaviour, as itself: its own instance
+    // variables, its own execution owner.
+    for (std::size_t i = 0; i < actors_.size() && room_.script; ++i) {
+        const ActorResource& resource = *room_.actors[i];
+        if (!resource.script) continue;
+        const auto behaviour = room_.script->findBehaviour(script::BehaviourKind::Actor, resource.script->view());
+        if (!behaviour) continue; // An actor script without an "actor:" declaration.
+        auto instance = script::BehaviourInstance::create(globals_, *behaviour, script::Value::fromActor(actors_[i]->handle()));
+        SCHUIMM_ASSERT(instance.has_value(), "an actor behaviour instance of the actor's own script");
+        if (instance) actorScripts_[i] = std::move(*instance);
     }
     for (const std::unique_ptr<ActorInstance>& actor : actors_) actor->events_ = &events_;
 }
@@ -109,6 +125,10 @@ RoomInstance::~RoomInstance()
     }
     // Everything the room started, and everything those coroutines spawned.
     host_.cancelOwner(owner_);
+    for (const script::ExecutionOwner owner : actorOwners_) host_.cancelOwner(owner);
+    for (const std::shared_ptr<script::BehaviourInstance>& instance : actorScripts_) {
+        if (instance) instance->expire();
+    }
     for (const std::shared_ptr<script::BehaviourInstance>& instance : objectScripts_) {
         if (instance) instance->expire();
     }
@@ -434,6 +454,38 @@ Result<script::CoroutineHandle> RoomInstance::start(std::string_view function, s
     return host_.start(globals_, function, std::move(arguments), owner_);
 }
 
-std::size_t RoomInstance::activeCoroutineCount() const { return host_.activeCount(owner_); }
+std::size_t RoomInstance::activeCoroutineCount() const
+{
+    std::size_t count = host_.activeCount(owner_);
+    for (const script::ExecutionOwner owner : actorOwners_) count += host_.activeCount(owner);
+    return count;
+}
+
+std::shared_ptr<script::BehaviourInstance> RoomInstance::actorScript(std::string_view actorId) const
+{
+    for (std::size_t i = 0; i < actors_.size(); ++i) {
+        if (actors_[i]->id() == actorId) return actorScripts_[i];
+    }
+    return nullptr;
+}
+
+script::ExecutionOwner RoomInstance::actorOwner(std::string_view actorId) const
+{
+    for (std::size_t i = 0; i < actors_.size(); ++i) {
+        if (actors_[i]->id() == actorId) return actorOwners_[i];
+    }
+    return script::noExecutionOwner;
+}
+
+Result<script::DispatchResult> RoomInstance::dispatchActor(std::string_view actorId, std::string_view event,
+                                                           std::vector<script::Value> arguments)
+{
+    for (std::size_t i = 0; i < actors_.size(); ++i) {
+        if (actors_[i]->id() != actorId) continue;
+        if (!actorScripts_[i]) return script::DispatchResult{};
+        return host_.dispatch(actorScripts_[i], event, std::move(arguments), actorOwners_[i]);
+    }
+    return makeError(ErrorCode::NotFound, concat("room '", resource().id, "' has no actor '", actorId, "'"));
+}
 
 } // namespace schuimm::room

@@ -1,6 +1,7 @@
-# The room script of Kitchen.room.json, compiled at build time with
-#   schuimmc Kitchen.sch -o Kitchen.schb
-# and referenced by the room resource as "Rooms/Kitchen/Kitchen.schb".
+# The room script of Kitchen.room.json, which refers to it as "Rooms/Kitchen/Kitchen.sch". The
+# build compiles it with the game's other scripts into the game's program (schuimmc --game); on
+# its own it can be checked with
+#   schuimmc Kitchen.sch
 #
 # Each "object NAME:" names an object of the room resource ("blender", "cupboard"). The room's
 # third object, "window", has no declaration: it is valid and simply has no handlers.
