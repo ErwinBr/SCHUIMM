@@ -386,7 +386,9 @@ SCHUIMM_TEST(Variables_InstanceCodeNeedsItsInstance)
     REQUIRE(registerStandardNatives(natives, {}).has_value());
     auto program = Program::link(project.result.module, natives);
     REQUIRE(program.has_value());
-    auto coroutine = Coroutine::createHandler(*program, "box", "use", ObjectRef{4}, {});
+    const auto behaviour = (*program)->findBehaviour(BehaviourKind::Object, {}, "box");
+    REQUIRE(behaviour.has_value());
+    auto coroutine = Coroutine::createCall(*program, *(*program)->findHandler(*behaviour, "use"), {});
     REQUIRE(coroutine.has_value());
     NativeContext context;
     const RunResult result = runCoroutine(**coroutine, 1000, context);

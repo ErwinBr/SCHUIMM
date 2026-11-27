@@ -41,6 +41,7 @@ inline constexpr VReg noVReg = 0xFFFFFFFFu;
     X(LoadGlobal, 0, true, false)                                                                   \
     X(StoreGlobal, 1, false, false)                                                                 \
     X(LoadInstance, 0, true, false)                                                                 \
+    X(LoadSelf, 0, true, false)                                                                     \
     X(StoreInstance, 1, false, false)                                                               \
     X(Move, 1, true, false)                                                                         \
     X(NegInt, 1, false, true)                                                                       \
@@ -161,9 +162,8 @@ struct IrBlock {
 
 inline constexpr std::uint32_t noBehaviour = 0xFFFFFFFFu;
 
-// A function. Block 0 is the entry; a block's id is its index. Parameters are r0..rn-1; for an
-// object handler r0 is the hidden "self" parameter (type object), followed by the declared
-// parameters.
+// A function. Block 0 is the entry; a block's id is its index. Parameters are r0..rn-1 (a
+// handler's self is not a parameter: LoadSelf reads it from the instance it runs for).
 struct IrFunction {
     std::string name;
     std::uint32_t source = noSource;       // Index into IrModule::sources; noSource if generated.

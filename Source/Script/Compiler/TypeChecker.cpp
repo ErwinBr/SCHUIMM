@@ -535,14 +535,37 @@ private:
     {
         const SourceUnitInput& input = units_[u];
         std::unordered_map<std::string, SourceRange> objectNames;
-        for (const auto& declaration : input.unit->objects) {
-            const ObjectDecl& object = *declaration;
-            if (input.role != ScriptRole::Room) {
-                error(object.nameRange, concat("Object declarations belong in room scripts; this is ",
-                                               input.role == ScriptRole::Actor ? "an actor" : "a global", " script."),
+        const SourceRange* roomDeclaration = nullptr;
+        const SourceRange* actorDeclaration = nullptr;
+        const char* const roleName = input.role == ScriptRole::Actor  ? "an actor"
+                                     : input.role == ScriptRole::Room ? "a room"
+                                                                      : "a global";
+        for (const auto& declaration : input.unit->behaviours) {
+            const BehaviourDecl& object = *declaration;
+            if (object.kind == BehaviourKind::Room || object.kind == BehaviourKind::Actor) {
+                const bool room = object.kind == BehaviourKind::Room;
+                const ScriptRole expected = room ? ScriptRole::Room : ScriptRole::Actor;
+                const SourceRange*& previous = room ? roomDeclaration : actorDeclaration;
+                if (input.role != expected) {
+                    error(object.nameRange, concat("'", room ? "room" : "actor", ":' declarations belong in ",
+                                                   room ? "room" : "actor", " scripts; this is ", roleName, " script."),
+                          {room ? "A room's behaviour is declared in the script its room resource refers to."
+                                : "An actor's behaviour is declared in the script its actor resource refers to; room "
+                                  "scripts cannot declare actor handlers."});
+                } else if (previous != nullptr) {
+                    error(object.nameRange, concat("A script has at most one '", room ? "room" : "actor", ":' declaration."),
+                          {concat("The first one is on line ", previous->begin.line, "; put all its handlers and "
+                                  "variables there.")});
+                } else {
+                    previous = &object.nameRange;
+                }
+            } else if (input.role != ScriptRole::Room) {
+                error(object.nameRange, concat("Object declarations belong in room scripts; this is ", roleName, " script."),
                       {"Declare the object's handlers in the script of the room that contains it."});
             }
-            if (isReservedName(object.name)) {
+            if (object.kind != BehaviourKind::Object) {
+                // Unnamed: nothing more to check about the name.
+            } else if (isReservedName(object.name)) {
                 error(object.nameRange, concat("'", object.name, "' is a built-in name and cannot be used as an object name."));
             } else if (const auto existing = objectNames.find(object.name); existing != objectNames.end()) {
                 error(object.nameRange, concat("Duplicate declaration of object '", object.name, "'."),
@@ -553,7 +576,7 @@ private:
             }
             const auto behaviourIndex = static_cast<std::uint32_t>(model_.behaviours_.size());
             BehaviourSemantics semantics;
-            semantics.kind = BehaviourKind::Object;
+            semantics.kind = object.kind;
             semantics.source = u;
             semantics.declaration = &object;
             semantics.name = object.name;
@@ -575,18 +598,33 @@ private:
                     error(handler->nameRange, concat("'", handler->name, "' is a built-in name and cannot be used as a handler name."));
                 } else if (const auto existing = handlerNames.find(handler->name); existing != handlerNames.end()) {
                     error(handler->nameRange,
-                          concat("Duplicate handler '", handler->name, "' in object '", object.name, "'."),
+                          concat("Duplicate handler '", handler->name, "' in ", behaviourLabel(semantics), "."),
                           {concat("'", handler->name, "' was first declared on line ", existing->second.begin.line, ".")});
                 } else {
                     handlerNames.emplace(handler->name, handler->nameRange);
                     semantics.handlers.push_back({handler->name, functionIndex});
+                    if (const auto global = symbols_.find(handler->name);
+                        global != symbols_.end() && global->second.kind == CallKind::Function) {
+                        warning(handler->nameRange,
+                                concat("Handler '", handler->name, "' shadows the global function '", handler->name, "'."),
+                                {concat("The global function is declared ", where(global->second.declaration, handler->nameRange),
+                                        ". Inside ", behaviourLabel(semantics), " a call of '", handler->name,
+                                        "' calls the handler; rename one of them to call both.")});
+                    }
                 }
             }
             model_.behaviours_.push_back(std::move(semantics));
         }
     }
 
-    // "blender.use" for handlers, "use" for room-level functions (messages only).
+    // "object 'blender'", "the room declaration" (messages).
+    [[nodiscard]] static std::string behaviourLabel(const BehaviourSemantics& behaviour)
+    {
+        if (behaviour.kind == BehaviourKind::Object) return concat("object '", behaviour.name, "'");
+        return concat("the ", toString(behaviour.kind), " declaration");
+    }
+
+    // "blender.use" for handlers, "use" for global functions (messages only).
     [[nodiscard]] std::string displayName(const FunctionDecl& function) const
     {
         if (current_ != nullptr && current_->isHandler()) {
@@ -603,9 +641,6 @@ private:
         current_ = &model_.functions_[index];
         scopes_.clear();
         scopes_.emplace_back();
-        if (current_->isHandler()) {
-            declareVariable("self", Type::Object, function.nameRange, true); // Variable 0: the hidden parameter.
-        }
         for (std::size_t p = 0; p < function.parameters.size(); ++p) {
             const Parameter& parameter = function.parameters[p];
             if (scopes_.back().count(parameter.name) == 0) {
@@ -914,16 +949,24 @@ private:
         case ExprKind::BoolLiteral: info.type = Type::Bool; break;
         case ExprKind::NoneLiteral: info.type = Type::Null; break;
         case ExprKind::Name: return checkName(expression);
-        case ExprKind::Self:
-            if (current_ == nullptr || !current_->isHandler()) {
-                error(expression.range, "'self' is only available inside object handlers.",
-                      {"Declare the function inside an 'object name:' block to use 'self'."});
+        case ExprKind::Self: {
+            // The entity the behaviour instance runs for: an object or an actor reference.
+            const BehaviourSemantics* behaviour =
+                current_ != nullptr && current_->isHandler() ? &model_.behaviours_[current_->behaviour] : nullptr;
+            if (behaviour == nullptr) {
+                error(expression.range, "'self' is only available inside actor and object handlers.",
+                      {"A global function runs for no entity: pass the actor or object it needs as a parameter, "
+                       "e.g. 'func greet(character: actor):'."});
+                info.type = Type::Error;
+            } else if (behaviour->kind == BehaviourKind::Room) {
+                error(expression.range, "'self' is not available in room handlers.",
+                      {"A room is not an entity; get its actors and objects with get_actor(\"id\") and get_object(\"id\")."});
                 info.type = Type::Error;
             } else {
-                info.type = Type::Object;
-                info.variable = 0;
+                info.type = behaviour->kind == BehaviourKind::Actor ? Type::Actor : Type::Object;
             }
             break;
+        }
         case ExprKind::Unary: return checkUnary(expression);
         case ExprKind::Binary: return checkBinary(expression);
         case ExprKind::Call: return checkCall(expression);
@@ -1170,19 +1213,26 @@ private:
         // wait(operation) waits for an engine operation: the hidden native await_operation. This
         // is the only overload in the language; wait(float) is the core function itself.
         const bool waitForOperation = name == "wait" && arguments.size() == 1 && arguments[0] == Type::Operation;
+        // A handler of the caller's own behaviour comes first (it runs for the same instance),
+        // then the game-wide functions and natives.
+        std::optional<FunctionSymbol> sibling;
+        if (current_ != nullptr && current_->isHandler() && !waitForOperation) {
+            for (const HandlerSemantics& handler : model_.behaviours_[current_->behaviour].handlers) {
+                if (handler.name == name) sibling = FunctionSymbol{CallKind::Function, handler.function, {}};
+            }
+        }
         auto symbol = symbols_.find(waitForOperation ? std::string("await_operation") : name);
         if (symbol != symbols_.end() && symbol->second.kind == CallKind::Native && !waitForOperation &&
             model_.natives_[symbol->second.index].hidden) {
             symbol = symbols_.end();
         }
-        if (symbol == symbols_.end()) {
+        if (!sibling && symbol == symbols_.end()) {
             if (lookupAny(name)) {
                 error(call.nameRange, concat("'", name, "' is a variable, not a function."));
-            } else if (isSiblingHandler(name)) {
+            } else if (const std::string owner = handlerElsewhere(name); !owner.empty()) {
                 error(call.nameRange, concat("Undefined function '", name, "'."),
-                      {concat("'", name, "' is a handler of object '", model_.behaviours_[current_->behaviour].name,
-                              "'; handlers are invoked by the engine and cannot be called directly. "
-                              "Move shared code into a global function.")});
+                      {concat("'", name, "' is a handler of ", owner, "; a handler can be called only from its own "
+                              "declaration. Put shared code in a global function.")});
             } else {
                 error(call.nameRange, concat("Undefined function '", name, "'."),
                       {"Declare engine functions with 'extern func name(...)'."});
@@ -1190,20 +1240,21 @@ private:
             info.type = Type::Error;
             return record(call, info);
         }
+        const FunctionSymbol target = sibling ? *sibling : symbol->second;
         const std::vector<Type>* parameters = nullptr;
         std::vector<Type> userParameters;
-        if (symbol->second.kind == CallKind::Native) {
-            const NativeSignature& native = model_.natives_[symbol->second.index];
+        if (target.kind == CallKind::Native) {
+            const NativeSignature& native = model_.natives_[target.index];
             parameters = &native.parameters;
             info.type = native.returnType;
         } else {
-            const FunctionSemantics& function = model_.functions_[symbol->second.index];
+            const FunctionSemantics& function = model_.functions_[target.index];
             userParameters = function.parameters;
             parameters = &userParameters;
             info.type = function.returnType;
         }
-        info.callKind = symbol->second.kind;
-        info.callee = symbol->second.index;
+        info.callKind = target.kind;
+        info.callee = target.index;
         if (arguments.size() != parameters->size()) {
             error(call.range, concat("Function '", name, "' takes ", parameters->size(),
                                      parameters->size() == 1 ? " argument" : " arguments", ", got ", arguments.size(), "."));
@@ -1259,15 +1310,16 @@ private:
         return record(expression, info);
     }
 
-    [[nodiscard]] bool isSiblingHandler(const std::string& name) const
+    // The behaviour (other than the caller's) that has a handler `name`, for a hint; empty if none.
+    [[nodiscard]] std::string handlerElsewhere(const std::string& name) const
     {
-        if (current_ == nullptr || !current_->isHandler()) {
-            return false;
+        for (std::size_t b = 0; b < model_.behaviours_.size(); ++b) {
+            if (current_ != nullptr && current_->isHandler() && current_->behaviour == b) continue;
+            for (const HandlerSemantics& handler : model_.behaviours_[b].handlers) {
+                if (handler.name == name) return behaviourLabel(model_.behaviours_[b]);
+            }
         }
-        for (const HandlerSemantics& handler : model_.behaviours_[current_->behaviour].handlers) {
-            if (handler.name == name) return true;
-        }
-        return false;
+        return {};
     }
 
     Type checkIntrinsic(const Expr& call, Intrinsic intrinsic, const std::vector<Type>& arguments)

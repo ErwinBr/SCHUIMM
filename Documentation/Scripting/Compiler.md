@@ -117,7 +117,8 @@ Across all sources of the program (see [Project compilation](#project-compilatio
    unique among globals, functions, natives and enums of all sources; the type from the
    annotation or the initial value; the initial value a constant expression (checked
    syntactically first, then typed and evaluated into a `ConstantValue`) or the type's default.
-5. Collect the behaviours ([Language.md §8](Language.md#8-objects-and-handlers)): object
+5. Collect the behaviours ([Language.md §8](Language.md#8-behaviours-rooms-actors-and-objects)):
+   `room:` (room scripts, at most one), `actor:` (actor scripts, at most one) and object
    declarations, only in room scripts, with names unique per source (they are not game-wide
    names) and per object its handlers (unique within the object). Handlers are appended to the
    function list after the global functions of all sources, each with the index of its
@@ -142,8 +143,11 @@ Across all sources of the program (see [Project compilation](#project-compilatio
    - return types, and "every path returns" (a function with a result whose body can fall off
      the end).
 
-In a handler, variable 0 is the hidden parameter `self` (type `object`); the `self` expression
-resolves to it, and is an error in global functions.
+In an actor or object handler the `self` expression has type `actor` or `object` and compiles to
+`LoadSelf` (the entity of the instance the handler runs for; it is not a parameter); it is an
+error in room handlers and global functions. A call inside a behaviour resolves to a handler of
+the same behaviour first, then to the game-wide functions and natives; such calls and spawns are
+ordinary `Call`/`Spawn` instructions.
 
 Compiler types (`Types.h`) are a `Type` enumeration with one value per built-in type. Enum types
 are `Type::EnumBase + i`, where `i` indexes `SemanticModel::enums()`: engine enums first, then the

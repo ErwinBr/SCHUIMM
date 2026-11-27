@@ -141,8 +141,8 @@ SCHUIMM_TEST(Objects_OneHandler)
 {
     const Compiled c = compileSource("object blender:\n\tfunc look_at():\n\t\tprint(\"A blender.\")\n");
     REQUIRE(c.result.success);
-    REQUIRE(c.result.units[0].ast->objects.size() == 1);
-    const ObjectDecl& object = *c.result.units[0].ast->objects[0];
+    REQUIRE(c.result.units[0].ast->behaviours.size() == 1);
+    const BehaviourDecl& object = *c.result.units[0].ast->behaviours[0];
     CHECK_EQ(object.name, std::string("blender"));
     CHECK_EQ(object.nameRange.begin.line, 1u);
     REQUIRE(object.handlers.size() == 1);
@@ -150,9 +150,9 @@ SCHUIMM_TEST(Objects_OneHandler)
     CHECK(c.result.units[0].ast->functions.empty()); // Handlers are not room-level functions.
     CHECK_EQ(dumpAst(*c.result.units[0].ast), std::string("Object blender\n  Func look_at() -> None\n    ExprStmt\n"
                                                  "      Call print\n        String \"A blender.\"\n"));
-    // The handler is an ordinary function whose hidden parameter 0 is self.
+    // The handler is an ordinary function; self is not a parameter but the instance's entity.
     REQUIRE(c.result.module.functions.size() == 1);
-    CHECK(c.result.module.functions[0].parameters == std::vector<TypeRef>{ScriptType::Object});
+    CHECK(c.result.module.functions[0].parameters.empty());
     REQUIRE(c.result.module.behaviours.size() == 1);
     CHECK(c.result.module.behaviours[0].kind == BehaviourKind::Object);
     CHECK_EQ(c.result.module.string(c.result.module.behaviours[0].nameIndex), std::string("blender"));
@@ -177,33 +177,37 @@ SCHUIMM_TEST(Objects_SeveralObjectsHandlersAndRoomFunctions)
     CHECK(!semantics.functions()[1].isHandler());
     CHECK_EQ(semantics.functions()[blender.handlers[2].function].behaviour, 0u);
     CHECK_EQ(semantics.functions()[semantics.behaviours()[1].handlers[0].function].behaviour, 1u);
-    // use_with(item: object) has self plus its declared parameter.
+    // use_with(item: object) has just its declared parameter.
     const FunctionSemantics& useWith = semantics.functions()[blender.handlers[2].function];
-    REQUIRE(useWith.variables.size() >= 2);
-    CHECK_EQ(useWith.variables[0].name, std::string("self"));
+    REQUIRE(!useWith.variables.empty());
+    CHECK_EQ(useWith.variables[0].name, std::string("item"));
     CHECK(useWith.variables[0].type == Type::Object);
-    CHECK_EQ(useWith.variables[1].name, std::string("item"));
     // IR dump and disassembly show handlers as object.handler.
-    CHECK(dumpIr(c.result.ir).find("func blender.use_with(r0: object, r1: object) -> None") != std::string::npos);
+    CHECK(dumpIr(c.result.ir).find("func blender.use_with(r0: object) -> None") != std::string::npos);
     const std::string listing = disassemble(c.result.module);
     CHECK(listing.find("behaviours:\n  object blender: look_at -> f2 use -> f3 use_with -> f4\n  object cupboard: look_at -> f5\n") !=
           std::string::npos);
-    CHECK(listing.find("function f4 blender.use_with(object, object) -> None") != std::string::npos);
+    CHECK(listing.find("function f4 blender.use_with(object) -> None") != std::string::npos);
 }
 
 SCHUIMM_TEST(Objects_HandlerNamesAreScopedToTheirObject)
 {
-    // The same handler name in two objects and as a room-level function is fine.
+    // The same handler name in two objects and as a global function is fine; inside an object
+    // its own handler is the nearest, with a warning.
     const Compiled c = compileSource("func use():\n\tprint(\"room\")\n"
-                                     "object a:\n\tfunc use():\n\t\tuse()\n"
+                                     "object a:\n\tfunc use():\n\t\tpass\n"
                                      "object b:\n\tfunc use():\n\t\tpass\n");
     REQUIRE(c.result.success);
-    // A handler cannot call a sibling handler directly.
+    CHECK(c.has("Handler 'use' shadows the global function 'use'", 4));
+    // A handler calls the handlers of its own object directly.
     const Compiled sibling = compileSource("object a:\n\tfunc look_at():\n\t\tpass\n\tfunc use():\n\t\tlook_at()\n");
-    CHECK(sibling.has("Undefined function 'look_at'", 5));
-    CHECK(sibling.hasNote("is a handler of object 'a'"));
-    // Room functions cannot call handlers either.
-    CHECK(compileSource("object a:\n\tfunc use():\n\t\tpass\nfunc main():\n\tuse()\n").has("Undefined function 'use'", 5));
+    CHECK(sibling.result.success);
+    // Global functions and other objects cannot call them.
+    const Compiled global = compileSource("object a:\n\tfunc use():\n\t\tpass\nfunc main():\n\tuse()\n");
+    CHECK(global.has("Undefined function 'use'", 5));
+    CHECK(global.hasNote("'use' is a handler of object 'a'; a handler can be called only from its own declaration"));
+    CHECK(compileSource("object a:\n\tfunc open():\n\t\tpass\nobject b:\n\tfunc use():\n\t\topen()\n")
+              .has("Undefined function 'open'", 6));
 }
 
 SCHUIMM_TEST(Objects_HandlersWithParametersAndControlFlow)
@@ -263,7 +267,7 @@ SCHUIMM_TEST(Objects_DuplicatesAndNameClashes)
 SCHUIMM_TEST(Objects_SelfOnlyInsideHandlers)
 {
     const Compiled outside = compileSource("func main():\n\tprint(self)\n");
-    CHECK(outside.has("'self' is only available inside object handlers", 2));
+    CHECK(outside.has("'self' is only available inside actor and object handlers", 2));
     CHECK(compileSource("object a:\n\tfunc f():\n\t\tself = 1\n").has("'self' cannot be assigned", 3));
     CHECK(compileSource("object a:\n\tfunc f(self: object):\n\t\tpass\n").has("for a parameter name", 2));
     CHECK(compileSource("object a:\n\tfunc f():\n\t\tself: int = 1\n").has("Expected the end of the line", 3));

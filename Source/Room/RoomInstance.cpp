@@ -81,6 +81,11 @@ RoomInstance::RoomInstance(LoadedRoom room, script::ScriptHost& host, std::share
     }
     objectScripts_.resize(objects_.size());
     if (room_.script) {
+        if (const auto behaviour = room_.script->findBehaviour(script::BehaviourKind::Room, {})) {
+            auto instance = script::BehaviourInstance::create(globals_, *behaviour);
+            SCHUIMM_ASSERT(instance.has_value(), "the room behaviour instance of the room's own script");
+            if (instance) roomScript_ = std::move(*instance);
+        }
         for (std::size_t i = 0; i < objects_.size(); ++i) {
             const auto behaviour = room_.script->findBehaviour(script::BehaviourKind::Object, {}, objects_[i].id());
             if (!behaviour) continue;
@@ -107,6 +112,7 @@ RoomInstance::~RoomInstance()
     for (const std::shared_ptr<script::BehaviourInstance>& instance : objectScripts_) {
         if (instance) instance->expire();
     }
+    if (roomScript_) roomScript_->expire();
 }
 
 std::shared_ptr<script::BehaviourInstance> RoomInstance::objectScript(std::string_view objectId) const
@@ -412,6 +418,12 @@ Result<script::DispatchResult> RoomInstance::dispatch(std::string_view objectId,
     const std::shared_ptr<script::BehaviourInstance> instance = objectScript(objectId);
     if (!instance) return script::DispatchResult{};
     return host_.dispatch(instance, event, std::move(arguments), owner_);
+}
+
+Result<script::DispatchResult> RoomInstance::dispatchRoom(std::string_view event, std::vector<script::Value> arguments)
+{
+    if (!roomScript_) return script::DispatchResult{};
+    return host_.dispatch(roomScript_, event, std::move(arguments), owner_);
 }
 
 Result<script::CoroutineHandle> RoomInstance::start(std::string_view function, std::vector<script::Value> arguments)

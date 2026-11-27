@@ -48,7 +48,7 @@ More examples: [Examples/](Examples/).
 * Source files are UTF-8. Invalid UTF-8 is an error. Line endings may be `\n`, `\r\n` or `\r`.
 * A file is a sequence of variable declarations (`var`, global variables, §7.2), function
   declarations (`func`), native function declarations (`extern func`), object declarations
-  (`object`, [§8](#8-objects-and-handlers)) and enum declarations (`enum`, [§3.4](#34-enums)).
+  (`object`, [§8](#8-behaviours-rooms-actors-and-objects)) and enum declarations (`enum`, [§3.4](#34-enums)).
   There are no statements at the top level.
 * **The scripts of a game form one program.** Every variable, function, `extern func` and enum
   declared at the top level of any participating file is visible in all of them. There is no `import`,
@@ -150,7 +150,7 @@ More examples: [Examples/](Examples/).
 | `string` | immutable UTF-8 text |
 | `vec2` | a 2D vector of two `float` components, `x` and `y` (§3.5) |
 | `actor` | a reference to an actor (§3.3) |
-| `object` | a reference to a room object, e.g. `self` in a handler (§3.3, [§8.4](#84-self-and-the-object-type)) |
+| `object` | a reference to a room object, e.g. `self` in a handler (§3.3, [§8.4](#85-self)) |
 | `entity` | a reference to an actor or a room object (§3.3) |
 | enum types | the members of a scoped enum, e.g. `Direction.NORTH` (§3.4) |
 | `coroutine` | a reference to one running invocation, made by `spawn` (§9.2) |
@@ -608,134 +608,167 @@ This applies to locals and parameters hiding instance or global variables and to
 variables hiding globals. Variables cannot use the name of a function, native, enum or reserved
 name.
 
-## 8. Objects and handlers
+## 8. Behaviours: rooms, actors and objects
 
-Room scripts describe what happens when the player interacts with the objects of a room. An
-`object` declaration groups the **handlers** of one object: the functions the engine runs for
-events such as looking at or using it.
+A **behaviour** declaration says what a room, an actor or a room object does: its **handlers**
+(the functions the engine runs for events such as entering the room, talking to an actor or
+using an object) and its private instance variables (§7.3).
+
+| Declaration | In | Runs for | `self` |
+|---|---|---|---|
+| `room:` | a room script, at most once | the room | none |
+| `actor:` | an actor script, at most once | each actor that uses the script | the actor (type `actor`) |
+| `object NAME:` | a room script, once per object | the room object with id `NAME` | the object (type `object`) |
 
 ```python
-extern func say(text: string)
-extern func get_flag(o: object, name: string) -> bool
-extern func set_flag(o: object, name: string, value: bool)
-extern func play_sound(name: string, volume: float)
+# Rooms/Kitchen/Kitchen.sch
+var oven_repaired: bool = False          # global (§7.2)
 
+room:
+	var visits: int = 0                   # this room instance's own
+	func ready():
+		visits += 1
+		describe()                        # a handler of the same declaration
+	func describe():
+		print("The kitchen, visit " + str(visits))
 
-func play_blender_sound():
-	play_sound("blender.wav", 1.0)
-
-
-object blender:
+object oven:
+	var inspections: int = 0
 	func look_at():
-		say("An old blender.")
-
+		inspections += 1
+		print("An old oven.")
 	func use():
-		if get_flag(self, "is_running"):
-			say("It's already running.")
-		else:
-			set_flag(self, "is_running", True)
-			play_blender_sound()
-
-
-object cupboard:
-	func look_at():
-		say("A wooden cupboard.")
+		oven_repaired = True
+		award_points(10)                  # a global function of another file
 ```
 
-The complete example is [Examples/kitchen.sch](Examples/kitchen.sch).
+```python
+# Actors/Cook/Cook.sch
+actor:
+	var conversations: int = 0
+	func talk_to():
+		conversations += 1
+		greet()
+	func greet():
+		set_direction(self, Direction.SOUTH)
+		print("Good morning!")
+```
+
+The complete room example is [Examples/kitchen.sch](Examples/kitchen.sch).
 
 ### 8.1 Syntax
 
 ```text
-object NAME:
-	func HANDLER(parameters) [-> type]:
-		block
-	...
+room:                      actor:                      object NAME:
+	var NAME ...              var NAME ...               var NAME ...
+	func HANDLER(...):         func HANDLER(...):         func HANDLER(...):
+		block                      block                       block
 ```
 
-* `object` declarations are top-level declarations, like `func`. They cannot be nested and
-  cannot appear inside a function.
+* Behaviour declarations are top-level declarations, like `func`. They cannot be nested and
+  cannot appear inside a function. `room` and `actor` are not keywords: only at the start of a
+  top-level line, followed by `:`, do they begin a declaration; elsewhere they are ordinary
+  names.
 * The body is an indented block (one tab, §2.1) of `func` declarations (the handlers) and `var`
-  declarations (the object's instance variables, §7.3). It contains nothing else: no
-  statements, `pass`, `extern func` or nested `object`. An object without a body is an error
-  ("Expected an indented block of handler functions"); leave out the declaration instead.
+  declarations (instance variables, §7.3). It contains nothing else: no statements, `pass`,
+  `extern func` or nested declarations. A declaration without a body is an error ("Expected an
+  indented block of handler functions"); leave it out instead.
 * Handlers are ordinary functions: typed parameters, an optional return type, the usual
   statements, `wait()`/`yield()`, calls of global functions and natives.
-* `object` declarations appear only in room scripts (§1).
+* Where they may appear is checked: `room:` and `object` only in room scripts, `actor:` only in
+  actor scripts (room scripts cannot declare actor handlers), and `room:` and `actor:` at most
+  once per script.
 * Object names follow the identifier rules (§2.3) and cannot be a reserved name. They must be
   unique in the file. They belong to their room: they are not game-wide names, so another room
-  may have an object of the same name, and an object may be named like a function. Handler
-  names must be unique within their object; the same handler name may appear in several objects
-  and as a global function.
+  may have an object of the same name, and an object may be named like a function.
+* Handler names must be unique within their declaration. Different declarations may use the
+  same names: every room may have a `ready()`, every object a `look_at()`. A handler named like a
+  global function hides it inside its declaration, with a warning.
 
-### 8.2 Room resources and room scripts
+### 8.2 Resources and scripts
 
-* A room's objects — their identifiers, sprites, positions and state — are defined by the **room
-  resource**, not by the script. The object name of a declaration is the object's identifier in
-  the room resource (`object blender:` belongs to the room object with id `"blender"`).
-* An object declaration **does not create an object**. It is a named scope of functions and
-  variables, not a class: no constructors or inheritance, and its variables are private to its
-  handlers (§7.3).
-* One room script holds the room's functions and the handlers of all its objects. There are no
-  per-object script files, and the room resource lists no events or handlers.
-* An object of the room resource without a declaration (or without a handler for some event)
-  simply has no script behaviour for it.
+* A room's objects and actors — their identifiers, sprites, positions and state — are defined by
+  the **room resource**, not by the script. The object name of a declaration is the object's
+  identifier in the room resource (`object blender:` belongs to the room object with id
+  `"blender"`).
+* An actor's script belongs to its **actor resource** (`*.actor.json`), so every actor using
+  that resource, in any room, runs the same `actor:` handlers, each with its own `self` and
+  instance variables — two guards placed as `guard_west` and `guard_east` share one script.
+* A declaration **does not create anything**: not the room, not an actor, not an object, and
+  it assigns no ids. It is a named scope of functions and variables, not a class: no
+  constructors or inheritance, and its variables are private to its handlers (§7.3).
+* A room object without a declaration (or without a handler for some event) simply has no
+  script behaviour for it.
 
 ### 8.3 Dispatch
 
-The engine (the adventure runtime) invokes a handler by **object identifier and event name**,
-for example `("blender", "use")`, with the arguments the event provides and the engine's handle
-of the object:
+The engine (the adventure runtime) invokes a handler by **behaviour instance and event name**:
+the room, an actor or an object, with the arguments the event provides.
 
 * The event name is the handler name. Any name can be used: the language and the VM have no
-  fixed list of events (`look_at`, `use`, `use_with`, `inspect` … are conventions of the game).
-* If the script declares no such object or handler, nothing happens. **A missing handler is not
-  an error.**
+  fixed list of events (`look_at`, `use`, `talk_to`, `ready` … are conventions of the game). The
+  room handlers `init`, `ready` and `exit` are the conventions of the room lifecycle (later
+  milestones); they are ordinary names.
+* If the behaviour has no such handler, nothing happens. **A missing handler is not an error.**
 * A handler runs as a coroutine (§9), so it may `wait()` or `yield()`. A runtime error inside a
-  handler is reported like any other (§10), with the handler named `object.handler`.
+  handler is reported like any other (§10), with the handler named `object.handler`
+  (`room.ready`, `actor.talk_to`).
 * The arguments must match the handler's parameters, as for any call.
 * There is no fallback: no default handler, and no automatic dispatch to the other object of a
   "use A with B" interaction. The engine decides which handler to invoke.
 
-The engine API is `ScriptHost::dispatch` ([Runtime.md](Runtime.md#object-handlers-and-dispatch)).
+The engine API is `ScriptHost::dispatch` ([Runtime.md](Runtime.md#behaviour-handlers-and-dispatch)).
 
-### 8.4 self and the object type
+### 8.4 Calls within a behaviour
 
-* Inside a handler, `self` is the object the handler runs for: the engine's handle of that
-  object, a value of type `object`. Different objects — also the "same" object in two instances
-  of a room — have different handles, so handlers never share `self`.
-* `self` is available only in handlers ("'self' is only available inside object handlers"
-  elsewhere). It cannot be assigned, declared or used as a parameter name.
-* `self` stays valid for the whole run of the handler, also across `wait()` and `yield()`. If the
-  engine destroys the object meanwhile, the handle does not move to another object: the next
-  native call with it is a runtime error.
-* `object` is the type of room-object references (§3.3) in annotations, parameters and native
-  signatures: `func use_with(item: object):`, `extern func get_flag(o: object, name: string) -> bool`.
-  A handler may pass `self` where an `entity` is expected.
-* Object references follow §3.3: they can be stored, passed, returned and compared, and have no
-  members. Object state is owned by the engine and accessed through engine functions
-  (`self.name` property syntax is not part of version 3.0).
+* A handler may call the other handlers of **its own declaration** by name, as an ordinary
+  call: `greet()` in `talk_to()` above. The call runs for the same room, actor or object: the
+  same `self` and the same instance variables. A handler may also `spawn` its declaration's
+  handlers (§9.2); the new coroutine runs for the same instance too.
+* Inside a declaration, a name is called in this order: its own handlers, then global functions
+  and natives.
+* Global functions cannot call handlers, and no handler can call the handlers of another
+  declaration (another object, the room, an actor): such a name is "Undefined function". Put
+  shared code in a global function and pass what it needs.
 
-### 8.5 Scopes
+### 8.5 self
+
+* Inside an `actor:` handler, `self` is the actor the handler runs for (type `actor`); inside an
+  object handler, the object (type `object`). Different entities — also the "same" object in two
+  instances of a room — have different handles, so handlers never share `self`.
+* A room is not an entity: `room:` handlers have no `self` ("'self' is not available in room
+  handlers"); they reach their actors and objects with engine functions such as `get_actor`.
+* Global functions have no `self`, even when declared in an actor script: a function's file is
+  where it is written, not who it runs for. Pass the entity as a parameter:
+
+  ```python
+  func greet_character(character: actor):
+  	set_direction(character, Direction.SOUTH)
+  ```
+
+* `self` cannot be assigned, declared or used as a parameter name. It stays valid for the whole
+  run of the handler, also across `wait()`, `yield()` and calls. If the engine destroys the
+  entity meanwhile, the handle does not move to another entity: the next native call with it is
+  a runtime error.
+* References follow §3.3: they can be stored, passed, returned and compared, and have no members.
+  Entity state is owned by the engine and accessed through engine functions (`self.name` and
+  `guard.patrol_count` are not part of version 3.0).
+
+### 8.6 Scopes
 
 | Scope | Contains |
 |---|---|
-| Game | the global functions, natives (interfaces and `extern func`) and enums of every file (§1) |
+| Game | the global variables and functions, natives (interfaces and `extern func`) and enums of every file (§1) |
 | Script (room) | the room's object names |
-| Object | the handlers of one object |
-| Function | parameters and variables (§7) |
-| Handler context | the implicit `self` |
-
-A handler calls global functions and natives by name. Handlers are not in the game scope: a
-global function cannot call a handler, and a handler cannot call another handler (not even of
-its own object) — put shared code in a global function. Global functions are started by the
-engine by name; handlers only through dispatch.
+| Behaviour | the handlers and instance variables of one declaration |
+| Function | parameters and local variables (§7) |
+| Handler context | the instance it runs for: `self` and the instance variables |
 
 ## 9. Coroutines
 
 Script functions run as **coroutines** on the game thread, managed by the engine's scheduler
 ([Runtime.md](Runtime.md#scheduler)). The engine starts a coroutine by calling a global function
-(usually `main`) or by dispatching an object handler (§8.3); several coroutines run concurrently, interleaved cooperatively:
+or by dispatching a handler (§8.3); several coroutines run concurrently, interleaved cooperatively:
 
 * A coroutine runs until it calls `wait()` or `yield()`, finishes, fails, or uses up its
   instruction budget for the current frame. Then the next coroutine runs.
@@ -771,9 +804,9 @@ func start_scene(guard: actor, hero: actor):
 	walk_to(hero, vec2(500, 800))
 ```
 
-* The callee is a script function or an engine function. The built-ins `int`, `float`, `str`,
-  `vec2` and `range`, handlers, and engine functions with an `any` parameter (`print`) cannot be
-  spawned.
+* The callee is a script function, a handler of the spawning handler's own declaration (§8.4)
+  or an engine function. The built-ins `int`, `float`, `str`, `vec2` and `range`, and engine
+  functions with an `any` parameter (`print`) cannot be spawned.
 * The arguments are type-checked as for a call and evaluated **once**, in the spawning
   coroutine, before the new one is scheduled.
 * The new coroutine has its own parameters, variables and call stack. It first runs in the next
@@ -851,7 +884,7 @@ Deliberate, so that scripts stay predictable and fast to check:
 * `for` only iterates over `range(...)`; no `break`, `continue`, `else` on loops.
 * Comparisons do not chain; `and`/`or` return `bool`, not an operand.
 * Enums are scoped and not integers; `vec2` is a built-in value type.
-* No classes (`object` declarations are named groups of handlers, §8), closures, generators,
+* No classes (`room:`, `actor:` and `object` declarations are named groups of handlers, §8), closures, generators,
   decorators, exceptions, imports, lists, dicts, `**`, `//=` and `%=`, conditional expressions,
   f-strings or `global`.
 * Function parameters require types; there are no default or keyword arguments.
@@ -865,8 +898,9 @@ Deliberate, so that scripts stay predictable and fast to check:
   no coroutine groups or structured concurrency.
 * No modules or imports: the files of a game form one program (§1). No constants (`const`);
   global and instance variables start at constant values only (§7.4).
-* Objects (§8): no `self.property` access (other objects' variables are private, engine state
-  goes through natives), no calls between handlers, no default or fallback handlers.
+* Behaviours (§8): no `self.property` access (other entities' variables are private, engine
+  state goes through natives), no calls of another entity's handlers, no default or fallback
+  handlers, no inventory item declarations.
 * Up to 255 parameters per function, 65 535 registers per function and 65 536 distinct constants
   per file.
 * `print` output is the only built-in output; everything else comes from engine natives.
@@ -874,10 +908,10 @@ Deliberate, so that scripts stay predictable and fast to check:
 ## Appendix: grammar
 
 ```text
-module      := (NEWLINE | variable | function | extern | object | enum)* EOF
+module      := (NEWLINE | variable | function | extern | behaviour | enum)* EOF
 variable    := "var" NAME [":" type] ["=" expr] NEWLINE        (no value: the type is required)
 function    := "func" NAME "(" [params] ")" ["->" type] ":" block
-object      := "object" NAME ":" NEWLINE INDENT (function | variable)+ DEDENT
+behaviour   := ("room" | "actor" | "object" NAME) ":" NEWLINE INDENT (function | variable)+ DEDENT
 extern      := "extern" "func" NAME "(" [params] ")" ["->" type] NEWLINE
 enum        := "enum" NAME ":" NEWLINE INDENT (NAME NEWLINE)+ DEDENT
 params      := param ("," param)* [","]

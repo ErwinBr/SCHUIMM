@@ -472,7 +472,7 @@ SCHUIMM_TEST(Bytecode_ObjectsRoundTrip)
     const std::string listing = disassemble(*read);
     CHECK(listing.find("; SCHUIMM bytecode 3.0, language 3.0") != std::string::npos);
     CHECK(listing.find("  object blender: look_at -> f2 use -> f3\n  object cupboard: look_at -> f4\n") != std::string::npos);
-    CHECK(listing.find("function f3 blender.use(object, object) -> bool") != std::string::npos);
+    CHECK(listing.find("function f3 blender.use(object) -> bool") != std::string::npos);
     CHECK(listing.find("EqRef") != std::string::npos);
     // Room-level "use" and the handler "blender.use" coexist; lookup keeps them apart.
     NativeRegistry natives;
@@ -517,9 +517,8 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
     m.behaviours[1].handlers[0].function = m.behaviours[0].handlers[0].function;
     CHECK(invalidModule(m, "is the handler of more than one event"));
     m = good;
-    m.behaviours[0].handlers[0].function = 0; // helper(int), renamed look_at: no self parameter.
-    m.functions[0].nameIndex = m.behaviours[0].handlers[0].nameIndex;
-    CHECK(invalidModule(m, "must take the object (self) as its first parameter"));
+    m.behaviours[1].handlers.clear(); // cupboard.look_at becomes a global function that uses self.
+    CHECK(invalidModule(m, "self is used by a global function, which runs for no entity"));
     m = good;
     m.behaviours[0].nameIndex = 9999;
     CHECK(invalidModule(m, "object behaviour 0 refers to a missing name"));
@@ -539,7 +538,7 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
     // Objects do not share the game-wide namespace: an object may be named like a function or a
     // native, and a behaviour without handlers is well-formed.
     m = good;
-    m.behaviours[1].handlers.clear();
+    m.behaviours.push_back({BehaviourKind::Object, 0, stringIndex("print"), {}, {}});
     CHECK(validateModule(m).has_value());
     m = good;
     m.behaviours[0].nameIndex = stringIndex("helper");
@@ -577,7 +576,8 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
     m = good;
     m.functions[m.behaviours[0].handlers[0].function].nameIndex = stringIndex("helper");
     CHECK(invalidModule(m, "which has a different name"));
-    // Handlers are started by dispatch only, never by Call (blender.look_at calls helper).
+    // A handler is called only by its own behaviour (blender.look_at calls helper; calls within
+    // a behaviour are covered by the compiler tests): calling another object's handler is not.
     m = good;
     bool patched = false;
     for (Function& function : m.functions) {
@@ -589,7 +589,7 @@ SCHUIMM_TEST(Bytecode_ObjectTableValidation)
         }
     }
     REQUIRE(patched);
-    CHECK(invalidModule(m, "calls handler 'cupboard.look_at'; handlers are only started by event dispatch"));
+    CHECK(invalidModule(m, "calls handler 'cupboard.look_at'; a handler is started by event dispatch or by its own behaviour"));
     // A truncated objects section.
     std::vector<std::byte> bytes = encodeModule(good);
     const std::size_t objects = sectionOffset(bytes, format::SectionId::Behaviours);

@@ -16,7 +16,7 @@ Result<std::unique_ptr<Coroutine>> Coroutine::create(std::shared_ptr<const Progr
         return ::schuimm::makeError(ErrorCode::NotFound,
                          concat("Script '", program->name(), "' has no function '", function, "'"));
     }
-    return createAt(std::move(program), *index, std::move(arguments), 0, limits);
+    return createAt(std::move(program), *index, std::move(arguments), limits);
 }
 
 Result<std::unique_ptr<Coroutine>> Coroutine::createHandler(std::shared_ptr<const Program> program, std::string_view object,
@@ -26,53 +26,61 @@ Result<std::unique_ptr<Coroutine>> Coroutine::createHandler(std::shared_ptr<cons
     if (!program) {
         return ::schuimm::makeError(ErrorCode::InvalidArgument, "No program");
     }
-    const auto index = program->findHandler(object, event);
+    const auto behaviour = program->findBehaviour(BehaviourKind::Object, {}, object);
+    const auto index = behaviour ? program->findHandler(*behaviour, event) : std::nullopt;
     if (!index) {
         return ::schuimm::makeError(ErrorCode::NotFound,
                                     concat("Script '", program->name(), "' has no handler '", object, ".", event, "'"));
     }
-    arguments.insert(arguments.begin(), Value::fromObject(self));
-    return createAt(std::move(program), *index, std::move(arguments), 1, limits);
+    auto instance = BehaviourInstance::create(GlobalState::create(program), *behaviour, Value::fromObject(self));
+    if (!instance) {
+        return std::unexpected(instance.error());
+    }
+    return createHandler(std::move(*instance), *index, std::move(arguments), limits);
 }
 
-Result<std::unique_ptr<Coroutine>> Coroutine::createHandler(std::shared_ptr<const Program> program, std::uint32_t function,
-                                                            Value self, std::vector<Value> arguments, CoroutineLimits limits)
+Result<std::unique_ptr<Coroutine>> Coroutine::createHandler(std::shared_ptr<BehaviourInstance> instance,
+                                                            std::uint32_t function, std::vector<Value> arguments,
+                                                            CoroutineLimits limits)
 {
-    if (!program || function >= program->module().functions.size() || !program->isHandler(function)) {
-        return ::schuimm::makeError(ErrorCode::InvalidArgument, "No such handler");
+    if (!instance) {
+        return ::schuimm::makeError(ErrorCode::InvalidArgument, "No behaviour instance");
     }
-    std::size_t hidden = 0;
-    if (!self.is(ScriptType::None)) {
-        arguments.insert(arguments.begin(), std::move(self));
-        hidden = 1;
+    std::shared_ptr<const Program> program = instance->globals()->program();
+    if (function >= program->module().functions.size() || program->behaviourOf(function) != instance->behaviour()) {
+        return ::schuimm::makeError(ErrorCode::InvalidArgument, "No such handler of the instance's behaviour");
     }
-    return createAt(std::move(program), function, std::move(arguments), hidden, limits);
+    auto coroutine = createAt(std::move(program), function, std::move(arguments), limits);
+    if (coroutine) {
+        std::shared_ptr<GlobalState> globals = instance->globals();
+        (*coroutine)->bindState(std::move(globals), std::move(instance));
+    }
+    return coroutine;
 }
 
 Result<std::unique_ptr<Coroutine>> Coroutine::createCall(std::shared_ptr<const Program> program, std::uint32_t index,
                                                          std::vector<Value> arguments, CoroutineLimits limits)
 {
-    if (!program || index >= program->module().functions.size() || program->isHandler(index)) {
-        return ::schuimm::makeError(ErrorCode::InvalidArgument, "No such room-level function");
+    if (!program || index >= program->module().functions.size()) {
+        return ::schuimm::makeError(ErrorCode::InvalidArgument, "No such function");
     }
-    return createAt(std::move(program), index, std::move(arguments), 0, limits);
+    return createAt(std::move(program), index, std::move(arguments), limits);
 }
 
 Result<std::unique_ptr<Coroutine>> Coroutine::createAt(std::shared_ptr<const Program> program, std::uint32_t index,
-                                                       std::vector<Value> arguments, std::size_t hidden,
-                                                       CoroutineLimits limits)
+                                                       std::vector<Value> arguments, CoroutineLimits limits)
 {
     const Function& entry = program->module().functions[index];
     const std::string name = program->functionDisplayName(index);
     if (arguments.size() != entry.parameters.size()) {
         return ::schuimm::makeError(ErrorCode::InvalidArgument,
-                                    concat("Function '", name, "' takes ", entry.parameters.size() - hidden,
-                                           " arguments, got ", arguments.size() - hidden));
+                                    concat("Function '", name, "' takes ", entry.parameters.size(),
+                                           " arguments, got ", arguments.size()));
     }
     for (std::size_t i = 0; i < arguments.size(); ++i) {
         if (!arguments[i].matches(entry.parameters[i])) {
             return ::schuimm::makeError(ErrorCode::InvalidArgument,
-                                        concat("Argument ", i + 1 - hidden, " of '", name, "' must be ",
+                                        concat("Argument ", i + 1, " of '", name, "' must be ",
                                                formatType(program->module(), entry.parameters[i]), ", got ", toString(arguments[i].type())));
         }
     }

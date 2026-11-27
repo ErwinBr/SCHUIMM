@@ -284,7 +284,7 @@ The state is the instance's own: changing it never changes the resource or any o
 - unique across all instances and rooms;
 - never reused during the process.
 
-This is exactly the contract of `ObjectRef` (`Script/Runtime/Value.h`, [Runtime.md](../Scripting/Runtime.md#object-handlers-and-dispatch)), and it is why no generation-checked handles are needed. A handle outlives its object only as a stale value that refers to nothing:
+This is exactly the contract of `ObjectRef` (`Script/Runtime/Value.h`, [Runtime.md](../Scripting/Runtime.md#behaviour-handlers-and-dispatch)), and it is why no generation-checked handles are needed. A handle outlives its object only as a stale value that refers to nothing:
 - `object(staleHandle)` returns `nullptr` on every instance;
 - future natives will report an error for it, so a suspended script can never reach a different object through an old handle.
 
@@ -301,6 +301,8 @@ destroyed ([Runtime.md](../Scripting/Runtime.md#script-state-global-and-instance
 - it looks up the object, then calls `ScriptHost::dispatch` with the object's behaviour instance (its `self` is the object's handle) and the event name;
 - an unknown object id returns `NotFound`;
 - a room without a script, or a script without that handler, returns `{handled = false}`, which is not an error.
+
+`dispatchRoom(event, arguments)` invokes a handler of the script's `room:` declaration, running for the room's own behaviour instance (`roomScript()`; its room variables start afresh with every instance). Nothing dispatches it automatically: when `init`, `ready` or `exit` run is up to the game (later, the room-transition code).
 
 `start(function, arguments)` runs a global function such as `enter` with the room's global state. Nothing is started automatically: when `enter` runs is up to the future room-transition code. Event names are never fixed anywhere.
 

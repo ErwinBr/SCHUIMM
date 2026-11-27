@@ -2,6 +2,7 @@
 # end-to-end tests. Headless and deterministic (simulated time, no sleeps).
 schuimm_add_test(ScriptTests
     SOURCES
+        BehaviourTests.cpp
         BytecodeTests.cpp
         CoroutineTests.cpp
         EndToEndTests.cpp

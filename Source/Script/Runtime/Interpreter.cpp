@@ -132,6 +132,16 @@ struct Interpreter {
                 if (!r[in.b].matches(module.globals[in.a].type)) return typeMismatch();
                 co.globals_->value(in.a) = r[in.b];
                 break;
+            case Opcode::LoadSelf: {
+                const auto behaviour = program.behaviourOf(frame.function);
+                const BehaviourInstance* instance = co.instance_.get();
+                if (!behaviour || instance == nullptr || instance->behaviour() != *behaviour ||
+                    &instance->program() != &program || !instance->self().matches(function.registerTypes[in.a])) {
+                    return fail(ScriptErrorKind::InvalidBytecode, "The coroutine runs for no instance of this behaviour");
+                }
+                r[in.a] = instance->self();
+                break;
+            }
             case Opcode::LoadInstance:
             case Opcode::StoreInstance: {
                 // The validator only lets a behaviour's own functions use its variables, and only

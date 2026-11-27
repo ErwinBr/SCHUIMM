@@ -595,6 +595,40 @@ SCHUIMM_TEST(Room_ScriptStateBelongsToTheInstanceAndTheSession)
     CHECK(mismatched.error().message.find("the global state belongs to another script") != std::string::npos);
 }
 
+SCHUIMM_TEST(Room_RoomHandlersRunForTheRoomInstance)
+{
+    RoomFixture fixture;
+    fixture.writeFullRoom("room:\n\tvar entries = 0\n\tfunc ready():\n\t\tentries += 1\n\t\treport()\n"
+                          "\tfunc report():\n\t\tsay(\"entries \" + str(entries))\n");
+    const AssetLocator locator = fixture.locator();
+    RoomLibrary library(locator, fixture.host);
+    auto loaded = library.load(test::assetPath(roomName));
+    REQUIRE(loaded.has_value());
+    for (int round = 0; round < 2; ++round) {
+        auto instance = RoomInstance::create(*loaded, fixture.host);
+        REQUIRE(instance.has_value());
+        REQUIRE((*instance)->roomScript() != nullptr);
+        REQUIRE((*instance)->dispatchRoom("ready")->handled);
+        REQUIRE((*instance)->dispatchRoom("ready")->handled);
+        CHECK(!(*instance)->dispatchRoom("exit")->handled);
+        fixture.host.update(0.0);
+        const auto roomScript = (*instance)->roomScript();
+        instance->reset();
+        CHECK(roomScript->isExpired());
+    }
+    // Room variables start afresh with every instance of the room.
+    CHECK(fixture.said == std::vector<std::string>({"entries 1", "entries 2", "entries 1", "entries 2"}));
+    // A room without a room declaration has nothing to dispatch.
+    fixture.writeFullRoom("func enter():\n\tpass\n");
+    RoomLibrary other(locator, fixture.host);
+    auto plain = other.load(test::assetPath(roomName));
+    REQUIRE(plain.has_value());
+    auto instance = RoomInstance::create(*plain, fixture.host);
+    REQUIRE(instance.has_value());
+    CHECK((*instance)->roomScript() == nullptr);
+    CHECK(!(*instance)->dispatchRoom("ready")->handled);
+}
+
 SCHUIMM_TEST(Room_ObjectsWithoutDeclarationsAreFine)
 {
     RoomFixture fixture;

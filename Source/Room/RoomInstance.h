@@ -266,7 +266,13 @@ public:
     //   * otherwise the started coroutine.
     [[nodiscard]] Result<script::DispatchResult> dispatch(std::string_view objectId, std::string_view event,
                                                           std::vector<script::Value> arguments = {});
-    // Starts a room-level function of the script (e.g. "enter"). NotFound without a script.
+    // Invokes the handler `event` of the script's "room:" declaration, running for this room's
+    // behaviour instance (its room variables). {handled = false} without a script, a room
+    // declaration or that handler. Room handlers are dispatched by the engine (the game decides
+    // when, e.g. "init", "ready", "exit"); nothing calls them automatically.
+    [[nodiscard]] Result<script::DispatchResult> dispatchRoom(std::string_view event,
+                                                              std::vector<script::Value> arguments = {});
+    // Starts a global function of the script (e.g. "enter"). NotFound without a script.
     [[nodiscard]] Result<script::CoroutineHandle> start(std::string_view function,
                                                         std::vector<script::Value> arguments = {});
 
@@ -275,6 +281,8 @@ public:
     // The script state of object `objectId` (its instance variables); null if the object has no
     // declaration in the script (or there is no such object).
     [[nodiscard]] std::shared_ptr<script::BehaviourInstance> objectScript(std::string_view objectId) const;
+    // The script state of the room's "room:" declaration (its room variables); null without one.
+    [[nodiscard]] const std::shared_ptr<script::BehaviourInstance>& roomScript() const noexcept { return roomScript_; }
 
     // Coroutines of this instance (started by it, or spawned by those) that have not ended yet.
     [[nodiscard]] std::size_t activeCoroutineCount() const;
@@ -299,6 +307,7 @@ private:
     std::shared_ptr<script::GlobalState> globals_;
     // Per object (objectScripts_[i] for objects_[i]): its behaviour instance, or null.
     std::vector<std::shared_ptr<script::BehaviourInstance>> objectScripts_;
+    std::shared_ptr<script::BehaviourInstance> roomScript_;
 };
 
 } // namespace schuimm::room

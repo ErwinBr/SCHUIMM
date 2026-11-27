@@ -327,6 +327,7 @@ private:
                     break;
                 case IrOp::LoadNone: emit(Opcode::LoadNone, r(instruction.dest), 0, 0, position); break;
                 case IrOp::LoadNull: emit(Opcode::LoadNull, r(instruction.dest), 0, 0, position); break;
+                case IrOp::LoadSelf: emit(Opcode::LoadSelf, r(instruction.dest), 0, 0, position); break;
                 case IrOp::LoadGlobal:
                 case IrOp::LoadInstance:
                     emit(instruction.op == IrOp::LoadGlobal ? Opcode::LoadGlobal : Opcode::LoadInstance, r(instruction.dest),

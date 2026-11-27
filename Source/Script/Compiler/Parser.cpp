@@ -118,8 +118,14 @@ public:
                 continue;
             }
             if (check(TokenKind::KwObject)) {
-                if (auto object = parseObject()) {
-                    unit->objects.push_back(std::move(object));
+                if (auto object = parseBehaviour(BehaviourKind::Object)) {
+                    unit->behaviours.push_back(std::move(object));
+                }
+                continue;
+            }
+            if (const auto kind = behaviourWord(); kind) {
+                if (auto behaviour = parseBehaviour(*kind)) {
+                    unit->behaviours.push_back(std::move(behaviour));
                 }
                 continue;
             }
@@ -138,7 +144,7 @@ public:
                 advance();
                 continue;
             }
-            error(current(), "Expected a declaration ('var', 'func', 'extern func', 'object' or 'enum') at the top level.",
+            error(current(), "Expected a declaration ('var', 'func', 'extern func', 'enum', 'room:', 'actor:' or 'object') at the top level.",
                   {"Statements must be inside a function, e.g. 'func main():'."});
             skipLine();
             if (check(TokenKind::Indent)) {
@@ -307,28 +313,51 @@ private:
         return function;
     }
 
-    // object := "object" NAME ":" NEWLINE INDENT ("func" ...)+ DEDENT
-    std::unique_ptr<ObjectDecl> parseObject()
+    // "room:" or "actor:" at the start of a top-level line: the words are not keywords, so
+    // "room" and "actor" stay usable as names elsewhere.
+    [[nodiscard]] std::optional<BehaviourKind> behaviourWord() const
     {
-        auto object = std::make_unique<ObjectDecl>();
-        const Token& first = advance(); // 'object'
-        const Token& name = current();
-        if (!expect(TokenKind::Identifier, "for the object name")) {
-            skipLine();
-            if (check(TokenKind::Indent)) skipIndentedBlock();
-            return nullptr;
-        }
-        object->name = std::string(name.lexeme);
-        object->nameRange = name.range;
-        object->range = join(first.range, name.range);
-        if (!expect(TokenKind::Colon, "after the object name")) {
-            skipLine();
-            if (check(TokenKind::Indent)) skipIndentedBlock();
-            return object;
+        if (!check(TokenKind::Identifier) || peekToken(1).kind != TokenKind::Colon) return std::nullopt;
+        if (current().lexeme == "room") return BehaviourKind::Room;
+        if (current().lexeme == "actor") return BehaviourKind::Actor;
+        return std::nullopt;
+    }
+
+    // behaviour := ("object" NAME | "room" | "actor") ":" NEWLINE INDENT (function | variable)+ DEDENT
+    // "object 'name'", "the room declaration" or "the actor declaration" (messages).
+    static std::string label(const BehaviourDecl& behaviour)
+    {
+        if (behaviour.kind == BehaviourKind::Object) return concat("object '", behaviour.name, "'");
+        return concat("the ", toString(behaviour.kind), " declaration");
+    }
+
+    std::unique_ptr<BehaviourDecl> parseBehaviour(BehaviourKind kind)
+    {
+        auto object = std::make_unique<BehaviourDecl>();
+        object->kind = kind;
+        const Token& first = advance(); // 'object', 'room' or 'actor'
+        if (kind == BehaviourKind::Object) {
+            const Token& name = current();
+            if (!expect(TokenKind::Identifier, "for the object name")) {
+                skipLine();
+                if (check(TokenKind::Indent)) skipIndentedBlock();
+                return nullptr;
+            }
+            object->name = std::string(name.lexeme);
+            object->nameRange = name.range;
+            object->range = join(first.range, name.range);
+            if (!expect(TokenKind::Colon, "after the object name")) {
+                skipLine();
+                if (check(TokenKind::Indent)) skipIndentedBlock();
+                return object;
+            }
+        } else {
+            object->nameRange = first.range;
+            advance(); // ':'
         }
         object->range = join(first.range, previous().range);
         if (!check(TokenKind::Newline)) {
-            error(current(), concat("Expected a new line after ':' to start the body of object '", object->name, "'."),
+            error(current(), concat("Expected a new line after ':' to start the body of ", label(*object), "."),
                   {"Put each handler function on its own line, indented by one tab."});
             skipLine();
             if (!check(TokenKind::Indent)) {
@@ -339,7 +368,7 @@ private:
         }
         if (!check(TokenKind::Indent)) {
             panic_ = false;
-            error(current(), concat("Expected an indented block of handler functions for object '", object->name, "'."),
+            error(current(), concat("Expected an indented block of handler functions for ", label(*object), "."),
                   {"An object declaration contains at least one function, e.g. 'func look_at():', indented by one tab."});
             return object;
         }
@@ -368,12 +397,14 @@ private:
                 continue;
             }
             if (check(TokenKind::KwExtern)) {
-                error(current(), concat("Extern functions cannot be declared inside object '", object->name, "'."),
+                error(current(), concat("Extern functions cannot be declared inside ", label(*object), "."),
                       {"Declare engine functions with 'extern func' at the top level of the script."});
             } else if (check(TokenKind::KwObject)) {
                 error(current(), "Object declarations cannot be nested.");
+            } else if (behaviourWord()) {
+                error(current(), "Room and actor declarations are only allowed at the top level.");
             } else {
-                error(current(), concat("Only functions and variables are allowed in object '", object->name, "'."),
+                error(current(), concat("Only functions and variables are allowed in ", label(*object), "."),
                       {"An object contains handler functions ('func name(...):') and variables ('var name: type = value'), "
                        "not statements."});
             }
@@ -568,6 +599,12 @@ private:
             return nullptr;
         case TokenKind::KwVar: return parseVariable();
         default: break;
+        }
+        if (behaviourWord()) {
+            error(first, "Room and actor declarations are only allowed at the top level.");
+            skipLine();
+            if (check(TokenKind::Indent)) skipIndentedBlock();
+            return nullptr;
         }
         if (first.kind == TokenKind::Identifier && peekToken(1).kind == TokenKind::Colon) {
             error(first, concat("Variables are declared with 'var': write 'var ", first.lexeme, ": <type> = <value>'."));

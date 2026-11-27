@@ -26,9 +26,6 @@ public:
         out_.source = function_.source;
         out_.behaviour = function_.isHandler() ? function_.behaviour : noBehaviour;
         out_.returnType = function_.returnType;
-        if (function_.isHandler()) {
-            out_.parameters.push_back(Type::Object); // Hidden "self" (variable 0).
-        }
         for (const Type type : function_.parameters) {
             out_.parameters.push_back(type);
         }
@@ -345,7 +342,12 @@ private:
         case ExprKind::Name:
             if (info.storage != VariableStorage::Local) return loadStorage(info.storage, info.variable, info.type, position);
             return info.variable;
-        case ExprKind::Self: return info.variable;
+        case ExprKind::Self: {
+            // The entity of the behaviour instance the coroutine runs for.
+            const VReg dest = temporary(info.type);
+            emit(IrOp::LoadSelf, dest, {}, position);
+            return dest;
+        }
         case ExprKind::Member: {
             if (info.isEnumMember) {
                 const VReg dest = temporary(info.type);

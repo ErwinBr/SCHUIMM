@@ -556,7 +556,8 @@ SCHUIMM_TEST(Coroutine_SpawnAndWaitAreTypeChecked)
     CHECK(errors("extern func await_operation(o: operation)\n").has("built-in function"));
     CHECK(errors("func f(c: coroutine) -> bool:\n\treturn c == c\n").has("Operator '=='"));
     CHECK(errors("func f():\n\tcancel(1)\n").has("must be of type 'coroutine'"));
-    CHECK(errors("object door:\n\tfunc use():\n\t\tspawn open()\n\tfunc open():\n\t\tpass\n").has("Undefined function 'open'"));
+    CHECK(errors("object door:\n\tfunc use():\n\t\tspawn open()\n\tfunc open():\n\t\tpass\n").result.success); // Its own handler.
+    CHECK(errors("object door:\n\tfunc open():\n\t\tpass\nfunc f():\n\tspawn open()\n").has("Undefined function 'open'"));
     // spawn as a statement and as a value; a function returning a coroutine.
     CHECK(errors("func g():\n\tpass\nfunc h() -> coroutine:\n\treturn spawn g()\nfunc f():\n\tspawn g()\n\tcancel(h())\n")
               .result.success);

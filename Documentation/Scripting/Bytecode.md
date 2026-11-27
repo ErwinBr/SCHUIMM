@@ -122,15 +122,16 @@ whose type is *assignable* to the destination. Assignable means: the same type, 
 
 ### Behaviours
 
-A behaviour is a declaration of handlers: kind 2 for an object declaration
-([Language.md §8](Language.md#8-objects-and-handlers)), with the object identifier as its name;
-kinds 0 (room) and 1 (actor) are unnamed (name `0xFFFFFFFF`) and are reserved for the room and
-actor declarations of later language versions. Each entry gives its source and, per handler, the
-event name and the index of the function implementing it. The handler is an ordinary entry of
-the function table whose name is the handler name (`look_at`) and whose **parameter 0 is the
-hidden `self`** (type `object`; `actor` for actor behaviours), followed by the declared
-parameters. Handlers are never the target of `Call`; the runtime starts them by behaviour and
-event name. Global functions are the functions no handler refers to.
+A behaviour is a declaration of handlers
+([Language.md §8](Language.md#8-behaviours-rooms-actors-and-objects)): kind 0 for `room:`, 1
+for `actor:` (both unnamed, name `0xFFFFFFFF`) and 2 for an object declaration, named by the
+object identifier. Each entry gives its source, per handler the event name and the index of the
+function implementing it, and its instance variables. The handler is an ordinary entry of the
+function table whose name is the handler name (`look_at`) and whose parameters are exactly the
+declared ones: `self` is not a parameter but the entity of the instance the coroutine runs for
+(`LoadSelf`). The runtime starts handlers by behaviour instance and event name; functions of the
+same behaviour may also `Call` or `Spawn` them. Global functions are the functions no handler
+refers to.
 
 ### Instructions (8 bytes)
 
@@ -187,6 +188,7 @@ of consecutive registers starting at `c`.
 | `StoreGlobal` | global, b | global variable `a = rb` |
 | `LoadInstance` | a, instance | `ra = ` instance variable `b` of the behaviour instance the coroutine runs for |
 | `StoreInstance` | instance, b | instance variable `a = rb` |
+| `LoadSelf` | a | `ra = ` the entity of the behaviour instance the coroutine runs for: an `actor` in actor handlers, an `object` in object handlers (room handlers and global functions have none) |
 
 The numeric opcode is the position in `SCHUIMM_SCRIPT_OPCODES` (`Opcode.h`). Opcodes are only
 ever appended within a format major version.
@@ -219,15 +221,15 @@ checked too. Validation never trusts a size or index:
   in room scripts, actor behaviours in actor scripts), at most one room and one actor behaviour
   per source, object names unique per source (they do not share the namespace of functions),
   handler names unique per behaviour, every handler an existing function of the same name and
-  source, no function the handler of two events, and an object handler's parameter 0 of type
-  `object` (an actor handler's of type `actor`);
+  source, no function the handler of two events;
 * globals and instance variables: names exist and are unique (per behaviour for instance
   variables), types are valid value types, initial strings and enum members exist;
 * every instruction: known opcode, reserved byte 0, unused operands 0, register operands below
   the function's register count, constant/function/import/enum/global indices exist, instance
   variable indices exist in the function's own behaviour (a global function uses none), branch targets
-  inside the function, argument windows (`c + parameter count`) inside the register file, and no
-  `Call` of a handler function (handlers are started only by dispatch);
+  inside the function, argument windows (`c + parameter count`) inside the register file, no
+  `Call` or `Spawn` of a handler except by a function of the same behaviour, and `LoadSelf` only
+  in actor and object handlers;
 * register types of every instruction: operands and results have the types the opcode requires
   (`AddInt` on int registers, `JumpIfTrue` on a bool, `LoadEnum` into a register of that enum
   with an existing ordinal, `LoadGlobal` into a register of the global's type, a stored value

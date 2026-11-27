@@ -46,24 +46,27 @@ public:
                                                                    std::string_view function, std::vector<Value> arguments,
                                                                    CoroutineLimits limits = {});
 
-    // Prepares a call of object handler `object.event` for the object `self`, with the declared
-    // (visible) `arguments`; "self" becomes the hidden parameter 0. The context is a register of
-    // the entry frame, so it lives exactly as long as the coroutine, also while it is suspended.
-    // Errors: NotFound (no such handler), InvalidArgument (argument count or types).
+    // Prepares a call of object handler `object.event` for the object `self`, with a fresh
+    // GlobalState and BehaviourInstance of its own (tests and tools; a game dispatches through
+    // its instances). Errors: NotFound (no such handler), InvalidArgument (argument count or
+    // types).
     [[nodiscard]] static Result<std::unique_ptr<Coroutine>> createHandler(std::shared_ptr<const Program> program,
                                                                           std::string_view object, std::string_view event,
                                                                           ObjectRef self, std::vector<Value> arguments,
                                                                           CoroutineLimits limits = {});
 
-    // Prepares a call of handler function `function` (an index) for the entity `self`: the hidden
-    // parameter 0 of object and actor handlers; none (a None value) for room handlers.
-    [[nodiscard]] static Result<std::unique_ptr<Coroutine>> createHandler(std::shared_ptr<const Program> program,
-                                                                          std::uint32_t function, Value self,
+    // Prepares a call of handler function `function` (an index) of `instance`'s behaviour,
+    // running for that instance: self (LoadSelf), its instance variables and its session's
+    // globals. The handler's self is part of this context, not a parameter: it lives exactly as
+    // long as the coroutine, also while it is suspended, and the handler's own calls of its
+    // behaviour's functions run for the same instance.
+    [[nodiscard]] static Result<std::unique_ptr<Coroutine>> createHandler(std::shared_ptr<BehaviourInstance> instance,
+                                                                          std::uint32_t function,
                                                                           std::vector<Value> arguments,
                                                                           CoroutineLimits limits = {});
 
-    // Prepares a call of function `index` of the program (a global function, never a handler):
-    // the target of the Spawn instruction.
+    // Prepares a call of function `index` of the program: the target of the Spawn instruction.
+    // A behaviour's function needs its instance bound afterwards (bindState), as spawn does.
     [[nodiscard]] static Result<std::unique_ptr<Coroutine>> createCall(std::shared_ptr<const Program> program,
                                                                        std::uint32_t index, std::vector<Value> arguments,
                                                                        CoroutineLimits limits = {});
@@ -97,10 +100,9 @@ private:
     friend struct Interpreter;
     Coroutine() = default;
 
-    // `hidden`: leading arguments the caller supplies implicitly (self), not counted in messages.
     [[nodiscard]] static Result<std::unique_ptr<Coroutine>> createAt(std::shared_ptr<const Program> program,
                                                                      std::uint32_t index, std::vector<Value> arguments,
-                                                                     std::size_t hidden, CoroutineLimits limits);
+                                                                     CoroutineLimits limits);
 
     std::shared_ptr<const Program> program_;
     std::shared_ptr<GlobalState> globals_;

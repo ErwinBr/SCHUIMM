@@ -120,16 +120,20 @@ Result<CoroutineHandle> ScriptScheduler::spawn(CoroutineHandle parent, std::shar
     if (!coroutine) {
         return std::unexpected(coroutine.error());
     }
-    // The spawned call shares the spawner's state: the session's globals and, when it is a
-    // function of the spawner's behaviour, its instance.
-    if (spawner != nullptr && spawner->coroutine && spawner->coroutine->globals()) {
-        const Coroutine& parentCoroutine = *spawner->coroutine;
-        std::shared_ptr<BehaviourInstance> instance;
-        const auto behaviour = (*coroutine)->program().behaviourOf(index);
-        if (behaviour && parentCoroutine.instance() && parentCoroutine.instance()->behaviour() == *behaviour) {
-            instance = parentCoroutine.instance();
+    // The spawned call shares the spawner's state: the session's globals and, for a function of
+    // the spawner's behaviour, its instance (the function runs for the same entity).
+    const Coroutine* parentCoroutine = spawner != nullptr ? spawner->coroutine.get() : nullptr;
+    const auto behaviour = (*coroutine)->program().behaviourOf(index);
+    std::shared_ptr<BehaviourInstance> instance;
+    if (behaviour) {
+        if (parentCoroutine == nullptr || !parentCoroutine->instance() ||
+            parentCoroutine->instance()->behaviour() != *behaviour) {
+            return makeError(ErrorCode::InvalidArgument, "A behaviour's function can only be spawned by its own behaviour");
         }
-        (*coroutine)->bindState(parentCoroutine.globals(), std::move(instance));
+        instance = parentCoroutine->instance();
+    }
+    if (parentCoroutine != nullptr && parentCoroutine->globals()) {
+        (*coroutine)->bindState(parentCoroutine->globals(), std::move(instance));
     }
     return add(std::move(*coroutine), owner);
 }
@@ -170,12 +174,10 @@ Result<DispatchResult> ScriptScheduler::dispatch(std::shared_ptr<BehaviourInstan
     if (!function) {
         return DispatchResult{};
     }
-    auto coroutine = Coroutine::createHandler(program, *function, instance->self(), std::move(arguments), settings_.limits);
+    auto coroutine = Coroutine::createHandler(std::move(instance), *function, std::move(arguments), settings_.limits);
     if (!coroutine) {
         return std::unexpected(coroutine.error());
     }
-    std::shared_ptr<GlobalState> globals = instance->globals();
-    (*coroutine)->bindState(std::move(globals), std::move(instance));
     return DispatchResult{true, add(std::move(*coroutine), owner)};
 }
 

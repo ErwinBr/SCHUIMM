@@ -112,7 +112,7 @@ struct HandlerSemantics {
 struct BehaviourSemantics {
     BehaviourKind kind = BehaviourKind::Object;
     std::uint32_t source = 0;               // Index into SemanticModel::sources().
-    const ObjectDecl* declaration = nullptr; // Object behaviours.
+    const BehaviourDecl* declaration = nullptr;
     std::string name;                        // The object id; empty for room and actor behaviours.
     std::vector<HandlerSemantics> handlers;  // In declaration order.
     std::vector<PersistentVariable> variables; // Its instance variables, in declaration order.

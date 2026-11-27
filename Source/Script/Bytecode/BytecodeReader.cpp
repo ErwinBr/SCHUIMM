@@ -380,7 +380,6 @@ struct Validator {
     //     uniquely per source, the others unnamed;
     //   * handler names are unique per behaviour; each handler is an existing function of the same
     //     name and source, and no function is the handler of two events;
-    //   * an object handler takes the object (self) as parameter 0, an actor handler the actor.
     Status checkBehaviours()
     {
         owner.assign(module.functions.size(), noOwner);
@@ -439,13 +438,6 @@ struct Validator {
                 }
                 if (function.source != behaviour.source) {
                     return invalid(concat("handler '", name, ".", handlerName, "' is a function of another source"));
-                }
-                if (behaviour.kind != BehaviourKind::Room) {
-                    const TypeRef self(behaviour.kind == BehaviourKind::Actor ? ScriptType::Actor : ScriptType::Object);
-                    if (function.parameters.empty() || function.parameters[0] != self) {
-                        return invalid(concat("handler '", name, ".", handlerName, "' must take the ", toString(self.kind),
-                                              " (self) as its first parameter"));
-                    }
                 }
                 owner[handler.function] = static_cast<std::uint32_t>(b);
             }
@@ -776,6 +768,15 @@ struct Validator {
             }
             return {};
         case Opcode::LoadInstance: return expect(in.a, instanceVariable(in.b).type, "a");
+        case Opcode::LoadSelf: {
+            const std::uint32_t behaviour = owner[checking];
+            const BehaviourKind kind = behaviour == noOwner ? BehaviourKind::Room : module.behaviours[behaviour].kind;
+            if (behaviour == noOwner || kind == BehaviourKind::Room) {
+                return bad(concat("self is used by a ", behaviour == noOwner ? "global function" : "room handler",
+                                  ", which runs for no entity"));
+            }
+            return expect(in.a, kind == BehaviourKind::Actor ? Actor : Object, "a");
+        }
         case Opcode::StoreInstance:
             if (!isAssignableType(types[in.b], instanceVariable(in.a).type)) {
                 return bad(concat("cannot store a ", typeName(types[in.b]), " in instance variable ", in.a, " of type ",
@@ -811,9 +812,11 @@ struct Validator {
         case Opcode::Spawn: {
             const bool native = instruction.opcode == Opcode::CallNative;
             const bool spawn = instruction.opcode == Opcode::Spawn;
-            if (!native && owner[instruction.b] != noOwner) {
+            // A handler runs for an instance of its behaviour, so only its own behaviour's
+            // functions call or spawn it (they run for that instance); global functions have none.
+            if (!native && owner[instruction.b] != noOwner && owner[instruction.b] != owner[checking]) {
                 return bad(concat(spawn ? "spawns handler '" : "calls handler '", functionName(instruction.b),
-                                  "'; handlers are only started by event dispatch"));
+                                  "'; a handler is started by event dispatch or by its own behaviour"));
             }
             const std::vector<TypeRef>& parameters =
                 native ? module.imports[instruction.b].parameters : module.functions[instruction.b].parameters;

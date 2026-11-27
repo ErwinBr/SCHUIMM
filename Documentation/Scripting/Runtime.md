@@ -66,7 +66,7 @@ An ended coroutine releases both with its frames. Reading a variable without the
   (`Value::fromEnum`, `enumIndex()`, `enumOrdinal()`);
 - references: `actor` (`Value::fromActor`) or `object` (`Value::fromObject`), each holding an
   `ObjectRef { std::uint64_t id; }`. That is an opaque handle chosen by the engine (see
-  [Object handlers](#object-handlers-and-dispatch)); it owns nothing, and id 0 is the null
+  [Object handlers](#behaviour-handlers-and-dispatch)); it owns nothing, and id 0 is the null
   reference. A register declared `entity` holds either kind.
 
 `Value::matches(TypeRef)` decides whether a value fits a declared type: `any` takes everything
@@ -243,53 +243,59 @@ the module against the registry: same qualified name, same members in the same o
 - A different signature, or an enum with other members, fails with `InvalidData` ("recompile the
   script from its source").
 
-## Object handlers and dispatch
+## Behaviour handlers and dispatch
 
-An `object` declaration ([Language.md §8](Language.md#8-objects-and-handlers)) compiles to
-ordinary functions plus an entry in the bytecode's Objects table. The engine — later, the
-adventure runtime — invokes a handler by object identifier and event name:
+A behaviour declaration — `room:`, `actor:` or `object NAME:`
+([Language.md §8](Language.md#8-behaviours-rooms-actors-and-objects)) — compiles to ordinary
+functions plus an entry in the bytecode's Behaviours table. The engine — the room instance,
+later the adventure runtime — creates a `BehaviourInstance` per room, actor or object
+([Script state](#script-state-global-and-instance-variables)) and invokes a handler of it by
+event name:
 
 ```cpp
-// ObjectRef: the engine's handle of the room object; it becomes "self".
-auto result = host.dispatch(roomScript, "blender", "use_with", ObjectRef{blenderId},
-                            {Value::fromObject(ObjectRef{bananaId})});
+// The instance's self is the engine's handle of the object.
+auto result = host.dispatch(blenderInstance, "use_with", {Value::fromObject(ObjectRef{bananaId})}, roomOwner);
 if (!result) {
-    // InvalidArgument: the arguments do not match the handler's parameters (logged).
+    // InvalidArgument: no instance, or the arguments do not match the handler (logged);
+    // InvalidState: the instance has expired (its entity is gone).
 } else if (!result->handled) {
-    // The script has no such object or handler: a normal no-op (default behaviour is the
-    // caller's business).
+    // The behaviour has no such handler: a normal no-op (default behaviour is the caller's
+    // business).
 } else {
     // result->handle: a Ready coroutine; it runs in the next update like any other.
 }
 ```
 
 * `Program::findBehaviour(kind, source, name)` finds a behaviour of a program that holds several
-  scripts: the object `door` of `Rooms/Kitchen.sch` is not the `door` of `Rooms/Garden.sch`.
+  scripts: the object `door` of `Rooms/Kitchen.sch` is not the `door` of `Rooms/Garden.sch`; the
+  `room:` of a room script and the `actor:` of an actor script are found by source alone.
   `findHandler(behaviour, event)` finds a handler of it. `findHandler(object, event)`,
   `hasHandler` and `hasObject` look an object's handler up by object name alone (in the first
   room script declaring that object). None of them runs anything. Event names are arbitrary
   strings; nothing in the compiler or VM knows `look_at` or `use`.
 * `ScriptScheduler::dispatch` (and `ScriptHost::dispatch`, which adds logging) returns
-  `Result<DispatchResult>`: an error only for invalid arguments, a null `self` (id 0, checked
-  first) or no program;
-  `handled == false` for a missing object or handler, without creating a coroutine; otherwise the
-  coroutine's handle. Its outcome is observed as for every coroutine: `state()`, `result()`,
-  `error()` and the event callback. A runtime error inside the handler is a `Failed` coroutine
-  with a normal `ScriptError`; handlers appear as `blender.use` in errors, stacks and traces.
-* `Program::findFunction` (and so `start()`) only finds global functions: a handler cannot
-  be started without its object.
-* Global functions stay startable by name (`start(program, "enter")`), whichever file declares
-  them.
+  `Result<DispatchResult>`; `handled == false` for a missing handler, without creating a
+  coroutine; otherwise the coroutine's handle. Its outcome is observed as for every coroutine:
+  `state()`, `result()`, `error()` and the event callback. A runtime error inside the handler is
+  a `Failed` coroutine with a normal `ScriptError`; handlers appear as `blender.use`,
+  `room.ready` or `actor.talk_to` in errors, stacks and traces.
+* `dispatch(program, object, event, self)` finds the object behaviour by name and runs the
+  handler with fresh state of its own (tools, tests, scripts without variables).
+* `Program::findFunction` (and so `start()`) only finds global functions: a handler cannot be
+  started without its instance. Global functions stay startable by name (`start(globals,
+  "enter")`), whichever file declares them.
 
-**Context: a hidden parameter.** A handler's parameter 0 is `self`; dispatch passes
-`[Value::fromObject(self), arguments...]` to an ordinary entry frame (`Coroutine::createHandler`).
-This reuses everything that exists: the calling convention and argument checks, the bytecode
-validation of argument windows, and the coroutine's register stack. `self` is just register 0
-of the handler's frame, so it is valid for exactly as long as the coroutine — across `wait()`,
-`yield()` and budget preemption — and every invocation has its own. The alternative, a context
-field in `CallFrame`, would have needed a new call path and opcode to read it, and propagation
-rules for nested calls; there is no need for that, because a handler's callees are global
-functions without `self`.
+**Context: the behaviour instance.** A handler runs *for* an instance: the coroutine holds the
+`BehaviourInstance`, and `LoadSelf`, `LoadInstance` and `StoreInstance` read it. `self` is not a
+parameter. This matters because handlers call each other: a call or spawn of a function of the
+same behaviour runs for the same instance, through any depth of calls and across `wait()`, with
+no propagation through call frames. The validator guarantees what makes one context per
+coroutine enough: a behaviour's functions are only called or spawned by functions of the same
+behaviour (and started by dispatch, which sets the instance), and global functions use neither
+`self` nor instance variables. So every frame running a behaviour's code is in a coroutine
+running for an instance of that behaviour, and a global function called from a handler cannot
+reach the caller's private state. The VM checks the instance again at each access
+(`InvalidBytecode` for a hand-made coroutine without one).
 
 **Integration boundary.** The script side ends at the `ObjectRef`. The engine:
 

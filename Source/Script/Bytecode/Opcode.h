@@ -35,7 +35,8 @@ inline constexpr std::uint16_t noRegister = 0xFFFF;
 // its coroutine handle in a (optional, a coroutine register); the caller continues at once.
 // LoadNull sets register a to the null value of its type (actor, object, entity, coroutine or
 // operation). LoadGlobal/LoadInstance read a variable into register a; StoreGlobal/StoreInstance
-// write register b into variable a.
+// write register b into variable a. LoadSelf sets register a to the entity of the behaviour
+// instance the coroutine runs for (the "self" of actor and object handlers).
 #define SCHUIMM_SCRIPT_OPCODES(X)                                                                   \
     X(Nop, Unused, Unused, Unused, false)                                                           \
     X(LoadConst, Register, Constant, Unused, false)                                                 \
@@ -115,7 +116,8 @@ inline constexpr std::uint16_t noRegister = 0xFFFF;
     X(LoadGlobal, Register, Global, Unused, false)                                                  \
     X(StoreGlobal, Global, Register, Unused, false)                                                 \
     X(LoadInstance, Register, Instance, Unused, false)                                              \
-    X(StoreInstance, Instance, Register, Unused, false)
+    X(StoreInstance, Instance, Register, Unused, false)                                             \
+    X(LoadSelf, Register, Unused, Unused, false)
 
 enum class Opcode : std::uint8_t {
 #define SCHUIMM_X(name, a, b, c, terminator) name,

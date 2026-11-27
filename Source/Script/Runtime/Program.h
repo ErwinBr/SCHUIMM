@@ -57,7 +57,7 @@ public:
         return findHandler(object, event).has_value();
     }
     [[nodiscard]] bool hasObject(std::string_view object) const;
-    // Whether function `index` is a handler (its parameter 0 is the hidden "self").
+    // Whether function `index` belongs to a behaviour (runs for an instance of it).
     [[nodiscard]] bool isHandler(std::size_t index) const noexcept { return owner_[index] != noOwner; }
     // The behaviour function `index` belongs to; nullopt for global functions.
     [[nodiscard]] std::optional<std::uint32_t> behaviourOf(std::size_t index) const noexcept

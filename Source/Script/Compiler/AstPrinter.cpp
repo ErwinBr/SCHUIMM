@@ -167,8 +167,9 @@ std::string dumpAst(const SourceUnit& unit, const SemanticModel* semantics)
     for (const auto& function : unit.functions) {
         printFunction(*function, 0);
     }
-    for (const auto& object : unit.objects) {
-        printer.line(0, concat("Object ", object->name));
+    for (const auto& object : unit.behaviours) {
+        printer.line(0, object->kind == BehaviourKind::Object ? concat("Object ", object->name)
+                                                              : std::string(object->kind == BehaviourKind::Room ? "Room" : "Actor"));
         for (const auto& variable : object->variables) {
             printer.statement(*variable, 1);
         }

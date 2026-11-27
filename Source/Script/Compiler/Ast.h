@@ -3,6 +3,7 @@
 // Abstract syntax tree produced by the parser. The tree is purely syntactic: types and name
 // resolution are computed by the TypeChecker into a separate SemanticModel.
 
+#include "Script/Bytecode/Module.h"
 #include "Script/Compiler/SourceFile.h"
 #include "Script/Compiler/Types.h"
 
@@ -117,20 +118,21 @@ struct FunctionDecl {
     std::vector<Parameter> parameters;
     TypeSyntax returnType{Type::None, {}, {}};
     bool isExtern = false;        // "extern func": a native function implemented by the engine.
-    bool isHandler = false;       // Declared inside an "object" block (see ObjectDecl).
+    bool isHandler = false;       // Declared inside a behaviour ("room:", "actor:", "object"; see BehaviourDecl).
     std::unique_ptr<Block> body;  // Null for extern declarations.
 };
 
-// "object name:" followed by an indented list of handler functions. A named scope, not a class:
-// it creates no runtime object. The name identifies an object of the room resource; the engine
-// invokes a handler by object name and handler (event) name, passing the object as "self".
-struct ObjectDecl {
+// A behaviour declaration: "room:", "actor:" or "object name:", followed by an indented list of
+// handler functions and instance variables. A named scope, not a class: it creates no runtime
+// object. The name (objects only) identifies an object of the room resource; the engine invokes a
+// handler by behaviour instance and handler (event) name, with the entity as "self".
+struct BehaviourDecl {
+    BehaviourKind kind = BehaviourKind::Object;
     SourceRange range;
-    std::string name;
-    SourceRange nameRange;
+    std::string name; // The object name; empty for "room:" and "actor:".
+    SourceRange nameRange; // The object name, or the "room"/"actor" word.
     std::vector<std::unique_ptr<FunctionDecl>> handlers; // isHandler is set on each.
-    // "var" declarations: the instance variables of the object (Assign statements with
-    // declaration set).
+    // "var" declarations: the instance variables (Assign statements with declaration set).
     std::vector<std::unique_ptr<Stmt>> variables;
 };
 
@@ -152,7 +154,7 @@ struct SourceUnit {
     // Top-level "var" declarations: global variables (Assign statements with declaration set).
     std::vector<std::unique_ptr<Stmt>> variables;
     std::vector<std::unique_ptr<FunctionDecl>> functions; // Global functions and extern declarations.
-    std::vector<std::unique_ptr<ObjectDecl>> objects;     // In declaration order.
+    std::vector<std::unique_ptr<BehaviourDecl>> behaviours; // In declaration order.
     std::vector<std::unique_ptr<EnumDecl>> enums;         // In declaration order.
 };
 

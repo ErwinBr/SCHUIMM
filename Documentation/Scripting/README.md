@@ -6,8 +6,8 @@ bytecode and executed by a register VM as cooperative coroutines driven by the g
 
 Room scripts group the event handlers of room objects in `object` declarations (Milestone 4.1):
 the engine dispatches an event by object identifier and event name, and the handler runs with
-the object as `self` ([Language.md §8](Language.md#8-objects-and-handlers),
-[Runtime.md](Runtime.md#object-handlers-and-dispatch), [Examples/kitchen.sch](Examples/kitchen.sch)).
+the object as `self` ([Language.md §8](Language.md#8-behaviours-rooms-actors-and-objects),
+[Runtime.md](Runtime.md#behaviour-handlers-and-dispatch), [Examples/kitchen.sch](Examples/kitchen.sch)).
 
 Language 3.0 (Milestone 4.4 Part II) compiles the scripts of a game into one program: functions,
 natives and enums declared in any file are usable in every other file, without imports
