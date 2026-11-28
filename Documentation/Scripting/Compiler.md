@@ -294,7 +294,11 @@ schuimmc --game ActorDemo.game.json --assets "$PWD/Applications/ActorDemo/Assets
 `--game` compiles a whole game: the game build (`Adventure/GameBuild.h`) reads the game
 resource below `--assets`, finds its global scripts, its rooms' scripts and their actors'
 scripts through the resources (each once, named by its asset path), and compiles them with the
-adventure interface. This is the entry point a future DevKit uses as a library
+adventure interface. It then checks the relationships between them: an object a room script
+declares that its room does not define is an error at the declaration, and so is an actor
+placement whose initial animation does not resolve
+([Adventure.md](../Architecture/Adventure.md#the-game-build)). This is the entry point a future
+DevKit uses as a library
 (`adventure::compileGame(locator, game)`): it returns the program and the diagnostics, each with
 its file. The compiler library itself does not depend on resources; the game build is a separate
 library on top of it and the resource loaders.

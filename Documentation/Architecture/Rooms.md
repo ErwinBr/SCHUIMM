@@ -254,9 +254,11 @@ against the room's objects by identifier:
 | duplicate object ids in the resource | error (resource validation) |
 | duplicate `object` declarations in the script | rejected by the compiler and the bytecode validator |
 
-The check (`validateRoomScript`) belongs to the room layer: the compiler knows nothing about
-room resources. `RoomInstance::create` repeats it, so a mismatched resource and program cannot
-be combined by hand.
+The check (`validateRoomScript`, built on `undefinedScriptObjects`) belongs to the room layer:
+the compiler knows nothing about room resources. The game build runs the same check for every
+room, at build time, and reports each mismatch at its declaration
+([Adventure.md](Adventure.md#the-game-build)). `RoomLibrary::load` and `RoomInstance::create`
+repeat it, so a mismatched resource and program cannot be combined by hand.
 
 ## Room instances and object identity
 

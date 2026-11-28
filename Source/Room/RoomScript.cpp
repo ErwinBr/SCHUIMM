@@ -32,18 +32,26 @@ Status validateRoomScript(const RoomResource& room, const script::Program* progr
 {
     if (!room.script) return {};
     if (auto status = requireSource(*room.script, script::ScriptRole::Room, program, "script"); !status) return status;
-    const script::Module& module = program->module();
+    const std::vector<std::string> undefined = undefinedScriptObjects(room, program->module());
+    if (!undefined.empty()) {
+        return makeError(ErrorCode::InvalidData, concat("script '", room.script->view(), "' declares object '",
+                                                        undefined.front(), "', which room '", room.id, "' does not define"));
+    }
+    return {};
+}
+
+std::vector<std::string> undefinedScriptObjects(const RoomResource& room, const script::Module& module)
+{
+    std::vector<std::string> undefined;
+    if (!room.script) return undefined;
     for (const script::BehaviourEntry& behaviour : module.behaviours) {
         if (behaviour.kind != script::BehaviourKind::Object || module.sourcePath(behaviour.source) != room.script->view()) {
             continue;
         }
         const std::string& name = module.string(behaviour.nameIndex);
-        if (room.findObject(name) == nullptr) {
-            return makeError(ErrorCode::InvalidData, concat("script '", room.script->view(), "' declares object '", name,
-                                                            "', which room '", room.id, "' does not define"));
-        }
+        if (room.findObject(name) == nullptr) undefined.push_back(name);
     }
-    return {};
+    return undefined;
 }
 
 Status validateActorScript(const ActorResource& actor, const script::Program* program)

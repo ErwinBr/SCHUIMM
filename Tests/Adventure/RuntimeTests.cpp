@@ -10,6 +10,7 @@
 #include "Adventure/AdventureInterface.h"
 #include "Adventure/AdventureRuntime.h"
 #include "Adventure/GameBuild.h"
+#include "Core/Common/StringBuilder.h"
 #include "Core/Logging/Logger.h"
 #include "Platform/FileSystem/FileSystem.h"
 #include "Platform/FileSystem/Path.h"
@@ -296,6 +297,57 @@ SCHUIMM_TEST(Runtime_TheBuildFindsEverySourceOnce)
     CHECK(missing.error().message.find("Game.game.json: script 'Scripts/Missing.sch'") != std::string::npos);
     g.write("Game.game.json", R"({ "version": 1, "id": "g", "program": "Scripts/Game.schb", "rooms": ["Rooms/Attic.room.json"] })");
     CHECK(!discoverGameSources(*g.locator, asset("Game.game.json")).has_value());
+}
+
+SCHUIMM_TEST(Runtime_TheBuildChecksRoomScriptsAgainstTheirRooms)
+{
+    Game g;
+    const auto build = [&]() {
+        auto built = compileGame(*g.locator, asset("Game.game.json"));
+        REQUIRE(built.has_value());
+        return std::move(*built);
+    };
+    const auto count = [](const script::CompileResult& result, std::string_view text) {
+        return std::count_if(result.diagnostics.all().begin(), result.diagnostics.all().end(),
+                             [&](const script::Diagnostic& d) { return d.message.find(text) != std::string::npos; });
+    };
+    // The script and the room resource are each valid, but do not fit: found by the build, at the
+    // declaration, before anyone enters the room.
+    g.write("Rooms/Kitchen.sch", std::string(kitchenScript) + "\nobject coffee_mug:\n\tfunc look_at():\n\t\tprint(\"My favourite mug.\")\n");
+    auto mismatch = build();
+    CHECK(!mismatch->result.success);
+    const std::string text = script::formatDiagnostics(mismatch->result);
+    const std::size_t line = std::count(kitchenScript.begin(), kitchenScript.end(), '\n') + 2;
+    CHECK(text.find(concat("Rooms/Kitchen.sch:", line, ":8: error: Room 'kitchen' (Rooms/Kitchen.room.json) has no object "
+                           "'coffee_mug'.")) != std::string::npos);
+    CHECK(text.find("note: The room's objects are 'mug', 'oven'.") != std::string::npos);
+    // Every mismatch of every room in one build; a script shared by two rooms is checked against
+    // each of them.
+    g.write("Rooms/Kitchen.sch", std::string(kitchenScript) + "\nobject sink:\n\tfunc use():\n\t\tpass\n"
+                                                              "object kettle:\n\tfunc use():\n\t\tpass\n");
+    g.write("Rooms/Scullery.room.json", R"({ "version": 1, "id": "scullery", "size": { "width": 400, "height": 300 },
+        "script": "Rooms/Kitchen.sch", "objects": [ { "id": "mug", "position": [1, 1] }, { "id": "oven", "position": [2, 2] },
+        { "id": "sink", "position": [3, 3] } ] })");
+    g.write("Game.game.json", R"({ "version": 1, "id": "kitchen_game", "program": "Scripts/Game.schb",
+        "global_scripts": ["Scripts/Global.sch", "Scripts/Interface.sch"],
+        "rooms": ["Rooms/Kitchen.room.json", "Rooms/Garden.room.json", "Rooms/Scullery.room.json"] })");
+    auto several = build();
+    CHECK(!several->result.success);
+    CHECK_EQ(count(several->result, "Room 'kitchen' (Rooms/Kitchen.room.json) has no object 'sink'"), 1);
+    CHECK_EQ(count(several->result, "Room 'kitchen' (Rooms/Kitchen.room.json) has no object 'kettle'"), 1);
+    CHECK_EQ(count(several->result, "Room 'scullery' (Rooms/Scullery.room.json) has no object 'kettle'"), 1);
+    CHECK_EQ(count(several->result, "has no object"), 3); // The scullery has a sink.
+    // Fixed: the build succeeds, and the runtime keeps checking what it loads.
+    g.write("Rooms/Kitchen.sch", kitchenScript);
+    CHECK(build()->result.success);
+    // Placements are checked against their actor resources too.
+    g.write("Rooms/Garden.room.json", R"({ "version": 1, "id": "garden", "size": { "width": 400, "height": 300 },
+        "script": "Rooms/Garden.sch",
+        "actors": [ { "id": "cook", "actor": "Actors/Cook.actor.json", "position": [50, 50], "animation": "dance" } ] })");
+    auto placement = compileGame(*g.locator, asset("Game.game.json"));
+    REQUIRE(!placement.has_value());
+    CHECK(placement.error().message.find("Rooms/Garden.room.json: actors[0] ('cook'):") != std::string::npos);
+    CHECK(placement.error().message.find("dance") != std::string::npos);
 }
 
 SCHUIMM_TEST(Runtime_GameResourceValidation)

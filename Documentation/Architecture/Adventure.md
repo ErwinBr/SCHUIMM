@@ -171,6 +171,30 @@ Game.schb` (`Adventure/GameBuild.h`):
 - the script of each listed room;
 - the script of each actor resource its placements use, each source once.
 
+After compiling, the build checks how the resources and scripts fit together, so a designer
+finds a mismatch before entering the room:
+- every object a room script declares is an object of each room using the script; each mismatch
+  is an error at the declaration, and all of them are reported in one run;
+- every actor placement's initial animation and facing resolve in its actor resource.
+
+```text
+Rooms/Courtyard/Courtyard.sch:98:8: error: Room 'courtyard' (Rooms/Courtyard.room.json) has no object 'fann'.
+    object fann:
+           ^^^^
+    note: The room's objects are 'chest', 'window', 'fan'.
+```
+
+| Checked by | What |
+|---|---|
+| the script compiler | the language: syntax, names, types, roles of declarations |
+| the resource loaders | each resource on its own |
+| the game build | relationships between resources and scripts |
+| the runtime (`RoomLibrary`, `RoomInstance`) | the same relationships again, defensively, for what it loads |
+
+The build and the runtime share one implementation of the object check
+(`room::undefinedScriptObjects`, `Room/RoomScript.h`). The build reads only resource files and
+image headers: no textures, decoded images or navigation graphs.
+
 ActorDemo does it at build time (`Applications/ActorDemo/CMakeLists.txt`). A future DevKit calls
 `compileGame(locator, game)` the same way and gets the program and the diagnostics with their
 files.
